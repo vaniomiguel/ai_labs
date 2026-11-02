@@ -6,11 +6,12 @@ import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 
-/** Public game view for the Outsmart API; private strategies and messages stay in memory only. */
+/** Public JSON game view; private strategies and messages are omitted from this API projection. */
 public record OutsmartGameResponse(
         UUID id,
         boolean finished,
         int turnsCompleted,
+        OutsmartRunStatus run,
         List<Player> players,
         List<Turn> turns) {
 
@@ -23,8 +24,14 @@ public record OutsmartGameResponse(
     public record Turn(int number, Map<String, Integer> coinsAfter) {
     }
 
-    /** Projects the internal snapshot to safe API fields for creation, reads, and turn results. */
+    /** Projects a snapshot when no background run has been started yet. */
     public static OutsmartGameResponse from(OutsmartGame game) {
+        return from(game, new OutsmartRunStatus(game.finished()
+                ? OutsmartRunStatus.State.COMPLETE : OutsmartRunStatus.State.IDLE, null));
+    }
+
+    /** Projects the internal snapshot and its run state to safe API fields. */
+    public static OutsmartGameResponse from(OutsmartGame game, OutsmartRunStatus run) {
         List<Player> players = game.players().stream()
                 .map(player -> new Player(player.name(), player.model().provider(), player.model().id(),
                         player.coins(), player.bankrupt(), player.winner()))
@@ -38,6 +45,6 @@ public record OutsmartGameResponse(
             }
             return new Turn(turn.number(), Collections.unmodifiableMap(balances));
         }).toList();
-        return new OutsmartGameResponse(game.id(), game.finished(), game.turns().size(), players, turns);
+        return new OutsmartGameResponse(game.id(), game.finished(), game.turns().size(), run, players, turns);
     }
 }

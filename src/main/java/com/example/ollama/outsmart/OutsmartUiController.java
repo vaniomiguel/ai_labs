@@ -16,7 +16,7 @@ import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 
-/** Serves the Outsmart setup and game pages, with small HTML updates for HTMX requests. */
+/** Serves Outsmart setup, spectator history, and live run progress with HTMX fragments. */
 @Controller
 @RequestMapping("/outsmart")
 public class OutsmartUiController {
@@ -26,28 +26,31 @@ public class OutsmartUiController {
     private static final String DEFAULT_MODEL = "gemma3:1b";
 
     private final OutsmartGameRegistry games;
-    private final OutsmartGameRunner runner;
+    private final OutsmartGameExecutionService executions;
+    private final OutsmartOllamaModelCatalog models;
 
-    /** Uses the same game registry and runner as the Outsmart JSON API. */
-    public OutsmartUiController(OutsmartGameRegistry games, OutsmartGameRunner runner) {
+    /** Uses the same registry and execution gate as the Outsmart JSON API. */
+    public OutsmartUiController(OutsmartGameRegistry games, OutsmartGameExecutionService executions,
+            OutsmartOllamaModelCatalog models) {
         this.games = games;
-        this.runner = runner;
+        this.executions = executions;
+        this.models = models;
     }
 
     /** Shows the setup form for a new in-memory game. */
     @GetMapping
     public String setup(Model model) {
-        model.addAttribute("rows", defaultRows());
+        prepareSetup(model, defaultRows());
         return PAGE;
     }
 
-    /** Shows public progress for an existing game, or a useful message if it has gone away. */
+    /** Shows a human spectator's game history or a message if the game has gone away. */
     @GetMapping("/games/{gameId}")
     public String game(@PathVariable UUID gameId, Model model, HttpServletResponse response) {
         try {
-            model.addAttribute("game", OutsmartGameResponse.from(games.get(gameId)));
+            prepareGame(model, games.get(gameId));
         } catch (NoSuchElementException exception) {
-            model.addAttribute("rows", defaultRows());
+            prepareSetup(model, defaultRows());
             model.addAttribute("error", "Game not found. It may have been deleted or the app restarted.");
             response.setStatus(HttpServletResponse.SC_NOT_FOUND);
         }
@@ -65,12 +68,12 @@ public class OutsmartUiController {
             OutsmartGame created = games.create(participants(names, modelIds));
             if (htmx) {
                 response.setHeader("HX-Push-Url", "/outsmart/games/" + created.id());
-                model.addAttribute("game", OutsmartGameResponse.from(created));
+                prepareGame(model, created);
                 return CONTENT;
             }
             return "redirect:/outsmart/games/" + created.id();
         } catch (IllegalArgumentException | IllegalStateException exception) {
-            model.addAttribute("rows", rows(names, modelIds));
+            prepareSetup(model, rows(names, modelIds));
             model.addAttribute("extraOpen", names.stream().skip(3).anyMatch(name -> !name.isBlank()));
             model.addAttribute("error", exception.getMessage());
             // HTMX swaps successful HTML responses. Use a normal 200 for an editable form error;
@@ -80,31 +83,60 @@ public class OutsmartUiController {
         }
     }
 
-    /** Runs one turn and redraws the public game panel after all local models reply. */
+    /** Runs one turn through the shared gate and redraws the spectator panel. */
     @PostMapping("/games/{gameId}/turns")
     public String playTurn(@PathVariable UUID gameId,
             @RequestHeader(value = "HX-Request", defaultValue = "false") boolean htmx,
             Model model, HttpServletResponse response) {
         try {
-            OutsmartGame updated = runner.runNextTurn(gameId);
+            OutsmartGame updated = executions.playTurn(gameId);
             if (htmx) {
-                model.addAttribute("game", OutsmartGameResponse.from(updated));
+                prepareGame(model, updated);
                 return CONTENT;
             }
             return "redirect:/outsmart/games/" + gameId;
         } catch (NoSuchElementException exception) {
-            model.addAttribute("rows", defaultRows());
+            prepareSetup(model, defaultRows());
             model.addAttribute("error", "Game not found. It may have been deleted or the app restarted.");
             response.setStatus(htmx ? HttpServletResponse.SC_OK : HttpServletResponse.SC_NOT_FOUND);
             return view(htmx);
         } catch (IllegalStateException exception) {
             // A simultaneous request may have completed the turn first. Reload the current
             // snapshot so the page never presents stale balances or another player's secrets.
-            model.addAttribute("game", OutsmartGameResponse.from(games.get(gameId)));
+            prepareGame(model, games.get(gameId));
             model.addAttribute("error", exception.getMessage());
             response.setStatus(htmx ? HttpServletResponse.SC_OK : HttpServletResponse.SC_CONFLICT);
             return view(htmx);
         }
+    }
+
+    /** Starts full-game play in the background and returns a panel that begins polling. */
+    @PostMapping("/games/{gameId}/run")
+    public String run(@PathVariable UUID gameId,
+            @RequestHeader(value = "HX-Request", defaultValue = "false") boolean htmx,
+            Model model, HttpServletResponse response) {
+        try {
+            executions.startRun(gameId);
+            if (htmx) {
+                prepareGame(model, games.get(gameId));
+                return CONTENT;
+            }
+            return "redirect:/outsmart/games/" + gameId;
+        } catch (IllegalStateException exception) {
+            prepareGame(model, games.get(gameId));
+            model.addAttribute("error", exception.getMessage());
+            response.setStatus(htmx ? HttpServletResponse.SC_OK : HttpServletResponse.SC_CONFLICT);
+            return view(htmx);
+        }
+    }
+
+    /** Supplies the current snapshot to HTMX while a background game is running. */
+    @GetMapping("/games/{gameId}/status")
+    public String status(@PathVariable UUID gameId,
+            @RequestHeader(value = "HX-Request", defaultValue = "false") boolean htmx,
+            Model model) {
+        prepareGame(model, games.get(gameId));
+        return view(htmx);
     }
 
     /** Removes a game and returns to the setup form, releasing its in-memory slot. */
@@ -112,13 +144,34 @@ public class OutsmartUiController {
     public String delete(@PathVariable UUID gameId,
             @RequestHeader(value = "HX-Request", defaultValue = "false") boolean htmx,
             Model model, HttpServletResponse response) {
-        games.remove(gameId);
+        try {
+            executions.delete(gameId);
+        } catch (IllegalStateException exception) {
+            prepareGame(model, games.get(gameId));
+            model.addAttribute("error", exception.getMessage());
+            response.setStatus(htmx ? HttpServletResponse.SC_OK : HttpServletResponse.SC_CONFLICT);
+            return view(htmx);
+        }
         if (htmx) {
             response.setHeader("HX-Push-Url", "/outsmart");
-            model.addAttribute("rows", defaultRows());
+            prepareSetup(model, defaultRows());
             return CONTENT;
         }
         return "redirect:/outsmart";
+    }
+
+    /** Adds the setup rows and installed local model suggestions to a rendered page. */
+    private void prepareSetup(Model model, List<FormRow> rows) {
+        model.addAttribute("rows", rows);
+        OutsmartOllamaModelCatalog.Catalog catalog = models.list();
+        model.addAttribute("installedModels", catalog.models());
+        model.addAttribute("modelsError", catalog.error());
+    }
+
+    /** Adds both safe public balances and spectator-only turn details to a game page. */
+    private void prepareGame(Model model, OutsmartGame game) {
+        model.addAttribute("game", OutsmartGameResponse.from(game, executions.status(game.id())));
+        model.addAttribute("turnDetails", OutsmartUiTurn.from(game));
     }
 
     /** Converts the eight form rows into the 3–8 named Ollama participants for a new game. */

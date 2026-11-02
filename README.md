@@ -50,15 +50,15 @@ To use OpenAI instead, set `OPENAI_BASE_URL=https://api.openai.com/v1`, provide 
 
 ### Outsmart game (in progress)
 
-The Outsmart feature has its own `com.example.ollama.outsmart` package and `outsmart.*` configuration. Its Ollama calls use `OUTSMART_OLLAMA_BASE_URL` (default `http://localhost:11434`) and `OUTSMART_OLLAMA_REQUEST_TIMEOUT` (default `2m`). These settings do not affect `/api/chat`. The UI will be added in a later step.
+The Outsmart feature has its own `com.example.ollama.outsmart` package and `outsmart.*` configuration. Its Ollama calls use `OUTSMART_OLLAMA_BASE_URL` (default `http://localhost:11434`) and `OUTSMART_OLLAMA_REQUEST_TIMEOUT` (default `2m`). These settings do not affect `/api/chat`.
 
 The `mise.toml` file selects Temurin 25 for this project. Link the Homebrew installation with `mise link java@temurin-25 /Library/Java/JavaVirtualMachines/temurin-25.jdk/Contents/Home`, then run `./mvnw` from a shell with mise activated.
 
 The game rules and in-memory game registry are implemented. Games start with 12 coins per player and end after 10 turns or a bankruptcy. Invalid moves cost one coin; a qualifying alliance transfers two extra coins from its target. The registry keeps up to `OUTSMART_MAX_GAMES` games (default `100`) in memory and supports removing them; games disappear when the application stops.
 
-Step 3 adds player-specific prompts and an Ollama move generator. Each player uses the Ollama model ID supplied in the game's participant list. The generator calls Ollama's local `/api/chat` endpoint with JSON mode, parses the move, and returns an invalid decision when the model response or request fails. The rule engine then checks target names and required messages. Each prompt includes public balances, the player's own prior moves and private messages, and no other player's private plans.
+Player-specific prompts and an Ollama move generator use the model ID supplied for each participant. The generator calls Ollama's local `/api/chat` endpoint with JSON mode. Malformed model output becomes an invalid move; an unavailable Ollama server stops the turn without changing coins. The rule engine checks target names and required messages. Each prompt includes public balances, the player's own prior moves and private messages, and no other player's private plans.
 
-Step 4 adds `OutsmartGameRunner`. Its `runNextTurn(gameId)` method reads one game snapshot, collects every player's decision from that snapshot, and commits the completed turn once. A concurrent update is rejected by the registry's turn check. `runToCompletion(gameId)` repeats this until bankruptcy or turn 10; it blocks while local models respond.
+`OutsmartGameRunner.runNextTurn(gameId)` reads one game snapshot, collects every player's decision from that snapshot, and commits the completed turn once. `OutsmartGameExecutionService` prevents overlapping turns and runs whole games in a background virtual thread. A concurrent update is also rejected by the registry's turn check.
 
 Step 5 adds the Outsmart API. Create a game with 3–8 players and an installed Ollama model for each player:
 
@@ -73,11 +73,12 @@ The response includes an `id` and a `Location` header. Use that ID for the other
 ```bash
 curl http://localhost:8080/api/outsmart/games/GAME_ID
 curl -X POST http://localhost:8080/api/outsmart/games/GAME_ID/turns
+curl -X POST http://localhost:8080/api/outsmart/games/GAME_ID/run
 curl -X DELETE http://localhost:8080/api/outsmart/games/GAME_ID
 ```
 
-Each `POST .../turns` runs one turn and waits for every local model response. Repeat it until `finished` is `true`. Responses expose player balances and per-turn balance history, but no private strategies or messages. Invalid requests return `400`, unknown game IDs return `404`, and finished games or conflicting turns return `409`. Games remain only in memory and disappear on restart. The HTTP turn call is synchronous; a future iteration can add background execution for immediate progress updates.
+Each `POST .../turns` runs one turn and waits for every local model response. `POST .../run` starts whole-game play in the background and normally returns `202`; poll `GET .../games/GAME_ID` for `run.state` and `turnsCompleted`. Repeated Run Game calls do not start duplicate work. The JSON API exposes balances and turn history, but no private strategies or messages. Invalid requests return `400`, unknown game IDs return `404`, conflicting turns return `409`, and an unavailable Ollama model returns `503`. Games remain only in memory and disappear on restart.
 
-Step 6 adds a browser interface. With Ollama running and the selected models already pulled, start the app with `./mvnw spring-boot:run` and open [http://localhost:8080/outsmart](http://localhost:8080/outsmart). Enter a name and Ollama model ID for at least three players, then choose **Start game**. Use **Play next turn** to advance; the page updates the balances and turn history without a full reload. Each turn waits for all local model calls, so the button may take a few minutes. **Delete game** removes its in-memory state. Standard form submissions also work without JavaScript.
+The browser interface is at [http://localhost:8080/outsmart](http://localhost:8080/outsmart). With Ollama running and models pulled, start the app with `./mvnw spring-boot:run`. Enter names for at least three players and select or type model IDs; the fields suggest models returned by Ollama's local `/api/tags`. Use **Play next turn** for one turn or **Run game** to continue in the background. The page polls while a whole game runs and shows balances, messages, alliances, and optional inner thoughts after each turn. These details are a human spectator view; they are never included in another model's prompt. **Delete game** frees its in-memory slot. Standard form submissions also work without JavaScript.
 
 The browser interface uses server-rendered Thymeleaf and a locally bundled copy of HTMX 2.0.11 (`src/main/resources/static/vendor/htmx.min.js`); its license is stored beside it. It has no separate frontend build step and needs no CDN connection at runtime.

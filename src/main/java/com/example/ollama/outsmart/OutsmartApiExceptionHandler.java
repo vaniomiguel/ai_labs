@@ -31,6 +31,12 @@ public class OutsmartApiExceptionHandler {
         return ResponseEntity.status(HttpStatus.NOT_FOUND).body(new Error(exception.getMessage()));
     }
 
+    /** Reports an unavailable local model without advancing its turn. */
+    @ExceptionHandler(OutsmartModelUnavailableException.class)
+    public ResponseEntity<Error> modelUnavailable(OutsmartModelUnavailableException exception) {
+        return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE).body(new Error(exception.getMessage()));
+    }
+
     /** Reports finished games, full in-memory capacity, and stale turn submissions. */
     @ExceptionHandler(IllegalStateException.class)
     public ResponseEntity<Error> conflict(IllegalStateException exception) {

@@ -50,6 +50,7 @@ h2 { margin-bottom: 0; font-size: 23px; line-height: 1.15; letter-spacing: -.035
 .helper { margin: 22px 0 0; color: #819197; font-size: 12px; line-height: 1.55; }
 .notice { padding: 13px 16px; border-radius: 10px; line-height: 1.5; }
 .notice.error { margin-bottom: 22px; border: 1px solid #f1c9c4; background: #fff3f0; color: #a24233; }
+.notice.running { margin-bottom: 0; border: 1px solid #bfe5dc; background: #edf9f5; color: #17675b; }
 
 /* The scoreboard and history use only the public game projection. */
 .game-layout { display: grid; gap: 20px; }
@@ -66,6 +67,8 @@ h2 { margin-bottom: 0; font-size: 23px; line-height: 1.15; letter-spacing: -.035
 .winner-tag { background: #e6f5d9; color: #4b702c; }
 .bankrupt-tag { background: #f9e8e4; color: #ae5343; }
 .game-actions { min-height: 48px; }
+.game-actions .button.subtle { min-height: 44px; }
+.button:disabled { cursor: not-allowed; opacity: .5; }
 .finished-note { margin: 0; color: #577469; font-weight: 700; }
 .wait-note { margin: 0; color: #647780; font-size: 13px; }
 .htmx-indicator { display: none; }
@@ -80,6 +83,18 @@ tbody tr:last-child th, tbody tr:last-child td { border-bottom: 0; }
 tbody th { color: #678078; }
 .game-footer { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 2px 3px 18px; color: #839196; font-size: 12px; }
 .game-footer code { font-size: 11px; }
+.turn-detail { padding-top: 22px; border-top: 1px solid #edf1ef; }
+.turn-detail + .turn-detail { margin-top: 22px; }
+.turn-detail h3 { margin: 0 0 14px; font-size: 17px; letter-spacing: -.02em; }
+.turn-players { display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: 12px; }
+.turn-player { min-width: 0; padding: 17px; border: 1px solid #e5ebe8; border-radius: 12px; background: #fbfcfb; }
+.turn-player h4 { margin: 0 0 10px; font-size: 14px; }
+.turn-player p { margin: 0 0 10px; color: #60727a; font-size: 13px; line-height: 1.45; overflow-wrap: anywhere; }
+.turn-player strong { display: block; margin: 14px 0 8px; color: #41565d; font-size: 12px; }
+.turn-player .message { padding: 8px 0; border-top: 1px solid #edf1ef; }
+.strategy-details { margin-top: 14px; border-top: 1px solid #e8eeeb; padding-top: 12px; }
+.strategy-details summary { color: #126f64; font-size: 12px; font-weight: 750; cursor: pointer; }
+.strategy-details p { margin: 10px 0 0; white-space: pre-wrap; }
 .site-footer { padding: 54px 0 28px; color: #9aa8ad; font-size: 12px; }
 
 @media (max-width: 700px) {

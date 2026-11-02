@@ -19,6 +19,10 @@
     </header>
 
     <main id="outsmart-content" th:fragment="content">
+        <!-- A running game refreshes this panel every two seconds; finished panels stop polling. -->
+        <div th:if="${game != null and game.run.state.name() == 'RUNNING'}"
+             th:attr="hx-get=@{/outsmart/games/{id}/status(id=${game.id})}"
+             hx-trigger="every 2s" hx-target="#outsmart-content" hx-swap="outerHTML" hidden></div>
         <section class="hero">
             <p class="eyebrow">THE GAME</p>
             <h1 th:text="${game != null} ? 'The game is on' : 'Can your models outsmart each other?'">
@@ -29,7 +33,7 @@
                 trade coins, and try to finish ahead.
             </p>
             <p class="hero-copy" th:if="${game != null}">
-                Each player makes a private move. See how their balances change after every turn.
+                Follow the balances, private messages, and each player's plans after a turn resolves.
             </p>
         </section>
 
@@ -45,6 +49,15 @@
                 <span class="pill">3–8 players</span>
             </div>
 
+            <p class="helper" th:if="${modelsError != null}" th:text="${modelsError}"></p>
+            <p class="helper" th:if="${modelsError == null}"
+               th:text="|${installedModels.size()} installed Ollama model(s) available below.|">
+                Installed Ollama models are available below.
+            </p>
+            <datalist id="installed-models">
+                <option th:each="installed : ${installedModels}" th:value="${installed}"></option>
+            </datalist>
+
             <form method="post" th:action="@{/outsmart/games}" action="/outsmart/games"
                   th:attr="hx-post=@{/outsmart/games}" hx-target="#outsmart-content"
                   hx-swap="outerHTML" hx-sync="this:drop" hx-indicator="#setup-wait">
@@ -58,7 +71,7 @@
                         </label>
                         <label>
                             <span>Ollama model ID</span>
-                            <input name="model" type="text" maxlength="160" required
+                            <input name="model" type="text" maxlength="160" required list="installed-models"
                                    th:value="${row.modelId}" placeholder="gemma3:1b">
                         </label>
                     </div>
@@ -76,7 +89,7 @@
                             </label>
                             <label>
                                 <span>Ollama model ID</span>
-                                <input name="model" type="text" maxlength="160"
+                                <input name="model" type="text" maxlength="160" list="installed-models"
                                        th:value="${row.modelId}" placeholder="gemma3:1b">
                             </label>
                         </div>
@@ -92,6 +105,14 @@
         </section>
 
         <section th:if="${game != null}" class="game-layout" aria-label="Game progress">
+            <p class="notice running" role="status" th:if="${game.run.state.name() == 'RUNNING'}"
+               th:text="|Running the whole game in the background. ${game.turnsCompleted} turn(s) completed.|">
+                Running the whole game in the background.
+            </p>
+            <p class="notice error" role="alert" th:if="${game.run.state.name() == 'FAILED'}"
+               th:text="|Full game stopped: ${game.run.error}. You can retry from the last completed turn.|">
+                Full game stopped.
+            </p>
             <div class="panel game-panel">
                 <div class="panel-heading">
                     <div>
@@ -120,24 +141,69 @@
                 </div>
 
                 <div class="panel-actions game-actions">
-                    <form th:if="${!game.finished}" method="post"
+                    <form th:if="${!game.finished and game.run.state.name() != 'RUNNING'}" method="post"
                           th:action="@{/outsmart/games/{id}/turns(id=${game.id})}"
                           th:attr="hx-post=@{/outsmart/games/{id}/turns(id=${game.id})}"
                           hx-target="#outsmart-content" hx-swap="outerHTML"
                           hx-sync="this:drop" hx-indicator="#turn-wait">
                         <button class="button primary" type="submit">Play next turn <span aria-hidden="true">→</span></button>
                     </form>
+                    <form th:if="${!game.finished and game.run.state.name() != 'RUNNING'}" method="post"
+                          th:action="@{/outsmart/games/{id}/run(id=${game.id})}"
+                          th:attr="hx-post=@{/outsmart/games/{id}/run(id=${game.id})}"
+                          hx-target="#outsmart-content" hx-swap="outerHTML" hx-sync="this:drop">
+                        <button class="button subtle" type="submit">Run game</button>
+                    </form>
                     <p id="turn-wait" class="htmx-indicator wait-note" role="status">
                         Waiting for every local model. This can take a few minutes…
                     </p>
+                    <p class="wait-note" th:if="${game.run.state.name() == 'RUNNING'}">
+                        The page will refresh progress automatically.
+                    </p>
                     <p class="finished-note" th:if="${game.finished}">The game is complete.</p>
+                </div>
+            </div>
+
+            <!-- Only the human spectator page shows message and strategy history. Model prompts
+                 still receive just the current player's own private history. -->
+            <div class="panel history-panel" th:if="${!turnDetails.empty}">
+                <div class="panel-heading">
+                    <div>
+                        <p class="eyebrow">03 / CONVERSATIONS</p>
+                        <h2>What happened each turn</h2>
+                    </div>
+                </div>
+                <p class="helper">Spectator view: these messages and plans are not shared with other players' models.</p>
+                <div class="turn-detail" th:each="turn : ${turnDetails}">
+                    <h3 th:text="|Turn ${turn.number}|">Turn 1</h3>
+                    <div class="turn-players">
+                        <article class="turn-player" th:each="entry : ${turn.players}">
+                            <h4 th:text="${entry.name}">Alex</h4>
+                            <p th:if="${entry.valid}"
+                               th:text="|Gave to ${entry.giveTo} · Took from ${entry.takeFrom}|">Move</p>
+                            <p th:if="${!entry.valid}" th:text="|Invalid move: ${entry.invalidReason}|">Invalid move</p>
+                            <p th:if="${!entry.alliancesWith.empty}" th:text="|Allied with ${entry.alliancesWith}|">Alliance</p>
+                            <p th:if="${!entry.alliancesAgainst.empty}" th:text="|Targeted by alliance ${entry.alliancesAgainst}|">Targeted</p>
+                            <div th:if="${!entry.sentMessages.empty}">
+                                <strong>Private messages sent</strong>
+                                <p class="message" th:each="message : ${entry.sentMessages}">
+                                    <span th:text="|To ${message.key}: |">To Blake:</span>
+                                    <span th:text="${message.value}">Hello</span>
+                                </p>
+                            </div>
+                            <details th:if="${entry.valid}" class="strategy-details">
+                                <summary>Inner thoughts</summary>
+                                <p th:text="${entry.strategy}">Private plan</p>
+                            </details>
+                        </article>
+                    </div>
                 </div>
             </div>
 
             <div class="panel history-panel">
                 <div class="panel-heading">
                     <div>
-                        <p class="eyebrow">03 / HISTORY</p>
+                        <p class="eyebrow">04 / HISTORY</p>
                         <h2>Coin balances</h2>
                     </div>
                 </div>
@@ -162,7 +228,8 @@
                 <form method="post" th:action="@{/outsmart/games/{id}/delete(id=${game.id})}"
                       th:attr="hx-post=@{/outsmart/games/{id}/delete(id=${game.id})}"
                       hx-target="#outsmart-content" hx-swap="outerHTML" hx-sync="this:drop">
-                    <button class="button subtle" type="submit">Delete game</button>
+                    <button class="button subtle" type="submit"
+                            th:disabled="${game.run.state.name() == 'RUNNING'}">Delete game</button>
                 </form>
             </div>
         </section>

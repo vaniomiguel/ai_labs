@@ -6,6 +6,7 @@ import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 
@@ -50,7 +51,7 @@ public class OutsmartOllamaMoveGenerator implements OutsmartMoveGenerator {
         }
     }
 
-    /** Sends the player's configured model a prompt and converts failures into forfeited moves. */
+    /** Sends a move request; an unavailable server aborts the turn, while malformed output forfeits it. */
     @Override
     public OutsmartDecision decide(OutsmartGame game, OutsmartGame.PlayerState player) {
         if (!"ollama".equalsIgnoreCase(player.model().provider())) {
@@ -61,7 +62,7 @@ public class OutsmartOllamaMoveGenerator implements OutsmartMoveGenerator {
         Map<String, Object> payload = Map.of(
                 "model", player.model().id(),
                 "stream", false,
-                "format", "json",
+                "format", moveSchema(game, player),
                 "messages", java.util.List.of(
                         Map.of("role", "system", "content", prompt.system()),
                         Map.of("role", "user", "content", prompt.user())));
@@ -73,7 +74,7 @@ public class OutsmartOllamaMoveGenerator implements OutsmartMoveGenerator {
                     .build();
             HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
             if (response.statusCode() < 200 || response.statusCode() >= 300) {
-                return new OutsmartDecision.Invalid("Ollama returned HTTP " + response.statusCode());
+                throw new OutsmartModelUnavailableException("Ollama returned HTTP " + response.statusCode());
             }
             JsonNode content = mapper.readTree(response.body()).path("message").path("content");
             if (!content.isString()) {
@@ -82,10 +83,34 @@ public class OutsmartOllamaMoveGenerator implements OutsmartMoveGenerator {
             return parseMove(content.asString());
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
-            return new OutsmartDecision.Invalid("Ollama request interrupted");
-        } catch (IOException | RuntimeException e) {
-            return new OutsmartDecision.Invalid("Ollama request or response failed: " + e.getClass().getSimpleName());
+            throw new OutsmartModelUnavailableException("Ollama request interrupted");
+        } catch (IOException e) {
+            throw new OutsmartModelUnavailableException("Could not reach Ollama at " + chatUrl);
+        } catch (OutsmartModelUnavailableException e) {
+            throw e;
+        } catch (RuntimeException e) {
+            return new OutsmartDecision.Invalid("Ollama response was not valid JSON");
         }
+    }
+
+    /** Constrains Ollama output to the exact move fields and this player's opponent names. */
+    private Map<String, Object> moveSchema(OutsmartGame game, OutsmartGame.PlayerState player) {
+        List<String> opponents = game.players().stream().map(OutsmartGame.PlayerState::name)
+                .filter(name -> !name.equals(player.name())).toList();
+        Map<String, Object> messages = new LinkedHashMap<>();
+        for (String opponent : opponents) {
+            messages.put(opponent, Map.of("type", "string"));
+        }
+        return Map.of(
+                "type", "object",
+                "properties", Map.of(
+                        "secret_strategy", Map.of("type", "string"),
+                        "give_coin_to", Map.of("type", "string", "enum", opponents),
+                        "take_coin_from", Map.of("type", "string", "enum", opponents),
+                        "private_messages", Map.of("type", "object", "properties", messages,
+                                "required", opponents, "additionalProperties", false)),
+                "required", List.of("secret_strategy", "give_coin_to", "take_coin_from", "private_messages"),
+                "additionalProperties", false);
     }
 
     /** Reads the required JSON fields; the rule engine still checks legal targets and messages. */

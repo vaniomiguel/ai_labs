@@ -19,12 +19,12 @@ import org.springframework.web.bind.annotation.RestController;
 public class OutsmartGameController {
 
     private final OutsmartGameRegistry games;
-    private final OutsmartGameRunner runner;
+    private final OutsmartGameExecutionService executions;
 
     /** Connects the Outsmart-only API to in-memory storage and turn orchestration. */
-    public OutsmartGameController(OutsmartGameRegistry games, OutsmartGameRunner runner) {
+    public OutsmartGameController(OutsmartGameRegistry games, OutsmartGameExecutionService executions) {
         this.games = games;
-        this.runner = runner;
+        this.executions = executions;
     }
 
     /** Creates a game with caller-selected local models; model calls begin on the first turn request. */
@@ -38,19 +38,30 @@ public class OutsmartGameController {
     /** Returns public progress for an existing in-memory game. */
     @GetMapping("/{gameId}")
     public OutsmartGameResponse get(@PathVariable UUID gameId) {
-        return OutsmartGameResponse.from(games.get(gameId));
+        return OutsmartGameResponse.from(games.get(gameId), executions.status(gameId));
     }
 
     /** Blocks for one decision per player, then returns the newly completed turn. */
     @PostMapping("/{gameId}/turns")
     public OutsmartGameResponse playTurn(@PathVariable UUID gameId) {
-        return OutsmartGameResponse.from(runner.runNextTurn(gameId));
+        OutsmartGame game = executions.playTurn(gameId);
+        return OutsmartGameResponse.from(game, executions.status(gameId));
+    }
+
+    /** Starts background full-game play and returns current progress for polling. */
+    @PostMapping("/{gameId}/run")
+    public ResponseEntity<OutsmartGameResponse> run(@PathVariable UUID gameId) {
+        OutsmartRunStatus status = executions.startRun(gameId);
+        OutsmartGameResponse body = OutsmartGameResponse.from(games.get(gameId), status);
+        return status.state() == OutsmartRunStatus.State.RUNNING
+                ? ResponseEntity.accepted().body(body)
+                : ResponseEntity.ok(body);
     }
 
     /** Removes a game and frees its in-memory slot. */
     @DeleteMapping("/{gameId}")
     public ResponseEntity<Void> delete(@PathVariable UUID gameId) {
-        if (!games.remove(gameId)) {
+        if (!executions.delete(gameId)) {
             throw new java.util.NoSuchElementException("Outsmart game not found: " + gameId);
         }
         return ResponseEntity.noContent().build();

@@ -55,6 +55,7 @@ class OutsmartGameControllerTest {
         assertEquals(1, state.path("turnsCompleted").asInt());
         assertEquals(3, state.path("turns").get(0).path("coinsAfter").size());
         assertFalse(played.body().contains("private plan"));
+        assertFalse(played.body().contains("Inner thoughts"));
         assertFalse(played.body().contains("private_messages"));
         assertFalse(played.body().contains("secretStrategy"));
 
@@ -80,6 +81,34 @@ class OutsmartGameControllerTest {
         assertTrue(response.body().contains("provider must be ollama"));
     }
 
+    /** Starts whole-game play through the API and observes its final state through GET. */
+    @Test
+    void fullGameRunReportsProgressAndCompletion() throws IOException, InterruptedException {
+        String request = """
+                {"participants":[
+                  {"name":"Alex","model":{"provider":"ollama","id":"gemma3:1b"}},
+                  {"name":"Blake","model":{"provider":"ollama","id":"gemma3:1b"}},
+                  {"name":"Charlie","model":{"provider":"ollama","id":"gemma3:1b"}}
+                ]}
+                """;
+        JsonNode created = mapper.readTree(send("POST", "/api/outsmart/games", request).body());
+        String path = "/api/outsmart/games/" + created.path("id").asString();
+
+        HttpResponse<String> started = send("POST", path + "/run", null);
+        assertTrue(started.statusCode() == 202 || started.statusCode() == 200);
+        JsonNode progress = mapper.readTree(send("GET", path, null).body());
+        for (int check = 0; check < 50 && !progress.path("finished").asBoolean(); check++) {
+            Thread.sleep(20);
+            progress = mapper.readTree(send("GET", path, null).body());
+        }
+
+        assertTrue(progress.path("finished").asBoolean());
+        assertEquals(10, progress.path("turnsCompleted").asInt());
+        assertEquals("COMPLETE", progress.path("run").path("state").asString());
+        assertEquals(200, send("POST", path + "/run", null).statusCode());
+        assertEquals(204, send("DELETE", path, null).statusCode());
+    }
+
     /** Renders the setup page and replaces the game panel after create, play, and delete actions. */
     @Test
     void browserFlowRendersThymeleafAndHtmxFragments() throws IOException, InterruptedException {
@@ -95,6 +124,7 @@ class OutsmartGameControllerTest {
         HttpResponse<String> created = sendForm("/outsmart/games", form);
         assertEquals(200, created.statusCode());
         assertTrue(created.body().contains("Play next turn"));
+        assertTrue(created.body().contains("Run game"));
         assertFalse(created.body().contains("<html"));
         String gamePath = created.headers().firstValue("HX-Push-Url").orElseThrow();
         assertTrue(gamePath.startsWith("/outsmart/games/"));
@@ -103,7 +133,8 @@ class OutsmartGameControllerTest {
         assertEquals(200, played.statusCode());
         assertTrue(played.body().contains("Turn 2 of 10"));
         assertTrue(played.body().contains("Coin balances"));
-        assertFalse(played.body().contains("private plan"));
+        assertTrue(played.body().contains("private plan"));
+        assertTrue(played.body().contains("Inner thoughts"));
 
         HttpResponse<String> deleted = sendForm(gamePath + "/delete", "");
         assertEquals(200, deleted.statusCode());

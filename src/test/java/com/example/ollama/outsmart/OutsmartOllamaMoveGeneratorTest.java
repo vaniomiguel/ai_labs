@@ -3,6 +3,7 @@ package com.example.ollama.outsmart;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.io.IOException;
@@ -53,7 +54,10 @@ class OutsmartOllamaMoveGeneratorTest {
         assertEquals("Charlie", move.takeCoinFrom());
         JsonNode request = mapper.readTree(requestBody.get());
         assertEquals("local-test-model", request.path("model").asString());
-        assertEquals("json", request.path("format").asString());
+        assertEquals("object", request.path("format").path("type").asString());
+        assertEquals(4, request.path("format").path("required").size());
+        assertEquals(2, request.path("format").path("properties")
+                .path("private_messages").path("required").size());
         assertFalse(request.path("stream").booleanValue());
         assertEquals("system", request.path("messages").get(0).path("role").asString());
         assertEquals("user", request.path("messages").get(1).path("role").asString());
@@ -70,16 +74,16 @@ class OutsmartOllamaMoveGeneratorTest {
         assertInstanceOf(OutsmartDecision.Invalid.class, decision);
     }
 
-    /** Keeps transport failures as invalid moves so the rule engine can finish the turn. */
+    /** Aborts the turn on a server error so no player loses coins for an outage. */
     @Test
-    void serverErrorBecomesInvalidDecision() throws IOException {
+    void serverErrorStopsTheTurn() throws IOException {
         startServer(503, "unavailable", new AtomicReference<>());
         OutsmartGame game = newGame();
 
-        OutsmartDecision.Invalid decision = assertInstanceOf(OutsmartDecision.Invalid.class,
-                client().decide(game, game.players().getFirst()));
+        OutsmartModelUnavailableException failure = assertThrows(OutsmartModelUnavailableException.class,
+                () -> client().decide(game, game.players().getFirst()));
 
-        assertTrue(decision.reason().contains("503"));
+        assertTrue(failure.getMessage().contains("503"));
     }
 
     /** Shows a player their own plan and received messages, but no opponent's private plan. */
