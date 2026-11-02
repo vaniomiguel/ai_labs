@@ -1,0 +1,174 @@
+<!doctype html>
+<!-- Outsmart's server-rendered page. The main element is also the HTMX replacement fragment. -->
+<html lang="en" xmlns:th="http://www.thymeleaf.org">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Outsmart · AI Labs</title>
+    <link rel="stylesheet" th:href="@{/outsmart.css}" href="/outsmart.css">
+    <script defer th:src="@{/vendor/htmx.min.js}" src="/vendor/htmx.min.js"></script>
+</head>
+<body>
+<div class="site-shell">
+    <header class="site-header">
+        <a class="brand" th:href="@{/outsmart}" href="/outsmart" aria-label="Outsmart home">
+            <span class="brand-mark" aria-hidden="true">O</span>
+            <span>Outsmart <small>AI Labs</small></span>
+        </a>
+        <span class="header-note">A local model strategy game</span>
+    </header>
+
+    <main id="outsmart-content" th:fragment="content">
+        <section class="hero">
+            <p class="eyebrow">THE GAME</p>
+            <h1 th:text="${game != null} ? 'The game is on' : 'Can your models outsmart each other?'">
+                Can your models outsmart each other?
+            </h1>
+            <p class="hero-copy" th:if="${game == null}">
+                Pick 3 to 8 players and a local Ollama model for each one. They will negotiate,
+                trade coins, and try to finish ahead.
+            </p>
+            <p class="hero-copy" th:if="${game != null}">
+                Each player makes a private move. See how their balances change after every turn.
+            </p>
+        </section>
+
+        <p class="notice error" role="alert" th:if="${error != null}" th:text="${error}"></p>
+
+        <!-- Keep setup and game inside one fragment so a completed request can replace the panel. -->
+        <section th:if="${game == null}" class="panel setup-panel" aria-labelledby="setup-title">
+            <div class="panel-heading">
+                <div>
+                    <p class="eyebrow">01 / SETUP</p>
+                    <h2 id="setup-title">Choose your players</h2>
+                </div>
+                <span class="pill">3–8 players</span>
+            </div>
+
+            <form method="post" th:action="@{/outsmart/games}" action="/outsmart/games"
+                  th:attr="hx-post=@{/outsmart/games}" hx-target="#outsmart-content"
+                  hx-swap="outerHTML" hx-sync="this:drop" hx-indicator="#setup-wait">
+                <div class="players-list">
+                    <div class="player-row" th:each="row : ${rows}" th:if="${row.required}">
+                        <span class="player-number" th:text="${#numbers.formatInteger(row.number, 2)}">01</span>
+                        <label>
+                            <span>Player name</span>
+                            <input name="name" type="text" maxlength="80" required
+                                   th:value="${row.name}" placeholder="Name">
+                        </label>
+                        <label>
+                            <span>Ollama model ID</span>
+                            <input name="model" type="text" maxlength="160" required
+                                   th:value="${row.modelId}" placeholder="gemma3:1b">
+                        </label>
+                    </div>
+                </div>
+
+                <details class="extra-players" th:open="${extraOpen}">
+                    <summary>Add up to five more players</summary>
+                    <div class="players-list">
+                        <div class="player-row" th:each="row : ${rows}" th:unless="${row.required}">
+                            <span class="player-number" th:text="${#numbers.formatInteger(row.number, 2)}">04</span>
+                            <label>
+                                <span>Player name <em>optional</em></span>
+                                <input name="name" type="text" maxlength="80"
+                                       th:value="${row.name}" placeholder="Leave blank to skip">
+                            </label>
+                            <label>
+                                <span>Ollama model ID</span>
+                                <input name="model" type="text" maxlength="160"
+                                       th:value="${row.modelId}" placeholder="gemma3:1b">
+                            </label>
+                        </div>
+                    </div>
+                </details>
+
+                <div class="panel-actions">
+                    <button class="button primary" type="submit">Start game <span aria-hidden="true">→</span></button>
+                    <span id="setup-wait" class="htmx-indicator wait-note" role="status">Creating your game…</span>
+                </div>
+            </form>
+            <p class="helper">Use model IDs you have already pulled in Ollama. Games live only in this app’s memory.</p>
+        </section>
+
+        <section th:if="${game != null}" class="game-layout" aria-label="Game progress">
+            <div class="panel game-panel">
+                <div class="panel-heading">
+                    <div>
+                        <p class="eyebrow">02 / PLAY</p>
+                        <h2 th:text="${game.finished} ? 'Game finished' : 'Turn ' + ${game.turnsCompleted + 1} + ' of 10'">
+                            Turn 1 of 10
+                        </h2>
+                    </div>
+                    <span class="pill" th:text="${game.finished} ? 'Final result' : ${game.turnsCompleted} + ' completed'">
+                        0 completed
+                    </span>
+                </div>
+
+                <div class="scoreboard">
+                    <article class="score-card" th:each="player : ${game.players}">
+                        <div class="score-top">
+                            <span class="score-name" th:text="${player.name}">Alex</span>
+                            <span class="winner-tag" th:if="${player.winner}">Winner</span>
+                            <span class="bankrupt-tag" th:if="${player.bankrupt}">Out</span>
+                        </div>
+                        <div class="score-amount"><strong th:text="${player.coins}">12</strong><span>coins</span></div>
+                        <meter min="0" max="30" th:value="${player.coins}" value="12"
+                               th:aria-label="|${player.name} has ${player.coins} coins|"></meter>
+                        <small th:text="${player.modelId}">gemma3:1b</small>
+                    </article>
+                </div>
+
+                <div class="panel-actions game-actions">
+                    <form th:if="${!game.finished}" method="post"
+                          th:action="@{/outsmart/games/{id}/turns(id=${game.id})}"
+                          th:attr="hx-post=@{/outsmart/games/{id}/turns(id=${game.id})}"
+                          hx-target="#outsmart-content" hx-swap="outerHTML"
+                          hx-sync="this:drop" hx-indicator="#turn-wait">
+                        <button class="button primary" type="submit">Play next turn <span aria-hidden="true">→</span></button>
+                    </form>
+                    <p id="turn-wait" class="htmx-indicator wait-note" role="status">
+                        Waiting for every local model. This can take a few minutes…
+                    </p>
+                    <p class="finished-note" th:if="${game.finished}">The game is complete.</p>
+                </div>
+            </div>
+
+            <div class="panel history-panel">
+                <div class="panel-heading">
+                    <div>
+                        <p class="eyebrow">03 / HISTORY</p>
+                        <h2>Coin balances</h2>
+                    </div>
+                </div>
+                <p class="empty-history" th:if="${game.turns.empty}">No turns have been played yet.</p>
+                <div class="table-scroll" th:if="${!game.turns.empty}">
+                    <table>
+                        <thead><tr><th scope="col">Turn</th><th scope="col" th:each="player : ${game.players}"
+                                                        th:text="${player.name}">Alex</th></tr></thead>
+                        <tbody>
+                        <tr th:each="turn : ${game.turns}">
+                            <th scope="row" th:text="${turn.number}">1</th>
+                            <td th:each="player : ${game.players}"
+                                th:text="${turn.coinsAfter.get(player.name)}">12</td>
+                        </tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+
+            <div class="game-footer">
+                <span>Game <code th:text="${game.id}">ID</code></span>
+                <form method="post" th:action="@{/outsmart/games/{id}/delete(id=${game.id})}"
+                      th:attr="hx-post=@{/outsmart/games/{id}/delete(id=${game.id})}"
+                      hx-target="#outsmart-content" hx-swap="outerHTML" hx-sync="this:drop">
+                    <button class="button subtle" type="submit">Delete game</button>
+                </form>
+            </div>
+        </section>
+    </main>
+
+    <footer class="site-footer">Outsmart · Local models · No saved games</footer>
+</div>
+</body>
+</html>

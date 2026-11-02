@@ -80,6 +80,53 @@ class OutsmartGameControllerTest {
         assertTrue(response.body().contains("provider must be ollama"));
     }
 
+    /** Renders the setup page and replaces the game panel after create, play, and delete actions. */
+    @Test
+    void browserFlowRendersThymeleafAndHtmxFragments() throws IOException, InterruptedException {
+        HttpResponse<String> setup = send("GET", "/outsmart", null);
+        assertEquals(200, setup.statusCode());
+        assertTrue(setup.body().contains("/vendor/htmx.min.js"));
+        assertTrue(setup.body().contains("Choose your players"));
+
+        String form = "name=Alex&name=Blake&name=Charlie&name=&name=&name=&name=&name="
+                + "&model=gemma3%3A1b&model=gemma3%3A1b&model=gemma3%3A1b"
+                + "&model=gemma3%3A1b&model=gemma3%3A1b&model=gemma3%3A1b"
+                + "&model=gemma3%3A1b&model=gemma3%3A1b";
+        HttpResponse<String> created = sendForm("/outsmart/games", form);
+        assertEquals(200, created.statusCode());
+        assertTrue(created.body().contains("Play next turn"));
+        assertFalse(created.body().contains("<html"));
+        String gamePath = created.headers().firstValue("HX-Push-Url").orElseThrow();
+        assertTrue(gamePath.startsWith("/outsmart/games/"));
+
+        HttpResponse<String> played = sendForm(gamePath + "/turns", "");
+        assertEquals(200, played.statusCode());
+        assertTrue(played.body().contains("Turn 2 of 10"));
+        assertTrue(played.body().contains("Coin balances"));
+        assertFalse(played.body().contains("private plan"));
+
+        HttpResponse<String> deleted = sendForm(gamePath + "/delete", "");
+        assertEquals(200, deleted.statusCode());
+        assertEquals("/outsmart", deleted.headers().firstValue("HX-Push-Url").orElseThrow());
+        assertTrue(deleted.body().contains("Choose your players"));
+    }
+
+    /** Keeps an invalid optional player visible so the user can correct the model ID. */
+    @Test
+    void browserFormErrorPreservesOptionalPlayer() throws IOException, InterruptedException {
+        String form = "name=Alex&name=Blake&name=Charlie&name=Dana&name=&name=&name=&name="
+                + "&model=gemma3%3A1b&model=gemma3%3A1b&model=gemma3%3A1b"
+                + "&model=&model=gemma3%3A1b&model=gemma3%3A1b"
+                + "&model=gemma3%3A1b&model=gemma3%3A1b";
+
+        HttpResponse<String> response = sendForm("/outsmart/games", form);
+
+        assertEquals(200, response.statusCode());
+        assertTrue(response.body().contains("model IDs up to 160 characters"));
+        assertTrue(response.body().contains("value=\"Dana\""));
+        assertTrue(response.body().contains("class=\"extra-players\" open"));
+    }
+
     /** Sends a request to the temporary Spring Boot port and returns the raw HTTP response. */
     private HttpResponse<String> send(String method, String path, String body)
             throws IOException, InterruptedException {
@@ -90,6 +137,16 @@ class OutsmartGameControllerTest {
         request.method(method, body == null ? HttpRequest.BodyPublishers.noBody()
                 : HttpRequest.BodyPublishers.ofString(body));
         return client.send(request.build(), HttpResponse.BodyHandlers.ofString());
+    }
+
+    /** Sends a browser-style form request and asks the server for an HTML fragment. */
+    private HttpResponse<String> sendForm(String path, String body) throws IOException, InterruptedException {
+        HttpRequest request = HttpRequest.newBuilder(URI.create("http://localhost:" + port + path))
+                .header("Content-Type", "application/x-www-form-urlencoded")
+                .header("HX-Request", "true")
+                .POST(HttpRequest.BodyPublishers.ofString(body))
+                .build();
+        return client.send(request, HttpResponse.BodyHandlers.ofString());
     }
 
     /** Supplies deterministic local moves so the HTTP test exercises orchestration without Ollama. */
