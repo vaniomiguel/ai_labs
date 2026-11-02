@@ -2,3 +2,22 @@ target/
 .idea/
 *.iml
 .env
+
+# Compiled and packaged files
+*.class
+*.jar
+*.war
+*.nar
+*.ear
+*.zip
+*.tar.gz
+*.rar
+
+# Logs and JVM crash files
+*.log
+hs_err_pid*
+replay_pid*
+
+# BlueJ and Java ME files
+*.ctxt
+.mtj.tmp/
