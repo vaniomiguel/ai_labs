@@ -50,8 +50,10 @@ To use OpenAI instead, set `OPENAI_BASE_URL=https://api.openai.com/v1`, provide 
 
 ### Outsmart game (in progress)
 
-The Outsmart feature has its own `com.example.ollama.outsmart` package and `outsmart.*` configuration. Its future Ollama calls will use `OUTSMART_OLLAMA_BASE_URL` (default `http://localhost:11434`) and `OUTSMART_OLLAMA_REQUEST_TIMEOUT` (default `2m`). These settings do not affect `/api/chat`. Game endpoints and the UI will be added in later steps.
+The Outsmart feature has its own `com.example.ollama.outsmart` package and `outsmart.*` configuration. Its Ollama calls use `OUTSMART_OLLAMA_BASE_URL` (default `http://localhost:11434`) and `OUTSMART_OLLAMA_REQUEST_TIMEOUT` (default `2m`). These settings do not affect `/api/chat`. Game endpoints and the UI will be added in later steps.
 
 The `mise.toml` file selects Temurin 25 for this project. Link the Homebrew installation with `mise link java@temurin-25 /Library/Java/JavaVirtualMachines/temurin-25.jdk/Contents/Home`, then run `./mvnw` from a shell with mise activated.
 
-The game rules and in-memory game registry are implemented. Games start with 12 coins per player and end after 10 turns or a bankruptcy. Invalid moves cost one coin; a qualifying alliance transfers two extra coins from its target. The registry keeps up to `OUTSMART_MAX_GAMES` games (default `100`) in memory and supports removing them; games disappear when the application stops. Model calls, game endpoints, and the UI will come in later steps.
+The game rules and in-memory game registry are implemented. Games start with 12 coins per player and end after 10 turns or a bankruptcy. Invalid moves cost one coin; a qualifying alliance transfers two extra coins from its target. The registry keeps up to `OUTSMART_MAX_GAMES` games (default `100`) in memory and supports removing them; games disappear when the application stops.
+
+Step 3 adds player-specific prompts and an Ollama move generator. Each player uses the Ollama model ID supplied in the game's participant list. The generator calls Ollama's local `/api/chat` endpoint with JSON mode, parses the move, and returns an invalid decision when the model response or request fails. The rule engine then checks target names and required messages. Each prompt includes public balances, the player's own prior moves and private messages, and no other player's private plans. Turn orchestration, HTTP game endpoints, and the UI will be added in later steps.
