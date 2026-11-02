@@ -6,12 +6,14 @@ import com.openai.models.chat.completions.ChatCompletionCreateParams;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
+/** Sends the existing chat endpoint's prompts to its configured Ollama model. */
 @Service
 public class ChatService {
 
     private final OpenAIClient openAIClient;
     private final String model;
 
+    /** Reads the chat model once when the service is created. */
     public ChatService(
             OpenAIClient openAIClient,
             @Value("${openai.model}") String model) {
@@ -19,6 +21,7 @@ public class ChatService {
         this.model = model;
     }
 
+    /** Makes one chat completion request and returns the first response's text. */
     public ChatResponse ask(String prompt) {
         ChatCompletionCreateParams params = ChatCompletionCreateParams.builder()
                 .addUserMessage(prompt)

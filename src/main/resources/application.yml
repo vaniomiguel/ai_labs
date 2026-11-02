@@ -6,3 +6,9 @@ openai:
   base-url: ${OPENAI_BASE_URL:http://localhost:11434/v1}
   api-key: ${OPENAI_API_KEY:ollama}
   model: ${OPENAI_MODEL:gemma3:1b}
+
+outsmart:
+  max-games: ${OUTSMART_MAX_GAMES:100}
+  ollama:
+    base-url: ${OUTSMART_OLLAMA_BASE_URL:http://localhost:11434}
+    request-timeout: ${OUTSMART_OLLAMA_REQUEST_TIMEOUT:2m}
