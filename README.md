@@ -8,11 +8,11 @@ This repository is a work in progress. Projects and documentation will be added 
 
 ### OpenAI-compatible Spring Boot chat
 
-A Java 17 / Spring Boot REST API that uses the official OpenAI Java SDK. It is configured to use a local Ollama model by default, and can also connect to OpenAI or another compatible API by changing configuration.
+A Java 25 / Spring Boot REST API that uses the official OpenAI Java SDK. It is configured to use a local Ollama model by default, and can also connect to OpenAI or another compatible API by changing configuration.
 
 #### Requirements
 
-- Java 17 or newer
+- Java 25 JDK
 - Maven 3.6.3 or newer
 - [Ollama](https://ollama.com/) installed and running locally, with a model downloaded (default: `llama3.2`)
 - Or an OpenAI API key when using the OpenAI API

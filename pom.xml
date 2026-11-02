@@ -18,7 +18,7 @@
     <description>Spring Boot REST API using a local Ollama model</description>
 
     <properties>
-        <java.version>17</java.version>
+        <java.version>25</java.version>
         <openai-java.version>4.96.0</openai-java.version>
     </properties>
 
