@@ -50,7 +50,7 @@ To use OpenAI instead, set `OPENAI_BASE_URL=https://api.openai.com/v1`, provide 
 
 ### Outsmart game (in progress)
 
-The Outsmart feature has its own `com.example.ollama.outsmart` package and `outsmart.*` configuration. Its Ollama calls use `OUTSMART_OLLAMA_BASE_URL` (default `http://localhost:11434`) and `OUTSMART_OLLAMA_REQUEST_TIMEOUT` (default `2m`). These settings do not affect `/api/chat`. Game endpoints and the UI will be added in later steps.
+The Outsmart feature has its own `com.example.ollama.outsmart` package and `outsmart.*` configuration. Its Ollama calls use `OUTSMART_OLLAMA_BASE_URL` (default `http://localhost:11434`) and `OUTSMART_OLLAMA_REQUEST_TIMEOUT` (default `2m`). These settings do not affect `/api/chat`. The UI will be added in a later step.
 
 The `mise.toml` file selects Temurin 25 for this project. Link the Homebrew installation with `mise link java@temurin-25 /Library/Java/JavaVirtualMachines/temurin-25.jdk/Contents/Home`, then run `./mvnw` from a shell with mise activated.
 
@@ -58,4 +58,22 @@ The game rules and in-memory game registry are implemented. Games start with 12 
 
 Step 3 adds player-specific prompts and an Ollama move generator. Each player uses the Ollama model ID supplied in the game's participant list. The generator calls Ollama's local `/api/chat` endpoint with JSON mode, parses the move, and returns an invalid decision when the model response or request fails. The rule engine then checks target names and required messages. Each prompt includes public balances, the player's own prior moves and private messages, and no other player's private plans.
 
-Step 4 adds `OutsmartGameRunner`. Its `runNextTurn(gameId)` method reads one game snapshot, collects every player's decision from that snapshot, and commits the completed turn once. A concurrent update is rejected by the registry's turn check. `runToCompletion(gameId)` repeats this until bankruptcy or turn 10; it blocks while local models respond, so a future HTTP endpoint should use background execution if it needs to return immediately. The game still has no HTTP endpoints or UI.
+Step 4 adds `OutsmartGameRunner`. Its `runNextTurn(gameId)` method reads one game snapshot, collects every player's decision from that snapshot, and commits the completed turn once. A concurrent update is rejected by the registry's turn check. `runToCompletion(gameId)` repeats this until bankruptcy or turn 10; it blocks while local models respond.
+
+Step 5 adds the Outsmart API. Create a game with 3–8 players and an installed Ollama model for each player:
+
+```bash
+curl -i -X POST http://localhost:8080/api/outsmart/games \
+  -H 'Content-Type: application/json' \
+  -d '{"participants":[{"name":"Alex","model":{"provider":"ollama","id":"gemma3:1b"}},{"name":"Blake","model":{"provider":"ollama","id":"gemma3:1b"}},{"name":"Charlie","model":{"provider":"ollama","id":"gemma3:1b"}}]}'
+```
+
+The response includes an `id` and a `Location` header. Use that ID for the other operations:
+
+```bash
+curl http://localhost:8080/api/outsmart/games/GAME_ID
+curl -X POST http://localhost:8080/api/outsmart/games/GAME_ID/turns
+curl -X DELETE http://localhost:8080/api/outsmart/games/GAME_ID
+```
+
+Each `POST .../turns` runs one turn and waits for every local model response. Repeat it until `finished` is `true`. Responses expose player balances and per-turn balance history, but no private strategies or messages. Invalid requests return `400`, unknown game IDs return `404`, and finished games or conflicting turns return `409`. Games remain only in memory and disappear on restart. The HTTP turn call is synchronous; a later UI can add background execution for immediate progress updates.

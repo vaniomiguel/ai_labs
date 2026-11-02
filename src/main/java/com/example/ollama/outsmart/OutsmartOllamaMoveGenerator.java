@@ -9,6 +9,7 @@ import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Objects;
 
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 
 import tools.jackson.databind.JsonNode;
@@ -25,6 +26,7 @@ public class OutsmartOllamaMoveGenerator implements OutsmartMoveGenerator {
     private final java.time.Duration timeout;
 
     /** Uses Outsmart-specific Ollama settings, leaving the existing chat client untouched. */
+    @Autowired
     public OutsmartOllamaMoveGenerator(OutsmartProperties properties, ObjectMapper mapper,
             OutsmartPromptFactory prompts) {
         this(HttpClient.newHttpClient(), mapper, prompts, properties);
