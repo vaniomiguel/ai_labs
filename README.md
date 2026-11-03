@@ -81,3 +81,14 @@ Each `POST .../turns` runs one turn and waits for every local model response. `P
 The browser interface is at [http://localhost:8080/outsmart](http://localhost:8080/outsmart). With Ollama running and models pulled, start the app with `./mvnw spring-boot:run`. Enter names for at least three players and select or type model IDs; the fields suggest models returned by the OpenAI-compatible model list through the SDK. Use **Play next turn** for one turn or **Run game** to continue in the background. The page polls while a whole game runs and shows balances, messages, alliances, and optional inner thoughts after each turn. These details are a human spectator view; they are never included in another model's prompt. **Delete game** frees its in-memory slot. Standard form submissions also work without JavaScript.
 
 The browser interface uses server-rendered Thymeleaf and a locally bundled copy of HTMX 2.0.11 (`src/main/resources/static/vendor/htmx.min.js`); its license is stored beside it. It has no separate frontend build step and needs no CDN connection at runtime.
+
+### Company brochure
+
+The brochure API reads a website, selects relevant linked pages with the configured model, and returns a Markdown brochure:
+
+```bash
+curl --get http://localhost:8080/api/brochures \
+  --data-urlencode 'url=https://example.com'
+```
+
+The response uses the `text/markdown` media type. A browser page needs a Markdown renderer to display its headings and paragraphs with formatting.

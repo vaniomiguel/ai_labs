@@ -7,7 +7,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import java.io.IOException;
 import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;
-import java.util.List;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import com.example.ollama.chat.TextResponseFormat;
 import com.sun.net.httpserver.HttpServer;
@@ -17,26 +17,35 @@ import tools.jackson.databind.ObjectMapper;
 class BrochureServiceTest {
 
     @Test
-    void selectsScrapedLinksAndConvertsModelJsonToRecords() throws IOException {
-        HttpServer server = startServer("""
-                <a href="/about">About</a><a href="/privacy">Privacy</a>
-                <a href="mailto:info@example.com">Email</a>
-                """);
+    void generatesMarkdownFromHomePageAndSelectedLinkedPage() throws IOException {
+        HttpServer server = startServer(
+                "<title>Example Co</title><body><p>We make widgets.</p>"
+                        + "<a href='/about'>About</a><a href='/privacy'>Privacy</a></body>",
+                "<title>About Example Co</title><body><p>Founded by Ada.</p></body>");
         try {
             String url = "http://127.0.0.1:" + server.getAddress().getPort() + "/";
+            AtomicInteger modelCalls = new AtomicInteger();
             BrochureService service = new BrochureService((systemPrompt, userPrompt, format) -> {
-                assertEquals(TextResponseFormat.JSON_OBJECT, format);
-                assertTrue(systemPrompt.contains("\"links\" array"));
-                assertTrue(userPrompt.contains(url));
-                assertTrue(userPrompt.contains("/about"));
-                assertTrue(userPrompt.contains("/privacy"));
-                return """
-                        {"links":[{"type":"about page","url":"/about"}]}
-                        """;
+                modelCalls.incrementAndGet();
+                if (format == TextResponseFormat.JSON_OBJECT) {
+                    assertTrue(systemPrompt.contains("\"links\" array"));
+                    assertTrue(userPrompt.contains(url));
+                    assertTrue(userPrompt.contains("/about"));
+                    assertTrue(userPrompt.contains("/privacy"));
+                    return """
+                            {"links":[{"type":"about page","url":"/about"}]}
+                            """;
+                }
+                assertEquals(TextResponseFormat.DEFAULT, format);
+                assertTrue(systemPrompt.contains("Markdown"));
+                assertTrue(userPrompt.contains("We make widgets."));
+                assertTrue(userPrompt.contains("Founded by Ada."));
+                assertTrue(userPrompt.contains("Source: " + url + "about"));
+                return "# Example Co\n\nWe make widgets.";
             }, new ObjectMapper());
 
-            assertEquals(new BrochureLinks(List.of(new BrochureLink("about page", url + "about"))),
-                    service.selectRelevantLinks(url));
+            assertEquals("# Example Co\n\nWe make widgets.", service.generateBrochure(url));
+            assertEquals(2, modelCalls.get());
         } finally {
             server.stop(0);
         }
@@ -44,21 +53,22 @@ class BrochureServiceTest {
 
     @Test
     void rejectsLinksInventedByTheModel() throws IOException {
-        HttpServer server = startServer("<a href='/about'>About</a>");
+        HttpServer server = startServer("<a href='/about'>About</a>", "About page");
         try {
             String url = "http://127.0.0.1:" + server.getAddress().getPort() + "/";
             BrochureService service = new BrochureService((systemPrompt, userPrompt, format) ->
                     "{\"links\":[{\"type\":\"careers\",\"url\":\"/invented\"}]}", new ObjectMapper());
 
-            assertThrows(IllegalArgumentException.class, () -> service.selectRelevantLinks(url));
+            assertThrows(IllegalArgumentException.class, () -> service.generateBrochure(url));
         } finally {
             server.stop(0);
         }
     }
 
-    private static HttpServer startServer(String html) throws IOException {
+    private static HttpServer startServer(String homeHtml, String aboutHtml) throws IOException {
         HttpServer server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
         server.createContext("/", exchange -> {
+            String html = exchange.getRequestURI().getPath().equals("/about") ? aboutHtml : homeHtml;
             byte[] body = html.getBytes(StandardCharsets.UTF_8);
             exchange.getResponseHeaders().set("Content-Type", "text/html; charset=UTF-8");
             exchange.sendResponseHeaders(200, body.length);
