@@ -1,7 +1,7 @@
 package com.example.ollama.config;
 
-import com.example.ollama.chat.ChatModelGateway;
-import com.example.ollama.chat.LocalOllamaChatModelGateway;
+import com.example.ollama.chat.LocalOllamaTextGenerationClient;
+import com.example.ollama.chat.TextGenerationClient;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -12,7 +12,7 @@ import org.springframework.context.annotation.Configuration;
 public class LocalOllamaConfiguration {
 
     @Bean
-    ChatModelGateway chatModelGateway(LocalOllamaProperties properties) {
-        return new LocalOllamaChatModelGateway(properties);
+    TextGenerationClient textGenerationClient(LocalOllamaProperties properties) {
+        return new LocalOllamaTextGenerationClient(properties);
     }
 }

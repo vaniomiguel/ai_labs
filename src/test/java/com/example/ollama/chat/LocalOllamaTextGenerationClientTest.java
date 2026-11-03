@@ -11,8 +11,10 @@ import java.util.concurrent.atomic.AtomicReference;
 import com.example.ollama.config.LocalOllamaProperties;
 import com.sun.net.httpserver.HttpServer;
 import org.junit.jupiter.api.Test;
+import tools.jackson.databind.JsonNode;
+import tools.jackson.databind.ObjectMapper;
 
-class LocalOllamaChatModelGatewayTest {
+class LocalOllamaTextGenerationClientTest {
 
     @Test
     void sendsPromptAndModelToLocalOllamaEndpoint() throws IOException {
@@ -37,12 +39,23 @@ class LocalOllamaChatModelGatewayTest {
         try {
             var properties = new LocalOllamaProperties(
                     "http://127.0.0.1:" + server.getAddress().getPort() + "/v1", "test-model");
-            var gateway = new LocalOllamaChatModelGateway(properties);
+            var client = new LocalOllamaTextGenerationClient(properties);
 
-            assertEquals("Hello back", gateway.complete("Hello"));
+            assertEquals("Hello back", client.generateText("Hello"));
             assertEquals("/v1/chat/completions", path.get());
             assertTrue(body.get().contains("\"model\":\"test-model\""));
-            assertTrue(body.get().contains("\"content\":\"Hello\""));
+            JsonNode messages = new ObjectMapper().readTree(body.get()).path("messages");
+            assertEquals(1, messages.size());
+            assertEquals("user", messages.get(0).path("role").asString());
+            assertEquals("Hello", messages.get(0).path("content").asString());
+
+            assertEquals("Hello back", client.generateText("Be concise", "Hello"));
+            messages = new ObjectMapper().readTree(body.get()).path("messages");
+            assertEquals(2, messages.size());
+            assertEquals("system", messages.get(0).path("role").asString());
+            assertEquals("Be concise", messages.get(0).path("content").asString());
+            assertEquals("user", messages.get(1).path("role").asString());
+            assertEquals("Hello", messages.get(1).path("content").asString());
         } finally {
             server.stop(0);
         }

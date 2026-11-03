@@ -6,13 +6,13 @@ import com.openai.client.okhttp.OpenAIOkHttpClient;
 import com.openai.models.ChatModel;
 import com.openai.models.chat.completions.ChatCompletionCreateParams;
 
-/** Uses a locally running Ollama server through its OpenAI-compatible API. */
-public final class LocalOllamaChatModelGateway implements ChatModelGateway {
+/** Generates text with a local Ollama server through the OpenAI SDK. */
+public final class LocalOllamaTextGenerationClient implements TextGenerationClient {
 
     private final OpenAIClient client;
     private final String model;
 
-    public LocalOllamaChatModelGateway(LocalOllamaProperties properties) {
+    public LocalOllamaTextGenerationClient(LocalOllamaProperties properties) {
         this.client = OpenAIOkHttpClient.builder()
                 .baseUrl(properties.baseUrl())
                 .apiKey("ollama")
@@ -21,11 +21,13 @@ public final class LocalOllamaChatModelGateway implements ChatModelGateway {
     }
 
     @Override
-    public String complete(String prompt) {
-        ChatCompletionCreateParams params = ChatCompletionCreateParams.builder()
-                .addUserMessage(prompt)
-                .model(ChatModel.of(model))
-                .build();
+    public String generateText(String systemPrompt, String userPrompt) {
+        ChatCompletionCreateParams.Builder builder = ChatCompletionCreateParams.builder()
+                .model(ChatModel.of(model));
+        if (!systemPrompt.isBlank()) {
+            builder.addSystemMessage(systemPrompt);
+        }
+        ChatCompletionCreateParams params = builder.addUserMessage(userPrompt).build();
         return client.chat().completions().create(params)
                 .choices().get(0).message().content().orElse("");
     }

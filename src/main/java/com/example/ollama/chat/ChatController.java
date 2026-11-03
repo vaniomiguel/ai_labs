@@ -21,6 +21,6 @@ public class ChatController {
     /** Validates a prompt and returns the model's reply. */
     @PostMapping
     public ChatResponse chat(@Valid @RequestBody ChatRequest request) {
-        return chatService.ask(request.prompt());
+        return chatService.generateResponse(request.prompt());
     }
 }

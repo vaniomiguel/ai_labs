@@ -6,13 +6,17 @@ import org.springframework.stereotype.Service;
 @Service
 public class ChatService {
 
-    private final ChatModelGateway modelGateway;
+    private final TextGenerationClient textGenerationClient;
 
-    public ChatService(ChatModelGateway modelGateway) {
-        this.modelGateway = modelGateway;
+    public ChatService(TextGenerationClient textGenerationClient) {
+        this.textGenerationClient = textGenerationClient;
     }
 
-    public ChatResponse ask(String prompt) {
-        return new ChatResponse(modelGateway.complete(prompt));
+    public ChatResponse generateResponse(String userPrompt) {
+        return new ChatResponse(textGenerationClient.generateText(userPrompt));
+    }
+
+    public ChatResponse generateResponse(String systemPrompt, String userPrompt) {
+        return new ChatResponse(textGenerationClient.generateText(systemPrompt, userPrompt));
     }
 }
