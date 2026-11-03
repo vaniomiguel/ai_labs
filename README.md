@@ -92,3 +92,4 @@ curl --get http://localhost:8080/api/brochures \
 ```
 
 The response uses the `text/markdown` media type. A browser page needs a Markdown renderer to display its headings and paragraphs with formatting.
+You can omit the URL scheme (for example, `www.example.com`); the API will use HTTPS by default.

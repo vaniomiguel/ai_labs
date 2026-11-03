@@ -10,6 +10,7 @@ import java.util.Set;
 import com.example.ollama.chat.TextGenerationClient;
 import com.example.ollama.chat.TextResponseFormat;
 import org.springframework.stereotype.Service;
+import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
 
 /** Gathers company website content and turns it into a Markdown brochure. */
@@ -30,7 +31,8 @@ public class BrochureService {
             such as About, Company, Products, Services, Team, or Careers pages.
             Do not select Terms of Service, Privacy, login, social media, or email links.
             Return only a JSON object with a "links" array. Each item must have a short "type"
-            describing the page and a "url" containing its full absolute URL.
+            describing the page and an integer "index" from the supplied numbered list.
+            Indices start at 0. Do not invent links or return URLs.
             If no links are relevant, return {"links":[]}.
             """;
 
@@ -44,15 +46,37 @@ public class BrochureService {
 
     /** Generates a Markdown brochure from the website and selected linked pages. */
     public String generateBrochure(String url) throws IOException {
-        String websiteContent = gatherWebsiteContent(url);
+        String websiteUrl = normalizeWebsiteUrl(url);
+        String websiteContent = gatherWebsiteContent(websiteUrl);
         String userPrompt = """
                 Create a brochure about the company at %s using the website content below.
                 Use Markdown headings and paragraphs so it can be displayed as formatted text.
 
                 Website content:
                 %s
-                """.formatted(url, websiteContent);
+                """.formatted(websiteUrl, websiteContent);
         return textGenerationClient.generateText(BROCHURE_SYSTEM_PROMPT, userPrompt);
+    }
+
+    private static String normalizeWebsiteUrl(String url) {
+        if (url == null || url.isBlank()) {
+            throw new InvalidWebsiteUrlException("Website URL is required");
+        }
+
+        String input = url.strip();
+        String candidate = input.contains("://") ? input : "https://" + input;
+        URI parsed;
+        try {
+            parsed = URI.create(candidate);
+        } catch (IllegalArgumentException exception) {
+            throw new InvalidWebsiteUrlException("Website URL is invalid: " + input);
+        }
+        String scheme = parsed.getScheme();
+        if (parsed.getHost() == null || parsed.getHost().isBlank()
+                || !("http".equalsIgnoreCase(scheme) || "https".equalsIgnoreCase(scheme))) {
+            throw new InvalidWebsiteUrlException("Website URL must use HTTP or HTTPS and include a host");
+        }
+        return parsed.toString();
     }
 
     private String gatherWebsiteContent(String url) throws IOException {
@@ -78,42 +102,47 @@ public class BrochureService {
         String userPrompt = """
                 Here is the list of links on the website %s.
                 Select the links most relevant to a brochure about the company.
-                Resolve relative links against the website URL and return full absolute URLs
-                (HTTPS when the website uses HTTPS). Do not include Terms of Service,
-                Privacy, or email links.
+                Return their 0-based indices and a short page type in JSON.
+                Do not include Terms of Service, Privacy, or email links.
 
                 Links (some may be relative):
                 %s
-                """.formatted(url, String.join("\n", links));
+                """.formatted(url, numberedLinks(links));
 
         String json = textGenerationClient.generateText(
                 LINK_SELECTION_SYSTEM_PROMPT, userPrompt, TextResponseFormat.JSON_OBJECT);
-        BrochureLinks selected = mapper.readValue(json, BrochureLinks.class);
-        if (selected == null || selected.links() == null) {
+        JsonNode selections = mapper.readTree(json).path("links");
+        if (!selections.isArray()) {
             throw new IllegalArgumentException("Model response must contain a links array");
         }
 
         URI base = URI.create(url);
-        Set<String> available = new HashSet<>();
-        for (String link : links) {
-            URI resolved = resolveWebLink(base, link);
-            if (resolved != null) {
-                available.add(resolved.toString());
-            }
-        }
-
+        Set<String> seen = new HashSet<>();
         List<BrochureLink> result = new ArrayList<>();
-        for (BrochureLink link : selected.links()) {
-            if (link == null || link.type() == null || link.type().isBlank() || link.url() == null) {
-                throw new IllegalArgumentException("Model returned an incomplete brochure link");
+        for (JsonNode selection : selections) {
+            JsonNode indexNode = selection.path("index");
+            String type = selection.path("type").asString();
+            if (!indexNode.isInt() || type.isBlank()) {
+                continue;
             }
-            URI resolved = resolveWebLink(base, link.url());
-            if (resolved == null || !available.contains(resolved.toString())) {
-                throw new IllegalArgumentException("Model returned a URL that was not found on the website");
+            int index = indexNode.asInt();
+            if (index < 0 || index >= links.size()) {
+                continue;
             }
-            result.add(new BrochureLink(link.type(), resolved.toString()));
+            URI resolved = resolveWebLink(base, links.get(index));
+            if (resolved != null && seen.add(resolved.toString())) {
+                result.add(new BrochureLink(type, resolved.toString()));
+            }
         }
         return new BrochureLinks(List.copyOf(result));
+    }
+
+    private static String numberedLinks(List<String> links) {
+        StringBuilder numbered = new StringBuilder();
+        for (int index = 0; index < links.size(); index++) {
+            numbered.append(index).append(": ").append(links.get(index)).append('\n');
+        }
+        return numbered.toString();
     }
 
     private static URI resolveWebLink(URI base, String link) {

@@ -26,4 +26,16 @@ class BrochureControllerTest {
 
         verify(service).generateBrochure("https://example.com");
     }
+
+    @Test
+    void returnsBadRequestForInvalidWebsiteAddress() throws Exception {
+        BrochureService service = mock(BrochureService.class);
+        when(service.generateBrochure("ftp://example.com"))
+                .thenThrow(new InvalidWebsiteUrlException("Website URL must use HTTP or HTTPS"));
+        var mvc = MockMvcBuilders.standaloneSetup(new BrochureController(service)).build();
+
+        mvc.perform(get("/api/brochures").param("url", "ftp://example.com"))
+                .andExpect(status().isBadRequest())
+                .andExpect(content().string("Website URL must use HTTP or HTTPS"));
+    }
 }

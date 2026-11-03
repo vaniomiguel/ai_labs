@@ -3,24 +3,54 @@ package com.example.ollama.brochure;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.Mockito.mockStatic;
 
 import java.io.IOException;
 import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;
+import java.util.List;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import com.example.ollama.chat.TextResponseFormat;
 import com.sun.net.httpserver.HttpServer;
 import org.junit.jupiter.api.Test;
+import org.mockito.MockedStatic;
 import tools.jackson.databind.ObjectMapper;
 
 class BrochureServiceTest {
 
     @Test
+    void addsHttpsSchemeToBareWebsiteAddress() throws IOException {
+        try (MockedStatic<Scraper> scraper = mockStatic(Scraper.class)) {
+            scraper.when(() -> Scraper.fetchWebsiteContents("https://www.cnn.com"))
+                    .thenReturn("CNN\n\nCompany content");
+            scraper.when(() -> Scraper.fetchWebsiteLinks("https://www.cnn.com"))
+                    .thenReturn(List.of());
+            BrochureService service = new BrochureService((systemPrompt, userPrompt, format) -> {
+                assertTrue(userPrompt.contains("https://www.cnn.com"));
+                assertTrue(userPrompt.contains("Company content"));
+                return "# CNN";
+            }, new ObjectMapper());
+
+            assertEquals("# CNN", service.generateBrochure("www.cnn.com"));
+            scraper.verify(() -> Scraper.fetchWebsiteContents("https://www.cnn.com"));
+        }
+    }
+
+    @Test
+    void rejectsUnsupportedWebsiteScheme() {
+        BrochureService service = new BrochureService((systemPrompt, userPrompt, format) -> "",
+                new ObjectMapper());
+
+        assertThrows(InvalidWebsiteUrlException.class,
+                () -> service.generateBrochure("ftp://example.com"));
+    }
+
+    @Test
     void generatesMarkdownFromHomePageAndSelectedLinkedPage() throws IOException {
         HttpServer server = startServer(
                 "<title>Example Co</title><body><p>We make widgets.</p>"
-                        + "<a href='/about'>About</a><a href='/privacy'>Privacy</a></body>",
+                        + "<a href='/about?ref=home'>About</a><a href='/privacy'>Privacy</a></body>",
                 "<title>About Example Co</title><body><p>Founded by Ada.</p></body>");
         try {
             String url = "http://127.0.0.1:" + server.getAddress().getPort() + "/";
@@ -30,17 +60,17 @@ class BrochureServiceTest {
                 if (format == TextResponseFormat.JSON_OBJECT) {
                     assertTrue(systemPrompt.contains("\"links\" array"));
                     assertTrue(userPrompt.contains(url));
-                    assertTrue(userPrompt.contains("/about"));
-                    assertTrue(userPrompt.contains("/privacy"));
+                    assertTrue(userPrompt.contains("0: /about?ref=home"));
+                    assertTrue(userPrompt.contains("1: /privacy"));
                     return """
-                            {"links":[{"type":"about page","url":"/about"}]}
+                            {"links":[{"type":"about page","index":0}]}
                             """;
                 }
                 assertEquals(TextResponseFormat.DEFAULT, format);
                 assertTrue(systemPrompt.contains("Markdown"));
                 assertTrue(userPrompt.contains("We make widgets."));
                 assertTrue(userPrompt.contains("Founded by Ada."));
-                assertTrue(userPrompt.contains("Source: " + url + "about"));
+                assertTrue(userPrompt.contains("Source: " + url + "about?ref=home"));
                 return "# Example Co\n\nWe make widgets.";
             }, new ObjectMapper());
 
@@ -52,14 +82,19 @@ class BrochureServiceTest {
     }
 
     @Test
-    void rejectsLinksInventedByTheModel() throws IOException {
+    void skipsInvalidModelSelectionsAndStillGeneratesBrochure() throws IOException {
         HttpServer server = startServer("<a href='/about'>About</a>", "About page");
         try {
             String url = "http://127.0.0.1:" + server.getAddress().getPort() + "/";
-            BrochureService service = new BrochureService((systemPrompt, userPrompt, format) ->
-                    "{\"links\":[{\"type\":\"careers\",\"url\":\"/invented\"}]}", new ObjectMapper());
+            BrochureService service = new BrochureService((systemPrompt, userPrompt, format) -> {
+                if (format == TextResponseFormat.JSON_OBJECT) {
+                    return "{\"links\":[{\"type\":\"careers\",\"index\":99}]}";
+                }
+                assertTrue(userPrompt.contains("Source: " + url));
+                return "# Example Co";
+            }, new ObjectMapper());
 
-            assertThrows(IllegalArgumentException.class, () -> service.generateBrochure(url));
+            assertEquals("# Example Co", service.generateBrochure(url));
         } finally {
             server.stop(0);
         }

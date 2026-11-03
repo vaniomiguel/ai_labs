@@ -2,6 +2,9 @@ package com.example.ollama.brochure;
 
 import java.io.IOException;
 
+import org.springframework.http.MediaType;
+import org.springframework.http.ResponseEntity;
+import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
@@ -22,5 +25,10 @@ public class BrochureController {
     @GetMapping(produces = "text/markdown")
     public String generate(@RequestParam String url) throws IOException {
         return brochureService.generateBrochure(url);
+    }
+
+    @ExceptionHandler(InvalidWebsiteUrlException.class)
+    public ResponseEntity<String> invalidWebsiteUrl(InvalidWebsiteUrlException exception) {
+        return ResponseEntity.badRequest().contentType(MediaType.TEXT_PLAIN).body(exception.getMessage());
     }
 }
