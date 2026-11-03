@@ -19,4 +19,13 @@ public class ChatService {
     public ChatResponse generateResponse(String systemPrompt, String userPrompt) {
         return new ChatResponse(textGenerationClient.generateText(systemPrompt, userPrompt));
     }
+
+    public ChatResponse generateResponse(String userPrompt, TextResponseFormat responseFormat) {
+        return new ChatResponse(textGenerationClient.generateText(userPrompt, responseFormat));
+    }
+
+    public ChatResponse generateResponse(String systemPrompt, String userPrompt,
+            TextResponseFormat responseFormat) {
+        return new ChatResponse(textGenerationClient.generateText(systemPrompt, userPrompt, responseFormat));
+    }
 }

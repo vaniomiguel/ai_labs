@@ -8,7 +8,7 @@ This repository is a work in progress. Projects and documentation will be added 
 
 ### Spring Boot chat with local Ollama
 
-A Java 25 / Spring Boot REST API that uses a local Ollama model. `ChatService` depends on `TextGenerationClient`; `LocalOllamaTextGenerationClient` is the current implementation. The interface supports a user prompt alone or a system prompt plus a user prompt. A future server or cloud provider can supply another implementation without changing the chat endpoint or service.
+A Java 25 / Spring Boot REST API that uses a local Ollama model. `ChatService` depends on `TextGenerationClient`; `LocalOllamaTextGenerationClient` is the current implementation. The interface supports a user prompt alone or a system prompt plus a user prompt. Both forms accept an optional `TextResponseFormat`: `DEFAULT` leaves the provider's response format unchanged, while `JSON_OBJECT` requests JSON object output. A future server or cloud provider can supply another implementation without changing the chat endpoint or service.
 
 #### Requirements
 

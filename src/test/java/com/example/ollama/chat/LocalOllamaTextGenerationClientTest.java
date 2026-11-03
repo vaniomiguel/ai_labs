@@ -44,18 +44,37 @@ class LocalOllamaTextGenerationClientTest {
             assertEquals("Hello back", client.generateText("Hello"));
             assertEquals("/v1/chat/completions", path.get());
             assertTrue(body.get().contains("\"model\":\"test-model\""));
-            JsonNode messages = new ObjectMapper().readTree(body.get()).path("messages");
+            ObjectMapper mapper = new ObjectMapper();
+            JsonNode request = mapper.readTree(body.get());
+            assertTrue(request.path("response_format").isMissingNode());
+            JsonNode messages = request.path("messages");
             assertEquals(1, messages.size());
             assertEquals("user", messages.get(0).path("role").asString());
             assertEquals("Hello", messages.get(0).path("content").asString());
 
             assertEquals("Hello back", client.generateText("Be concise", "Hello"));
-            messages = new ObjectMapper().readTree(body.get()).path("messages");
+            request = mapper.readTree(body.get());
+            assertTrue(request.path("response_format").isMissingNode());
+            messages = request.path("messages");
             assertEquals(2, messages.size());
             assertEquals("system", messages.get(0).path("role").asString());
             assertEquals("Be concise", messages.get(0).path("content").asString());
             assertEquals("user", messages.get(1).path("role").asString());
             assertEquals("Hello", messages.get(1).path("content").asString());
+
+            assertEquals("Hello back", client.generateText("Hello", TextResponseFormat.JSON_OBJECT));
+            request = mapper.readTree(body.get());
+            assertEquals("json_object", request.path("response_format").path("type").asString());
+            messages = request.path("messages");
+            assertEquals(2, messages.size());
+            assertEquals("Respond with a valid JSON object.", messages.get(0).path("content").asString());
+
+            assertEquals("Hello back", client.generateText("Be concise", "Hello", TextResponseFormat.JSON_OBJECT));
+            request = mapper.readTree(body.get());
+            assertEquals("json_object", request.path("response_format").path("type").asString());
+            messages = request.path("messages");
+            assertEquals("Be concise\nRespond with a valid JSON object.",
+                    messages.get(0).path("content").asString());
         } finally {
             server.stop(0);
         }
