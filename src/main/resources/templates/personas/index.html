@@ -1,0 +1,223 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Persona Conversations · AI Labs</title>
+    <style>
+        :root { color-scheme: light; font-family: Inter, ui-sans-serif, system-ui, sans-serif; background: #f5f3ef; color: #26332e; }
+        * { box-sizing: border-box; }
+        body { margin: 0; }
+        main { max-width: 1080px; margin: 0 auto; padding: 36px 20px 80px; }
+        h1 { font-size: clamp(2rem, 5vw, 3.3rem); margin: 8px 0; letter-spacing: -.04em; }
+        h2 { margin: 0 0 18px; font-size: 1.2rem; }
+        p { line-height: 1.5; }
+        .eyebrow { color: #3b7865; font-size: .75rem; font-weight: 800; letter-spacing: .16em; text-transform: uppercase; }
+        .lead { max-width: 650px; color: #5d6962; margin-bottom: 30px; }
+        .card { background: #fff; border: 1px solid #dce3db; border-radius: 18px; padding: 24px; box-shadow: 0 7px 28px #233a2710; }
+        .setup { display: grid; gap: 18px; }
+        .personas { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 18px; }
+        .persona { background: #f7faf7; border: 1px solid #e0e9df; border-radius: 14px; padding: 18px; }
+        .persona:nth-child(2) { background: #faf8f4; border-color: #eae4d8; }
+        label { display: grid; gap: 6px; font-weight: 650; font-size: .9rem; margin: 12px 0; }
+        input, select, textarea { font: inherit; width: 100%; padding: 11px 12px; border: 1px solid #bdc9be; border-radius: 9px; color: #26332e; background: white; }
+        textarea { resize: vertical; min-height: 112px; line-height: 1.4; }
+        input:focus, select:focus, textarea:focus, button:focus-visible { outline: 3px solid #91c7a9; outline-offset: 2px; }
+        .actions { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
+        button { border: 0; border-radius: 9px; background: #1f684e; color: white; padding: 11px 18px; font: inherit; font-weight: 700; cursor: pointer; }
+        button.secondary { background: #e6eee8; color: #245441; }
+        button.danger { background: #f8e7e3; color: #a13d32; }
+        button:disabled { opacity: .5; cursor: not-allowed; }
+        .hint { color: #68756b; font-size: .86rem; margin: 0; }
+        .error { color: #a13d32; min-height: 1.5em; margin: 0; }
+        .conversation { margin-top: 24px; }
+        .conversation-head { display: flex; align-items: center; justify-content: space-between; gap: 14px; flex-wrap: wrap; }
+        .status { background: #e8f3eb; color: #246746; padding: 7px 12px; border-radius: 99px; font-size: .85rem; font-weight: 700; text-transform: capitalize; }
+        .status.stopped { background: #f1eee7; color: #715f42; }
+        .status.failed { background: #fae9e5; color: #a13d32; }
+        .messages { display: grid; gap: 14px; margin-top: 18px; }
+        .message { max-width: 85%; padding: 15px 18px; border-radius: 14px; background: #e9f3ec; white-space: pre-wrap; overflow-wrap: anywhere; }
+        .message.second { justify-self: end; background: #f3efe5; }
+        .message strong { display: block; margin-bottom: 5px; font-size: .85rem; }
+        .message p { margin: 0; }
+        @media (max-width: 680px) { .personas { grid-template-columns: 1fr; } .message { max-width: 95%; } }
+    </style>
+</head>
+<body>
+<main>
+    <p class="eyebrow">AI Labs / Local Ollama</p>
+    <h1>Persona Conversations</h1>
+    <p class="lead">Pick a model and personality for each speaker, then watch them talk. Stop whenever you like and restart from the beginning with new settings.</p>
+
+    <form id="setup" class="card setup">
+        <div>
+            <h2>Set the scene</h2>
+            <label>Conversation topic
+                <input id="topic" maxlength="500" required value="What makes a good idea worth pursuing?">
+            </label>
+        </div>
+        <div class="personas">
+            <section class="persona">
+                <h2>Persona 1</h2>
+                <label>Name <input id="first-name" maxlength="80" required value="The Explorer"></label>
+                <label>Ollama model <select id="first-model" required></select></label>
+                <label>Personality <textarea id="first-personality" maxlength="2000" required>Curious, imaginative, and optimistic. You ask questions, propose bold possibilities, and keep the discussion lively.</textarea></label>
+            </section>
+            <section class="persona">
+                <h2>Persona 2</h2>
+                <label>Name <input id="second-name" maxlength="80" required value="The Skeptic"></label>
+                <label>Ollama model <select id="second-model" required></select></label>
+                <label>Personality <textarea id="second-personality" maxlength="2000" required>Thoughtful, practical, and gently skeptical. You test assumptions, look for evidence, and offer constructive counterpoints.</textarea></label>
+            </section>
+        </div>
+        <p class="hint" id="models-note">Loading installed Ollama models…</p>
+        <p class="error" id="error" role="alert"></p>
+        <div class="actions">
+            <button id="start" type="submit" disabled>Start conversation</button>
+            <button id="stop" class="danger" type="button" hidden>Stop</button>
+            <button id="restart" class="secondary" type="button" hidden>Restart with these settings</button>
+        </div>
+    </form>
+
+    <section class="card conversation" id="conversation" hidden aria-live="polite">
+        <div class="conversation-head">
+            <h2>Conversation</h2><span id="status" class="status">Running</span>
+        </div>
+        <p class="hint" id="progress">Waiting for the first response…</p>
+        <div id="messages" class="messages"></div>
+    </section>
+</main>
+<script>
+(() => {
+    const $ = id => document.getElementById(id);
+    let id = sessionStorage.getItem('persona-conversation-id');
+    let timer;
+    let busy = false;
+    let restored = false;
+    let revision = 0;
+
+    async function request(url, options = {}) {
+        const response = await fetch(url, options);
+        if (!response.ok) {
+            const body = await response.json().catch(() => ({}));
+            throw new Error(body.error || `Request failed (${response.status})`);
+        }
+        return response.status === 204 ? null : response.json();
+    }
+
+    function settings() {
+        return {
+            topic: $('topic').value.trim(),
+            first: { name: $('first-name').value.trim(), model: $('first-model').value,
+                personality: $('first-personality').value.trim() },
+            second: { name: $('second-name').value.trim(), model: $('second-model').value,
+                personality: $('second-personality').value.trim() }
+        };
+    }
+
+    function show(data) {
+        if (!restored) {
+            $('topic').value = data.topic;
+            $('first-name').value = data.first.name;
+            $('first-model').value = data.first.model;
+            $('first-personality').value = data.first.personality;
+            $('second-name').value = data.second.name;
+            $('second-model').value = data.second.model;
+            $('second-personality').value = data.second.personality;
+            restored = true;
+        }
+        id = data.id;
+        sessionStorage.setItem('persona-conversation-id', id);
+        $('conversation').hidden = false;
+        $('status').textContent = data.status;
+        $('status').className = `status ${data.status}`;
+        $('progress').textContent = data.error || (data.status === 'running'
+            ? 'Waiting for the next response…' : `${data.messages.length} messages`);
+        $('stop').hidden = data.status !== 'running';
+        $('restart').hidden = false;
+        $('start').hidden = true;
+        const list = $('messages');
+        if (list.children.length > data.messages.length) list.replaceChildren();
+        // Append with text nodes so model output is always displayed as text.
+        for (const message of data.messages.slice(list.children.length)) {
+            const article = document.createElement('article');
+            article.className = `message ${message.speaker === data.second.name ? 'second' : ''}`;
+            const name = document.createElement('strong');
+            name.textContent = `${message.number}. ${message.speaker}`;
+            const body = document.createElement('p');
+            body.textContent = message.text;
+            article.append(name, body);
+            list.append(article);
+        }
+        clearTimeout(timer);
+        if (data.status === 'running') timer = setTimeout(poll, 1000);
+    }
+
+    async function poll() {
+        if (!id) return;
+        const currentRevision = revision;
+        try {
+            const data = await request(`/api/personas/conversations/${id}`);
+            if (revision === currentRevision) show(data);
+        }
+        catch (error) {
+            if (revision !== currentRevision) return;
+            if (error.message.includes('Conversation not found')) {
+                id = null;
+                sessionStorage.removeItem('persona-conversation-id');
+                $('start').hidden = false;
+                $('restart').hidden = true;
+                $('stop').hidden = true;
+                $('conversation').hidden = true;
+            } else {
+                $('error').textContent = error.message;
+                timer = setTimeout(poll, 3000);
+            }
+        }
+    }
+
+    async function action(url, method, body) {
+        if (busy) return;
+        busy = true;
+        revision++;
+        clearTimeout(timer);
+        $('error').textContent = '';
+        try {
+            const data = await request(url, { method, headers: { 'Content-Type': 'application/json' },
+                body: body ? JSON.stringify(body) : undefined });
+            show(data);
+        } catch (error) {
+            $('error').textContent = error.message;
+            if (id && $('status').textContent === 'running') timer = setTimeout(poll, 1000);
+        }
+        finally { busy = false; }
+    }
+
+    $('setup').addEventListener('submit', event => {
+        event.preventDefault();
+        action('/api/personas/conversations', 'POST', settings());
+    });
+    $('stop').addEventListener('click', () => action(`/api/personas/conversations/${id}/stop`, 'POST'));
+    $('restart').addEventListener('click', () => {
+        if ($('setup').reportValidity()) action(`/api/personas/conversations/${id}/restart`, 'POST', settings());
+    });
+
+    request('/api/personas/models').then(models => {
+        for (const select of [$('first-model'), $('second-model')]) {
+            select.replaceChildren();
+            for (const model of models) select.add(new Option(model, model));
+        }
+        $('models-note').textContent = models.length
+            ? `${models.length} installed model${models.length === 1 ? '' : 's'} available.`
+            : 'No Ollama models found. Pull a model before starting.';
+        $('start').disabled = models.length === 0;
+        if (id) poll();
+    }).catch(error => {
+        $('models-note').textContent = 'Could not load Ollama models. Check that Ollama is running, then refresh.';
+        $('error').textContent = error.message;
+        if (id) poll();
+    });
+})();
+</script>
+</body>
+</html>

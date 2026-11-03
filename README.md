@@ -82,6 +82,12 @@ The browser interface is at [http://localhost:8080/outsmart](http://localhost:80
 
 The browser interface uses server-rendered Thymeleaf and a locally bundled copy of HTMX 2.0.11 (`src/main/resources/static/vendor/htmx.min.js`); its license is stored beside it. It has no separate frontend build step and needs no CDN connection at runtime.
 
+### Persona conversations
+
+Open [http://localhost:8080/personas](http://localhost:8080/personas) to start a conversation between two Ollama personas. Choose an installed model for each speaker, edit their names and default personalities, and enter a topic. The page shows new replies as they arrive. **Stop** immediately freezes the displayed transcript, even if an Ollama request is still finishing. **Restart with these settings** clears the transcript and starts again with the current form values. Conversations live in server memory and disappear when the app restarts; the page remembers the current conversation ID for the browser tab.
+
+The JSON API provides `GET /api/personas/models`, `POST /api/personas/conversations`, `GET /api/personas/conversations/{id}`, `POST /api/personas/conversations/{id}/stop`, `POST /api/personas/conversations/{id}/restart`, and `DELETE /api/personas/conversations/{id}`. Create and restart accept a topic and two personas, each with `name`, `model`, and `personality`. The service keeps at most 100 conversations; delete old ones through the API to free space.
+
 ### Company brochure
 
 The brochure API reads a website, selects relevant linked pages with the configured model, and returns a Markdown brochure:
