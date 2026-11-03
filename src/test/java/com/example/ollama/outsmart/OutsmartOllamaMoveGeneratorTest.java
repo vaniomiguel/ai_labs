@@ -9,7 +9,6 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import java.io.IOException;
 import java.net.InetSocketAddress;
 import java.net.URI;
-import java.net.http.HttpClient;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.List;
@@ -36,14 +35,14 @@ class OutsmartOllamaMoveGeneratorTest {
         }
     }
 
-    /** Sends the participant's chosen model and parses a JSON move from Ollama's response shape. */
+    /** Sends the participant's chosen model through the SDK and parses its move. */
     @Test
     void sendsPlayerModelAndParsesMove() throws IOException {
         AtomicReference<String> requestBody = new AtomicReference<>();
         String moveJson = mapper.writeValueAsString(Map.of(
                 "secret_strategy", "ally", "give_coin_to", "Blake", "take_coin_from", "Charlie",
                 "private_messages", Map.of("Blake", "let's team up", "Charlie", "hello")));
-        startServer(200, mapper.writeValueAsString(Map.of("message", Map.of("content", moveJson))), requestBody);
+        startServer(200, completion(moveJson), requestBody);
         OutsmartGame game = newGame();
 
         OutsmartDecision decision = client().decide(game, game.players().getFirst());
@@ -54,11 +53,10 @@ class OutsmartOllamaMoveGeneratorTest {
         assertEquals("Charlie", move.takeCoinFrom());
         JsonNode request = mapper.readTree(requestBody.get());
         assertEquals("local-test-model", request.path("model").asString());
-        assertEquals("object", request.path("format").path("type").asString());
-        assertEquals(4, request.path("format").path("required").size());
-        assertEquals(2, request.path("format").path("properties")
+        assertEquals("json_schema", request.path("response_format").path("type").asString());
+        assertEquals(4, request.path("response_format").path("json_schema").path("schema").path("required").size());
+        assertEquals(2, request.path("response_format").path("json_schema").path("schema").path("properties")
                 .path("private_messages").path("required").size());
-        assertFalse(request.path("stream").booleanValue());
         assertEquals("system", request.path("messages").get(0).path("role").asString());
         assertEquals("user", request.path("messages").get(1).path("role").asString());
     }
@@ -66,7 +64,7 @@ class OutsmartOllamaMoveGeneratorTest {
     /** Turns malformed model output into a forfeited decision instead of stopping the game. */
     @Test
     void malformedJsonBecomesInvalidDecision() throws IOException {
-        startServer(200, "{\"message\":{\"content\":\"not json\"}}", new AtomicReference<>());
+        startServer(200, completion("not json"), new AtomicReference<>());
         OutsmartGame game = newGame();
 
         OutsmartDecision decision = client().decide(game, game.players().getFirst());
@@ -124,14 +122,21 @@ class OutsmartOllamaMoveGeneratorTest {
         URI base = URI.create("http://localhost:" + server.getAddress().getPort());
         OutsmartProperties settings = new OutsmartProperties(10,
                 new OutsmartProperties.Ollama(base, Duration.ofSeconds(5)));
-        return new OutsmartOllamaMoveGenerator(HttpClient.newHttpClient(), mapper,
-                new OutsmartPromptFactory(), settings);
+        return new OutsmartOllamaMoveGenerator(settings, mapper, new OutsmartPromptFactory());
+    }
+
+    private String completion(String content) {
+        return mapper.writeValueAsString(Map.of(
+                "id", "chatcmpl-test", "object", "chat.completion", "created", 0,
+                "model", "local-test-model", "choices", List.of(Map.of(
+                        "index", 0, "finish_reason", "stop",
+                        "message", Map.of("role", "assistant", "content", content)))));
     }
 
     /** Returns a fixed Ollama-like response and captures the submitted request body. */
     private void startServer(int status, String response, AtomicReference<String> requestBody) throws IOException {
         server = HttpServer.create(new InetSocketAddress("localhost", 0), 0);
-        server.createContext("/api/chat", exchange -> {
+        server.createContext("/v1/chat/completions", exchange -> {
             requestBody.set(new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8));
             byte[] bytes = response.getBytes(StandardCharsets.UTF_8);
             exchange.sendResponseHeaders(status, bytes.length);

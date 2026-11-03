@@ -12,18 +12,20 @@ import java.util.List;
 
 import com.sun.net.httpserver.HttpServer;
 import org.junit.jupiter.api.Test;
-import tools.jackson.databind.ObjectMapper;
 
-/** Checks the model suggestions against Ollama's local model-list response shape. */
+/** Checks model suggestions through Ollama's OpenAI-compatible model list. */
 class OutsmartOllamaModelCatalogTest {
 
     /** Lists distinct installed names so every player selector can suggest the same models. */
     @Test
     void listsInstalledModels() throws IOException {
         HttpServer server = HttpServer.create(new InetSocketAddress("localhost", 0), 0);
-        server.createContext("/api/tags", exchange -> {
+        server.createContext("/v1/models", exchange -> {
             byte[] body = """
-                    {"models":[{"name":"qwen3.5:4b"},{"name":"gemma3:1b"},{"name":"gemma3:1b"}]}
+                    {"object":"list","data":[
+                      {"id":"qwen3.5:4b","object":"model","created":0,"owned_by":"ollama"},
+                      {"id":"gemma3:1b","object":"model","created":0,"owned_by":"ollama"},
+                      {"id":"gemma3:1b","object":"model","created":0,"owned_by":"ollama"}]}
                     """.getBytes(StandardCharsets.UTF_8);
             exchange.sendResponseHeaders(200, body.length);
             try (var output = exchange.getResponseBody()) {
@@ -36,7 +38,7 @@ class OutsmartOllamaModelCatalogTest {
                     URI.create("http://localhost:" + server.getAddress().getPort()), Duration.ofMinutes(2)));
 
             OutsmartOllamaModelCatalog.Catalog catalog =
-                    new OutsmartOllamaModelCatalog(properties, new ObjectMapper()).list();
+                    new OutsmartOllamaModelCatalog(properties).list();
 
             assertEquals(List.of("gemma3:1b", "qwen3.5:4b"), catalog.models());
             assertNull(catalog.error());

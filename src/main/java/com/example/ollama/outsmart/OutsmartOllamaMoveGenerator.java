@@ -1,54 +1,63 @@
 package com.example.ollama.outsmart;
 
-import java.io.IOException;
 import java.net.URI;
-import java.net.http.HttpClient;
-import java.net.http.HttpRequest;
-import java.net.http.HttpResponse;
+import java.time.Duration;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 
+import com.openai.client.OpenAIClient;
+import com.openai.client.okhttp.OpenAIOkHttpClient;
+import com.openai.core.JsonValue;
+import com.openai.errors.OpenAIIoException;
+import com.openai.errors.OpenAIInvalidDataException;
+import com.openai.errors.OpenAIServiceException;
+import com.openai.models.ResponseFormatJsonSchema;
+import com.openai.models.chat.completions.ChatCompletionCreateParams;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
 
-/** Calls Ollama's local chat API and translates its JSON reply into an Outsmart decision. */
+/** Calls local Ollama through the OpenAI SDK and translates its reply into a decision. */
 @Component
 public class OutsmartOllamaMoveGenerator implements OutsmartMoveGenerator {
 
-    private final HttpClient httpClient;
+    private final OpenAIClient client;
     private final ObjectMapper mapper;
     private final OutsmartPromptFactory prompts;
-    private final URI chatUrl;
-    private final java.time.Duration timeout;
 
     /** Uses Outsmart-specific Ollama settings, leaving the existing chat client untouched. */
     @Autowired
     public OutsmartOllamaMoveGenerator(OutsmartProperties properties, ObjectMapper mapper,
             OutsmartPromptFactory prompts) {
-        this(HttpClient.newHttpClient(), mapper, prompts, properties);
+        this(localClient(properties), mapper, prompts);
     }
 
-    /** Allows tests to supply a local HTTP client while retaining the production configuration. */
-    OutsmartOllamaMoveGenerator(HttpClient httpClient, ObjectMapper mapper,
-            OutsmartPromptFactory prompts, OutsmartProperties properties) {
-        this.httpClient = Objects.requireNonNull(httpClient, "httpClient");
+    OutsmartOllamaMoveGenerator(OpenAIClient client, ObjectMapper mapper, OutsmartPromptFactory prompts) {
+        this.client = Objects.requireNonNull(client, "client");
         this.mapper = Objects.requireNonNull(mapper, "mapper");
         this.prompts = Objects.requireNonNull(prompts, "prompts");
+    }
+
+    private static OpenAIClient localClient(OutsmartProperties properties) {
         OutsmartProperties.Ollama ollama = Objects.requireNonNull(properties.ollama(), "outsmart.ollama");
         URI baseUrl = Objects.requireNonNull(ollama.baseUrl(), "outsmart.ollama.base-url");
         if (!"http".equals(baseUrl.getScheme()) && !"https".equals(baseUrl.getScheme())) {
             throw new IllegalArgumentException("outsmart.ollama.base-url must use HTTP or HTTPS");
         }
-        chatUrl = URI.create(baseUrl.toString().replaceAll("/+$", "") + "/api/chat");
-        timeout = Objects.requireNonNull(ollama.requestTimeout(), "outsmart.ollama.request-timeout");
+        Duration timeout = Objects.requireNonNull(ollama.requestTimeout(), "outsmart.ollama.request-timeout");
         if (timeout.isZero() || timeout.isNegative()) {
             throw new IllegalArgumentException("outsmart.ollama.request-timeout must be positive");
         }
+        return OpenAIOkHttpClient.builder()
+                .baseUrl(baseUrl.toString().replaceAll("/+$", "") + "/v1")
+                .apiKey("ollama")
+                .timeout(timeout)
+                .maxRetries(0)
+                .build();
     }
 
     /** Sends a move request; an unavailable server aborts the turn, while malformed output forfeits it. */
@@ -58,37 +67,30 @@ public class OutsmartOllamaMoveGenerator implements OutsmartMoveGenerator {
             throw new IllegalArgumentException("Outsmart Ollama client requires an ollama model provider");
         }
         OutsmartPromptFactory.Prompt prompt = prompts.forPlayer(game, player);
-        // Model IDs come from the game lineup, not a shared default, so players can use different local models.
-        Map<String, Object> payload = Map.of(
-                "model", player.model().id(),
-                "stream", false,
-                "format", moveSchema(game, player),
-                "messages", java.util.List.of(
-                        Map.of("role", "system", "content", prompt.system()),
-                        Map.of("role", "user", "content", prompt.user())));
+        ChatCompletionCreateParams params = ChatCompletionCreateParams.builder()
+                .model(player.model().id())
+                .addSystemMessage(prompt.system())
+                .addUserMessage(prompt.user())
+                .responseFormat(ResponseFormatJsonSchema.builder()
+                        .jsonSchema(ResponseFormatJsonSchema.JsonSchema.builder()
+                                .name("outsmart_move")
+                                .strict(true)
+                                .schema(JsonValue.from(moveSchema(game, player))
+                                        .convert(ResponseFormatJsonSchema.JsonSchema.Schema.class))
+                                .build())
+                        .build())
+                .build();
         try {
-            HttpRequest request = HttpRequest.newBuilder(chatUrl)
-                    .header("Content-Type", "application/json")
-                    .timeout(timeout)
-                    .POST(HttpRequest.BodyPublishers.ofString(mapper.writeValueAsString(payload)))
-                    .build();
-            HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
-            if (response.statusCode() < 200 || response.statusCode() >= 300) {
-                throw new OutsmartModelUnavailableException("Ollama returned HTTP " + response.statusCode());
-            }
-            JsonNode content = mapper.readTree(response.body()).path("message").path("content");
-            if (!content.isString()) {
+            var choices = client.chat().completions().create(params).choices();
+            if (choices.isEmpty() || choices.getFirst().message().content().isEmpty()) {
                 return new OutsmartDecision.Invalid("Ollama response has no message content");
             }
-            return parseMove(content.asString());
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-            throw new OutsmartModelUnavailableException("Ollama request interrupted");
-        } catch (IOException e) {
-            throw new OutsmartModelUnavailableException("Could not reach Ollama at " + chatUrl);
-        } catch (OutsmartModelUnavailableException e) {
-            throw e;
-        } catch (RuntimeException e) {
+            return parseMove(choices.getFirst().message().content().orElseThrow());
+        } catch (OpenAIServiceException e) {
+            throw new OutsmartModelUnavailableException("Ollama returned HTTP " + e.statusCode());
+        } catch (OpenAIIoException e) {
+            throw new OutsmartModelUnavailableException("Could not reach Ollama");
+        } catch (OpenAIInvalidDataException e) {
             return new OutsmartDecision.Invalid("Ollama response was not valid JSON");
         }
     }
