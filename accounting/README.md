@@ -4,6 +4,28 @@ Aplicação independente para despesas, documentos, reconciliação bancária e 
 
 ## Início rápido local
 
+### Java local e serviços no Docker
+
+Requisitos: Docker Desktop aberto, Java 25, Maven e Python 3. O frontend é compilado no Docker e servido pelo Java; não é necessário Node no computador.
+
+Preparar `accounting/.env` a partir de `.env.example`, definindo `ADMIN_PASSWORD` e `DATABASE_PASSWORD`. Depois, a partir da raiz do repositório:
+
+```sh
+bash accounting/scripts/run-hybrid.sh
+```
+
+Abrir [http://localhost:8081](http://localhost:8081) e entrar com `gestor` e a palavra-passe inicial definida no `.env`. O Ollama continua no computador em `localhost:11434`. `HYBRID_OLLAMA_URL` permite mudar esse endereço.
+
+Este modo usa uma instalação de desenvolvimento própria: PostgreSQL em `localhost:15432`, OCR em `localhost:18090` e originais em `accounting/data/hybrid/documents`. Os dados da instalação totalmente em Docker não são migrados automaticamente. Se essa aplicação estiver aberta, pará-la com `docker compose -f accounting/compose.yml stop app` antes de iniciar o Java na mesma porta.
+
+Para parar o Java, usar **Ctrl+C**. Para parar os serviços:
+
+```sh
+docker compose -f accounting/compose.hybrid.yml stop
+```
+
+### Tudo local, sem Docker
+
 Requisitos: Java 25, Maven, Node 24.15+ e npm. O lançador inclui PostgreSQL 18 real para desenvolvimento; os dados ficam em `accounting/data/`, sem Docker.
 
 ```sh

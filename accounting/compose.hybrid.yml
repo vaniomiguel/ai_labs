@@ -1,0 +1,50 @@
+name: conta-hybrid
+
+# Resolved by Compose and consumed as data by the local launcher; never sourced as shell code.
+x-java-environment:
+  ADMIN_USERNAME: ${ADMIN_USERNAME:-gestor}
+  ADMIN_PASSWORD: ${ADMIN_PASSWORD:?Define ADMIN_PASSWORD no ficheiro .env}
+  DATABASE_PASSWORD: ${DATABASE_PASSWORD:?Define DATABASE_PASSWORD no ficheiro .env}
+  DATABASE_USER: accounting
+  DATABASE_URL: jdbc:postgresql://localhost:15432/accounting
+  DOCUMENT_WORKER_URL: http://localhost:18090
+  OLLAMA_URL: ${HYBRID_OLLAMA_URL:-http://localhost:11434}
+  AI_ENABLED: ${AI_ENABLED:-true}
+  AI_HISTORY_MONTHS: ${AI_HISTORY_MONTHS:-}
+  SPRING_PROFILES_ACTIVE: dev
+  BIND_ADDRESS: 127.0.0.1
+  PORT: "8081"
+  DOCUMENT_STORAGE: ./data/hybrid/documents
+
+services:
+  postgres:
+    image: postgres:18
+    environment:
+      POSTGRES_DB: accounting
+      POSTGRES_USER: accounting
+      POSTGRES_PASSWORD: ${DATABASE_PASSWORD:?Define DATABASE_PASSWORD no ficheiro .env}
+    ports:
+      - "127.0.0.1:15432:5432"
+    volumes:
+      - postgres:/var/lib/postgresql
+    healthcheck:
+      test: [CMD-SHELL, "pg_isready -U accounting -d accounting"]
+      interval: 2s
+      timeout: 5s
+      retries: 30
+  documents:
+    build: ./document-worker
+    environment:
+      OCR_THREADS: 2
+    ports:
+      - "127.0.0.1:18090:8090"
+    volumes:
+      - models:/models
+    healthcheck:
+      test: [CMD, curl, -fsS, http://localhost:8090/health]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+volumes:
+  postgres:
+  models:
