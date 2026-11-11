@@ -1,0 +1,12 @@
+spring:
+  application:
+    name: outsmart
+
+server:
+  port: ${PORT:8082}
+
+outsmart:
+  max-games: ${OUTSMART_MAX_GAMES:100}
+  ollama:
+    base-url: ${OUTSMART_OLLAMA_BASE_URL:http://localhost:11434}
+    request-timeout: ${OUTSMART_OLLAMA_REQUEST_TIMEOUT:2m}

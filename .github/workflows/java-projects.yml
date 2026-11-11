@@ -1,0 +1,42 @@
+name: Java experiments
+
+on:
+  push:
+    paths: ["pom.xml", "chat/**", "outsmart/**", "personas/**", "brochure/**", "shared/**", "mvnw", "mvnw.cmd", ".mvn/**", ".github/workflows/java-projects.yml"]
+  pull_request:
+    paths: ["pom.xml", "chat/**", "outsmart/**", "personas/**", "brochure/**", "shared/**", "mvnw", "mvnw.cmd", ".mvn/**", ".github/workflows/java-projects.yml"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  applications:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "25"
+          cache: maven
+          cache-dependency-path: |
+            pom.xml
+            shared/ollama-client/pom.xml
+            chat/pom.xml
+            outsmart/pom.xml
+            personas/pom.xml
+            brochure/pom.xml
+      - name: Verify standalone applications and shared client
+        run: ./mvnw -B -pl chat,outsmart,personas,brochure -am verify
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: java-experiment-test-results
+          path: |
+            shared/ollama-client/target/surefire-reports/
+            chat/target/surefire-reports/
+            outsmart/target/surefire-reports/
+            personas/target/surefire-reports/
+            brochure/target/surefire-reports/

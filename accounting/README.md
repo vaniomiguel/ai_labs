@@ -14,7 +14,7 @@ Preparar `accounting/.env` a partir de `.env.example`, definindo `ADMIN_PASSWORD
 bash accounting/scripts/run-hybrid.sh
 ```
 
-Abrir [http://localhost:8081](http://localhost:8081) e entrar com `gestor` e a palavra-passe inicial definida no `.env`. O Ollama continua no computador em `localhost:11434`. `HYBRID_OLLAMA_URL` permite mudar esse endereço.
+Abrir [http://localhost:8081](http://localhost:8081) e entrar com `gestor` e a palavra-passe inicial definida no `.env`. Em desenvolvimento, as palavras-passe podem ser curtas, por exemplo `ADMIN_PASSWORD=dev` e `DATABASE_PASSWORD=dev`. Fora do perfil `dev`, a palavra-passe do utilizador exige pelo menos 12 caracteres. Mudar o `.env` não altera as credenciais de uma base de dados já criada. O Ollama continua no computador em `localhost:11434`. `HYBRID_OLLAMA_URL` permite mudar esse endereço.
 
 Este modo usa uma instalação de desenvolvimento própria: PostgreSQL em `localhost:15432`, OCR em `localhost:18090` e originais em `accounting/data/hybrid/documents`. Os dados da instalação totalmente em Docker não são migrados automaticamente. Se essa aplicação estiver aberta, pará-la com `docker compose -f accounting/compose.yml stop app` antes de iniciar o Java na mesma porta.
 
@@ -23,6 +23,67 @@ Para parar o Java, usar **Ctrl+C**. Para parar os serviços:
 ```sh
 docker compose -f accounting/compose.hybrid.yml stop
 ```
+
+### Java no IDE e restantes serviços no Docker
+
+1. Abrir Docker Desktop e preparar `accounting/.env` com `ADMIN_PASSWORD=dev` e `DATABASE_PASSWORD=dev` (numa base de dados existente, manter a palavra-passe original).
+2. No terminal, executar:
+
+   ```sh
+   cd /Users/vanioferreira/Workplace/ai_labs/accounting
+   docker compose -f compose.hybrid.yml up -d --build postgres documents
+   docker compose -f compose.hybrid.yml --profile ide up -d frontend
+   ```
+
+   A primeira inicialização da interface instala as dependências. Consultar o progresso com `docker compose -f compose.hybrid.yml logs -f frontend`.
+3. Abrir a aplicação Ollama no computador. Se o modelo ainda não estiver instalado: `ollama pull qwen3.5:9b`.
+4. No IDE, importar `accounting/backend/pom.xml` como projeto Maven, selecionar JDK 25 e criar uma configuração Java/Spring Boot com classe principal `pt.conta.AccountingApplication`. Usar `/Users/vanioferreira/Workplace/ai_labs/accounting` como diretório de trabalho e estas variáveis de ambiente:
+
+   ```dotenv
+   SPRING_PROFILES_ACTIVE=dev
+   ADMIN_USERNAME=gestor
+   ADMIN_PASSWORD=dev
+   DATABASE_USER=accounting
+   DATABASE_PASSWORD=dev
+   DATABASE_URL=jdbc:postgresql://localhost:15432/accounting
+   DOCUMENT_WORKER_URL=http://localhost:18090
+   OLLAMA_URL=http://localhost:11434
+   DOCUMENT_STORAGE=./data/hybrid/documents
+   BIND_ADDRESS=0.0.0.0
+   PORT=8081
+   ```
+
+   O Java iniciado pelo IDE não lê automaticamente o `.env`. Configurar aí as mesmas palavras-passe. O endereço de escuta permite que a interface no Docker contacte o Java no computador.
+5. Carregar em **Run** ou **Debug** e abrir [http://localhost:4200](http://localhost:4200). Entrar com `gestor` e a palavra-passe configurada.
+
+Parar o Java com **Stop** no IDE. Parar os restantes serviços com `docker compose -f compose.hybrid.yml --profile ide stop`. Não arrancar simultaneamente a aplicação Java da composição normal ou do script na porta 8081.
+
+### Java no IDE e interface local pela linha de comandos
+
+Usar a configuração Java do IDE acima. Apenas PostgreSQL e OCR precisam do Docker:
+
+```sh
+cd /Users/vanioferreira/Workplace/ai_labs/accounting
+docker compose -f compose.hybrid.yml up -d --build postgres documents
+```
+
+Se a interface Docker anterior estiver em execução, pará-la antes de usar a porta 4200:
+
+```sh
+docker compose -f compose.hybrid.yml --profile ide stop frontend
+```
+
+Com Node 24.15+ e npm instalados, abrir outro terminal:
+
+```sh
+cd /Users/vanioferreira/Workplace/ai_labs/accounting/frontend
+npm ci
+npx ng serve --host 127.0.0.1 --port 4200 --proxy-config proxy.conf.json
+```
+
+`npm ci` só precisa de ser repetido quando mudarem as dependências. O comando `npx ng serve` mantém a interface em execução e atualiza-a quando se altera o código. Usa o Angular já instalado no projeto. O proxy encaminha os pedidos da API para o Java em `localhost:8081`.
+
+Arrancar o Java com **Run/Debug** no IDE, manter o Ollama aberto e aceder a [http://localhost:4200](http://localhost:4200). A configuração Java pode usar `BIND_ADDRESS=127.0.0.1`, pois a interface já corre no computador. Parar a interface com **Ctrl+C**, o Java com **Stop** e os serviços com `docker compose -f compose.hybrid.yml stop postgres documents` a partir da pasta `accounting`.
 
 ### Tudo local, sem Docker
 

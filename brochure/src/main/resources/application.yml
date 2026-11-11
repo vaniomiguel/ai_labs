@@ -1,0 +1,11 @@
+spring:
+  application:
+    name: brochure
+
+server:
+  port: ${PORT:8084}
+
+chat:
+  local-ollama:
+    base-url: ${OLLAMA_BASE_URL:http://localhost:11434/v1}
+    model: ${OLLAMA_MODEL:gemma3:1b}

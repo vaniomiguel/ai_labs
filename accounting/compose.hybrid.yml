@@ -17,6 +17,18 @@ x-java-environment:
   DOCUMENT_STORAGE: ./data/hybrid/documents
 
 services:
+  frontend:
+    profiles: [ide]
+    image: node:24-bookworm-slim
+    working_dir: /ui
+    command: sh -c 'npm ci --no-audit --no-fund && npm start -- --host 0.0.0.0 --proxy-config proxy.docker.conf.json'
+    ports:
+      - "127.0.0.1:4200:4200"
+    volumes:
+      - ./frontend:/ui
+      - frontend-modules:/ui/node_modules
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
   postgres:
     image: postgres:18
     environment:
@@ -46,5 +58,6 @@ services:
       timeout: 5s
       retries: 30
 volumes:
+  frontend-modules:
   postgres:
   models:

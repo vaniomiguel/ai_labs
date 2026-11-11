@@ -2,6 +2,8 @@ package pt.conta.security;
 
 import org.springframework.boot.ApplicationRunner;
 import org.springframework.context.annotation.*;
+import org.springframework.core.env.Environment;
+import org.springframework.core.env.Profiles;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
 import org.springframework.security.core.userdetails.*;
@@ -18,9 +20,13 @@ public class SecurityConfiguration {
    * it.
    */
   @Bean
-  ApplicationRunner ownerBootstrap(JdbcTemplate jdbc, AccountingProperties properties) {
+  ApplicationRunner ownerBootstrap(
+      JdbcTemplate jdbc, AccountingProperties properties, Environment environment) {
     return args -> {
-      if (properties.adminPassword() == null || properties.adminPassword().length() < 12)
+      boolean development = environment.acceptsProfiles(Profiles.of("dev & !prod"));
+      if (properties.adminPassword() == null || properties.adminPassword().isBlank())
+        throw new IllegalStateException("ADMIN_PASSWORD não pode estar vazia");
+      if (!development && properties.adminPassword().length() < 12)
         throw new IllegalStateException("ADMIN_PASSWORD tem de ter pelo menos 12 caracteres");
       jdbc.update(
           "insert into app_user(username,password_hash) values (?,?) on conflict(username) do"

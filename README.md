@@ -1,103 +1,79 @@
 # AI Labs
 
-AI Labs is a growing collection of projects for exploring artificial intelligence. It brings together experiments, prototypes, and small applications built to test concepts, try ideas, and learn by doing.
-
-This repository is a work in progress. Projects and documentation will be added and changed over time as new ideas are explored.
+A collection of independent AI experiments and applications. Each project owns its
+source, tests, configuration and runtime. The root Maven project groups the Java
+builds and provides shared dependency versions; it does not start an application.
 
 ## Projects
 
-### Spring Boot chat with local Ollama
+| Folder | Project | Default address |
+| --- | --- | --- |
+| [chat](chat/README.md) | REST API for local Ollama text generation | `http://localhost:8080/api/chat` |
+| [accounting](accounting/README.md) | Company expenses, documents and bank reconciliation | [http://localhost:8081](http://localhost:8081) |
+| [outsmart](outsmart/README.md) | Strategy game between local models | [http://localhost:8082/outsmart](http://localhost:8082/outsmart) |
+| [personas](personas/README.md) | Conversations between two model personas | [http://localhost:8083/personas](http://localhost:8083/personas) |
+| [brochure](brochure/README.md) | Company brochure generation from website content | `http://localhost:8084/api/brochures` |
+| [shared/ollama-client](shared/ollama-client/README.md) | Reusable Ollama client library | No server |
 
-A Java 25 / Spring Boot REST API that uses a local Ollama model. `ChatService` depends on `TextGenerationClient`; `LocalOllamaTextGenerationClient` is the current implementation. The interface supports a user prompt alone or a system prompt plus a user prompt. Both forms accept an optional `TextResponseFormat`: `DEFAULT` leaves the provider's response format unchanged, while `JSON_OBJECT` requests JSON object output. A future server or cloud provider can supply another implementation without changing the chat endpoint or service.
+Each application can run independently. `PORT` overrides its default port. API
+paths are unchanged; Outsmart, personas and brochure now have their own ports.
+Accounting retains its existing backend, frontend, document worker, scripts and
+Docker setup. Its backend is aggregated by the root build but retains its own
+Spring Boot parent and dependencies.
 
-#### Requirements
+## Requirements
 
-- Java 25 JDK
-- The included Maven wrapper (Maven is downloaded on first use)
-- [Ollama](https://ollama.com/) installed and running locally, with a model downloaded (default: `gemma3:1b`)
+- Java 25 JDK.
+- The included Maven wrapper; Maven is downloaded on first use.
+- [Ollama](https://ollama.com/) with the desired models installed to use model-backed features.
+- Accounting's additional requirements are described in [its README](accounting/README.md).
 
-#### Run
+The repository's `mise.toml` selects Temurin 25. If needed, link a local installation
+with `mise link java@temurin-25 /Library/Java/JavaVirtualMachines/temurin-25.jdk/Contents/Home`.
 
-For the default local Ollama setup, download the model and start the app:
+## Build and run
 
-```bash
+Run these commands from the repository root. Build a project together with its
+shared dependencies, then start its executable JAR:
+
+```sh
+./mvnw -pl chat -am package
 ollama pull gemma3:1b
-./mvnw spring-boot:run
+java -jar chat/target/chat-0.0.1-SNAPSHOT.jar
 ```
 
-Ollama uses its OpenAI-compatible API at `http://localhost:11434/v1`. The Spring Boot API listens on `http://localhost:8080`. Send a prompt:
+Replace `chat` with `outsmart`, `personas` or `brochure` to build and run that project.
+Each project README includes its configuration and usage examples. Follow the
+[accounting startup instructions](accounting/README.md) for its environment and services.
 
-```bash
-curl -X POST http://localhost:8080/api/chat \
-  -H 'Content-Type: application/json' \
-  -d '{"prompt":"Explain dependency injection in one sentence."}'
+Verify the four experiments and their shared client without building accounting:
+
+```sh
+./mvnw -pl chat,outsmart,personas,brochure -am verify
 ```
 
-Example response:
+`./mvnw verify` includes accounting's backend and database integration tests; it
+does not compile accounting's Angular frontend or test its Python worker. The
+existing accounting workflow handles those components separately.
 
-```json
-{"text":"Dependency injection is a way to provide an object with the collaborators it needs from the outside."}
-```
+## IDE
 
-Choose another installed Ollama model with `OLLAMA_MODEL`; set `OLLAMA_BASE_URL` if your local Ollama server uses another address:
+Import or reload the root `pom.xml` as a Maven project and select JDK 25. This imports
+all Java projects, including `accounting/backend`, with their own source roots.
+Run the appropriate main class:
 
-```bash
-OLLAMA_MODEL=qwen3.5:4b OLLAMA_BASE_URL=http://localhost:11434/v1 ./mvnw spring-boot:run
-```
+| Project | Main class |
+| --- | --- |
+| Chat | `com.example.ollama.chat.ChatApplication` |
+| Outsmart | `com.example.ollama.outsmart.OutsmartApplication` |
+| Personas | `com.example.ollama.personas.PersonasApplication` |
+| Brochure | `com.example.ollama.brochure.BrochureApplication` |
+| Accounting | `pt.conta.AccountingApplication` |
 
-The local adapter uses Ollama's OpenAI-compatible API. Its placeholder API key is internal; Ollama does not require credentials. The Outsmart game has a separate move-generator interface and its own Ollama settings.
+Accounting's IDE environment and working directory remain as documented in its
+README. The other applications require no database or accounting configuration.
 
-### Outsmart game (in progress)
+## Continuous integration
 
-The Outsmart feature has its own `com.example.ollama.outsmart` package and `outsmart.*` configuration. Its OpenAI SDK client connects to local Ollama through `OUTSMART_OLLAMA_BASE_URL` (default `http://localhost:11434`) and `OUTSMART_OLLAMA_REQUEST_TIMEOUT` (default `2m`). These settings do not affect `/api/chat`.
-
-The `mise.toml` file selects Temurin 25 for this project. Link the Homebrew installation with `mise link java@temurin-25 /Library/Java/JavaVirtualMachines/temurin-25.jdk/Contents/Home`, then run `./mvnw` from a shell with mise activated.
-
-The game rules and in-memory game registry are implemented. Games start with 12 coins per player and end after 10 turns or a bankruptcy. Invalid moves cost one coin; a qualifying alliance transfers two extra coins from its target. The registry keeps up to `OUTSMART_MAX_GAMES` games (default `100`) in memory and supports removing them; games disappear when the application stops.
-
-Player-specific prompts and an Ollama move generator use the model ID supplied for each participant. The generator uses the OpenAI SDK's chat completions and JSON schema response format. Malformed model output becomes an invalid move; an unavailable Ollama server stops the turn without changing coins. The rule engine checks target names and required messages. Each prompt includes public balances, the player's own prior moves and private messages, and no other player's private plans.
-
-`OutsmartGameRunner.runNextTurn(gameId)` reads one game snapshot, collects every player's decision from that snapshot, and commits the completed turn once. `OutsmartGameExecutionService` prevents overlapping turns and runs whole games in a background virtual thread. A concurrent update is also rejected by the registry's turn check.
-
-Step 5 adds the Outsmart API. Create a game with 3–8 players and an installed Ollama model for each player:
-
-```bash
-curl -i -X POST http://localhost:8080/api/outsmart/games \
-  -H 'Content-Type: application/json' \
-  -d '{"participants":[{"name":"Alex","model":{"provider":"ollama","id":"gemma3:1b"}},{"name":"Blake","model":{"provider":"ollama","id":"gemma3:1b"}},{"name":"Charlie","model":{"provider":"ollama","id":"gemma3:1b"}}]}'
-```
-
-The response includes an `id` and a `Location` header. Use that ID for the other operations:
-
-```bash
-curl http://localhost:8080/api/outsmart/games/GAME_ID
-curl -X POST http://localhost:8080/api/outsmart/games/GAME_ID/turns
-curl -X POST http://localhost:8080/api/outsmart/games/GAME_ID/run
-curl -X DELETE http://localhost:8080/api/outsmart/games/GAME_ID
-```
-
-Each `POST .../turns` runs one turn and waits for every local model response. `POST .../run` starts whole-game play in the background and normally returns `202`; poll `GET .../games/GAME_ID` for `run.state` and `turnsCompleted`. Repeated Run Game calls do not start duplicate work. The JSON API exposes balances and turn history, but no private strategies or messages. Invalid requests return `400`, unknown game IDs return `404`, conflicting turns return `409`, and an unavailable Ollama model returns `503`. Games remain only in memory and disappear on restart.
-
-The browser interface is at [http://localhost:8080/outsmart](http://localhost:8080/outsmart). With Ollama running and models pulled, start the app with `./mvnw spring-boot:run`. Enter names for at least three players and select or type model IDs; the fields suggest models returned by the OpenAI-compatible model list through the SDK. Use **Play next turn** for one turn or **Run game** to continue in the background. The page polls while a whole game runs and shows balances, messages, alliances, and optional inner thoughts after each turn. These details are a human spectator view; they are never included in another model's prompt. **Delete game** frees its in-memory slot. Standard form submissions also work without JavaScript.
-
-The browser interface uses server-rendered Thymeleaf and a locally bundled copy of HTMX 2.0.11 (`src/main/resources/static/vendor/htmx.min.js`); its license is stored beside it. It has no separate frontend build step and needs no CDN connection at runtime.
-
-### Persona conversations
-
-Open [http://localhost:8080/personas](http://localhost:8080/personas) to start a conversation between two Ollama personas. Choose an installed model for each speaker, edit their names and default personalities, and enter a topic. The page shows new replies as they arrive. **Stop** immediately freezes the displayed transcript, even if an Ollama request is still finishing. **Restart with these settings** clears the transcript and starts again with the current form values. Conversations live in server memory and disappear when the app restarts; the page remembers the current conversation ID for the browser tab.
-
-The JSON API provides `GET /api/personas/models`, `POST /api/personas/conversations`, `GET /api/personas/conversations/{id}`, `POST /api/personas/conversations/{id}/stop`, `POST /api/personas/conversations/{id}/restart`, and `DELETE /api/personas/conversations/{id}`. Create and restart accept a topic and two personas, each with `name`, `model`, and `personality`. The service keeps at most 100 conversations; delete old ones through the API to free space.
-
-`PersonaConversationReplyService` owns the shared persona instructions and builds a role-based message history. Each speaker sees its own earlier replies as assistant messages and the other speaker's replies as user messages. `OllamaPersonaClient` only maps those messages to Ollama's chat API; another model adapter can reuse the same conversation logic through `ModelChatClient`.
-
-### Company brochure
-
-The brochure API reads a website, selects relevant linked pages with the configured model, and returns a Markdown brochure:
-
-```bash
-curl --get http://localhost:8080/api/brochures \
-  --data-urlencode 'url=https://example.com'
-```
-
-The response uses the `text/markdown` media type. A browser page needs a Markdown renderer to display its headings and paragraphs with formatting.
-You can omit the URL scheme (for example, `www.example.com`); the API will use HTTPS by default.
+- `java-projects.yml` verifies chat, Outsmart, personas, brochure and their shared library.
+- `accounting.yml` continues to build and test accounting independently.
