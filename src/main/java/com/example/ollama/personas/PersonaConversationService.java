@@ -17,24 +17,24 @@ import org.springframework.stereotype.Service;
 @Service
 public class PersonaConversationService {
 
-    private final OllamaPersonaClient ollama;
+    private final ModelChatClient client;
     private final PersonaReplyGenerator generator;
     private final Executor executor;
     private final Map<UUID, Session> sessions = new ConcurrentHashMap<>();
 
     @Autowired
-    PersonaConversationService(OllamaPersonaClient ollama) {
-        this(ollama, ollama, Executors.newVirtualThreadPerTaskExecutor());
+    PersonaConversationService(ModelChatClient client, PersonaReplyGenerator generator) {
+        this(client, generator, Executors.newVirtualThreadPerTaskExecutor());
     }
 
-    PersonaConversationService(OllamaPersonaClient ollama, PersonaReplyGenerator generator, Executor executor) {
-        this.ollama = ollama;
+    PersonaConversationService(ModelChatClient client, PersonaReplyGenerator generator, Executor executor) {
+        this.client = client;
         this.generator = generator;
         this.executor = executor;
     }
 
     public List<String> models() {
-        return ollama.models();
+        return client.models();
     }
 
     public synchronized PersonaConversationResponse create(PersonaConversationRequest request) {

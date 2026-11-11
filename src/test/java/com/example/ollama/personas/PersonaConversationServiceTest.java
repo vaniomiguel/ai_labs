@@ -18,8 +18,8 @@ class PersonaConversationServiceTest {
 
     @Test
     void stoppingDuringModelCallDiscardsItsReplyAndRestartStartsFresh() {
-        OllamaPersonaClient ollama = mock(OllamaPersonaClient.class);
-        when(ollama.models()).thenReturn(List.of("model-a", "model-b"));
+        ModelChatClient client = mock(ModelChatClient.class);
+        when(client.models()).thenReturn(List.of("model-a", "model-b"));
         AtomicReference<PersonaConversationService> serviceRef = new AtomicReference<>();
         AtomicReference<java.util.UUID> idRef = new AtomicReference<>();
         AtomicInteger calls = new AtomicInteger();
@@ -29,7 +29,7 @@ class PersonaConversationServiceTest {
             return "Reply " + call;
         };
         AtomicReference<Runnable> queued = new AtomicReference<>();
-        PersonaConversationService service = new PersonaConversationService(ollama, generator, queued::set);
+        PersonaConversationService service = new PersonaConversationService(client, generator, queued::set);
         serviceRef.set(service);
 
         var created = service.create(REQUEST);
@@ -48,12 +48,12 @@ class PersonaConversationServiceTest {
 
     @Test
     void previousRunCannotAddMessagesAfterRestart() {
-        OllamaPersonaClient ollama = mock(OllamaPersonaClient.class);
-        when(ollama.models()).thenReturn(List.of("model-a", "model-b"));
+        ModelChatClient client = mock(ModelChatClient.class);
+        when(client.models()).thenReturn(List.of("model-a", "model-b"));
         AtomicReference<Runnable> firstRun = new AtomicReference<>();
         AtomicReference<Runnable> secondRun = new AtomicReference<>();
         AtomicInteger scheduled = new AtomicInteger();
-        PersonaConversationService service = new PersonaConversationService(ollama,
+        PersonaConversationService service = new PersonaConversationService(client,
                 (speaker, topic, history) -> "Hello", task -> {
                     if (scheduled.getAndIncrement() == 0) firstRun.set(task);
                     else secondRun.set(task);

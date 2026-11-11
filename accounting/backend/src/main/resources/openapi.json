@@ -1,0 +1,2659 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "Conta API",
+    "version": "0.1.0",
+    "description": "Montantes como strings decimais; datas ISO. Atualizações exigem version; escritas exigem X-XSRF-TOKEN e cookie de sessão."
+  },
+  "servers": [
+    {
+      "url": "/api/v1"
+    }
+  ],
+  "security": [
+    {
+      "session": [],
+      "csrf": []
+    }
+  ],
+  "components": {
+    "schemas": {
+      "Decimal": {
+        "type": [
+          "string",
+          "null"
+        ],
+        "pattern": "^-?\\d+\\.\\d{2}$",
+        "examples": [
+          "123.45",
+          null
+        ]
+      },
+      "InvoiceLine": {
+        "type": "object",
+        "properties": {
+          "description": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "quantity": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "unitPrice": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "net": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "tax": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "discount": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "total": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "Invoice": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "issuedOn": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "dueOn": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "number": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "supplier": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "supplierTaxId": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "description": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "relatedInvoiceId": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "documentId": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "total": {
+            "$ref": "#/components/schemas/Decimal"
+          },
+          "net": {
+            "$ref": "#/components/schemas/Decimal"
+          },
+          "tax": {
+            "$ref": "#/components/schemas/Decimal"
+          },
+          "discount": {
+            "$ref": "#/components/schemas/Decimal"
+          },
+          "remaining": {
+            "$ref": "#/components/schemas/Decimal"
+          },
+          "version": {
+            "type": "integer"
+          },
+          "currency": {
+            "const": "EUR"
+          },
+          "type": {
+            "enum": [
+              "INVOICE",
+              "CREDIT_NOTE"
+            ]
+          },
+          "validate": {
+            "type": "boolean"
+          },
+          "categories": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "lines": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/InvoiceLine"
+            }
+          },
+          "reviewStatus": {
+            "type": "string"
+          },
+          "reconciliationStatus": {
+            "type": "string"
+          },
+          "aiReview": {
+            "$ref": "#/components/schemas/AiReview"
+          },
+          "origin": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "author": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "updatedAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "Movement": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "accountId": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "statementId": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "documentId": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "bookedOn": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "valueOn": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "occurredAt": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "description": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "bankReference": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "amount": {
+            "$ref": "#/components/schemas/Decimal"
+          },
+          "version": {
+            "type": "integer"
+          },
+          "currency": {
+            "const": "EUR"
+          },
+          "direction": {
+            "enum": [
+              "DEBIT",
+              "CREDIT"
+            ]
+          },
+          "kind": {
+            "enum": [
+              "UNCLASSIFIED",
+              "INVOICE_PAYMENT",
+              "REFUND",
+              "REIMBURSEMENT",
+              "ADVANCE",
+              "RETURN",
+              "OTHER",
+              "INTERNAL_TRANSFER"
+            ]
+          },
+          "validate": {
+            "type": "boolean"
+          },
+          "aiReview": {
+            "$ref": "#/components/schemas/AiReview"
+          },
+          "origin": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "author": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "updatedAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "remaining": {
+            "$ref": "#/components/schemas/Decimal"
+          },
+          "reviewStatus": {
+            "type": "string"
+          }
+        }
+      },
+      "Allocation": {
+        "type": "object",
+        "required": [
+          "invoiceId",
+          "movementId",
+          "amount"
+        ],
+        "properties": {
+          "invoiceId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "movementId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "amount": {
+            "$ref": "#/components/schemas/Decimal"
+          },
+          "reversesId": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          },
+          "evidence": {
+            "type": "string"
+          }
+        }
+      },
+      "EditDraft": {
+        "type": "object",
+        "required": [
+          "version",
+          "draft",
+          "resolve"
+        ],
+        "properties": {
+          "version": {
+            "type": "integer"
+          },
+          "draft": {
+            "type": "object"
+          },
+          "resolve": {
+            "type": "boolean"
+          }
+        }
+      },
+      "Problem": {
+        "type": "object",
+        "properties": {
+          "status": {
+            "type": "integer"
+          },
+          "detail": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          }
+        }
+      },
+      "AiReview": {
+        "type": "object",
+        "properties": {
+          "state": {
+            "type": "string",
+            "enum": [
+              "PENDING",
+              "REVIEWED",
+              "FAILED",
+              "NONE",
+              "PREVIOUS"
+            ]
+          },
+          "jobState": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "model": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "revision": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "verdict": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "LedgerEntry": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "date": {
+            "type": "string",
+            "format": "date"
+          },
+          "amount": {
+            "$ref": "#/components/schemas/Decimal"
+          },
+          "sourceType": {
+            "type": "string",
+            "enum": [
+              "INVOICE",
+              "MOVEMENT",
+              "ALLOCATION"
+            ]
+          },
+          "sourceId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "documentId": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          },
+          "explanation": {
+            "type": "string"
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "BalanceMonth": {
+        "type": "object",
+        "properties": {
+          "year": {
+            "type": "integer"
+          },
+          "month": {
+            "type": "integer"
+          },
+          "opening": {
+            "$ref": "#/components/schemas/Decimal"
+          },
+          "change": {
+            "$ref": "#/components/schemas/Decimal"
+          },
+          "closing": {
+            "$ref": "#/components/schemas/Decimal"
+          },
+          "increases": {
+            "$ref": "#/components/schemas/Decimal"
+          },
+          "reductions": {
+            "$ref": "#/components/schemas/Decimal"
+          },
+          "entries": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/LedgerEntry"
+            }
+          }
+        }
+      },
+      "DocumentMetadata": {
+        "type": "object",
+        "properties": {
+          "filename": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "kind": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "mediaType": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "sha256": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "status": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "sourcePath": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          },
+          "accountId": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          },
+          "batchId": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          },
+          "version": {
+            "type": "integer"
+          },
+          "size": {
+            "type": "integer"
+          },
+          "pages": {
+            "type": "integer"
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "updatedAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "Document": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/DocumentMetadata"
+          },
+          {
+            "type": "object",
+            "properties": {
+              "text": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "layout": {
+                "type": "object"
+              },
+              "draft": {
+                "type": "object"
+              }
+            }
+          }
+        ]
+      }
+    },
+    "securitySchemes": {
+      "session": {
+        "type": "apiKey",
+        "in": "cookie",
+        "name": "JSESSIONID"
+      },
+      "csrf": {
+        "type": "apiKey",
+        "in": "header",
+        "name": "X-XSRF-TOKEN"
+      }
+    }
+  },
+  "paths": {
+    "/invoices": {
+      "get": {
+        "summary": "Listar com paginação e filtros",
+        "responses": {
+          "200": {
+            "description": "Operação concluída"
+          },
+          "401": {
+            "description": "Sessão necessária"
+          },
+          "409": {
+            "description": "Versão desatualizada"
+          },
+          "422": {
+            "description": "Regra de negócio não satisfeita",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "year",
+            "in": "query",
+            "schema": {
+              "type": "integer"
+            }
+          },
+          {
+            "name": "month",
+            "in": "query",
+            "schema": {
+              "type": "integer"
+            }
+          },
+          {
+            "name": "day",
+            "in": "query",
+            "schema": {
+              "type": "integer"
+            }
+          },
+          {
+            "name": "from",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "to",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "q",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "category",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "status",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "direction",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "min",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "max",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "time",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "accountId",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "page",
+            "in": "query",
+            "schema": {
+              "type": "integer"
+            }
+          },
+          {
+            "name": "size",
+            "in": "query",
+            "schema": {
+              "type": "integer"
+            }
+          }
+        ]
+      },
+      "post": {
+        "summary": "Criar registo manual ou rascunho",
+        "responses": {
+          "200": {
+            "description": "Operação concluída"
+          },
+          "401": {
+            "description": "Sessão necessária"
+          },
+          "409": {
+            "description": "Versão desatualizada"
+          },
+          "422": {
+            "description": "Regra de negócio não satisfeita",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Invoice"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/invoices/{id}": {
+      "get": {
+        "summary": "Consultar dados",
+        "responses": {
+          "200": {
+            "description": "Operação concluída"
+          },
+          "401": {
+            "description": "Sessão necessária"
+          },
+          "409": {
+            "description": "Versão desatualizada"
+          },
+          "422": {
+            "description": "Regra de negócio não satisfeita",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
+      },
+      "put": {
+        "summary": "Editar com version obrigatório",
+        "responses": {
+          "200": {
+            "description": "Operação concluída"
+          },
+          "401": {
+            "description": "Sessão necessária"
+          },
+          "409": {
+            "description": "Versão desatualizada"
+          },
+          "422": {
+            "description": "Regra de negócio não satisfeita",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Invoice"
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "summary": "Eliminar logicamente e anular efeitos",
+        "responses": {
+          "200": {
+            "description": "Operação concluída"
+          },
+          "401": {
+            "description": "Sessão necessária"
+          },
+          "409": {
+            "description": "Versão desatualizada"
+          },
+          "422": {
+            "description": "Regra de negócio não satisfeita",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "version",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "integer"
+            }
+          }
+        ]
+      }
+    },
+    "/movements": {
+      "get": {
+        "summary": "Listar com paginação e filtros",
+        "responses": {
+          "200": {
+            "description": "Operação concluída"
+          },
+          "401": {
+            "description": "Sessão necessária"
+          },
+          "409": {
+            "description": "Versão desatualizada"
+          },
+          "422": {
+            "description": "Regra de negócio não satisfeita",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "year",
+            "in": "query",
+            "schema": {
+              "type": "integer"
+            }
+          },
+          {
+            "name": "month",
+            "in": "query",
+            "schema": {
+              "type": "integer"
+            }
+          },
+          {
+            "name": "day",
+            "in": "query",
+            "schema": {
+              "type": "integer"
+            }
+          },
+          {
+            "name": "from",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "to",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "q",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "category",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "status",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "direction",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "min",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "max",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "time",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "accountId",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "page",
+            "in": "query",
+            "schema": {
+              "type": "integer"
+            }
+          },
+          {
+            "name": "size",
+            "in": "query",
+            "schema": {
+              "type": "integer"
+            }
+          }
+        ]
+      },
+      "post": {
+        "summary": "Criar registo manual ou rascunho",
+        "responses": {
+          "200": {
+            "description": "Operação concluída"
+          },
+          "401": {
+            "description": "Sessão necessária"
+          },
+          "409": {
+            "description": "Versão desatualizada"
+          },
+          "422": {
+            "description": "Regra de negócio não satisfeita",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Movement"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/movements/{id}": {
+      "get": {
+        "summary": "Consultar dados",
+        "responses": {
+          "200": {
+            "description": "Operação concluída"
+          },
+          "401": {
+            "description": "Sessão necessária"
+          },
+          "409": {
+            "description": "Versão desatualizada"
+          },
+          "422": {
+            "description": "Regra de negócio não satisfeita",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
+      },
+      "put": {
+        "summary": "Editar com version obrigatório",
+        "responses": {
+          "200": {
+            "description": "Operação concluída"
+          },
+          "401": {
+            "description": "Sessão necessária"
+          },
+          "409": {
+            "description": "Versão desatualizada"
+          },
+          "422": {
+            "description": "Regra de negócio não satisfeita",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Movement"
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "summary": "Eliminar logicamente e anular efeitos",
+        "responses": {
+          "200": {
+            "description": "Operação concluída"
+          },
+          "401": {
+            "description": "Sessão necessária"
+          },
+          "409": {
+            "description": "Versão desatualizada"
+          },
+          "422": {
+            "description": "Regra de negócio não satisfeita",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "version",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "integer"
+            }
+          }
+        ]
+      }
+    },
+    "/me": {
+      "get": {
+        "summary": "Utilizador autenticado",
+        "responses": {
+          "200": {
+            "description": "Operação concluída"
+          },
+          "401": {
+            "description": "Sessão necessária"
+          },
+          "409": {
+            "description": "Versão desatualizada"
+          },
+          "422": {
+            "description": "Regra de negócio não satisfeita",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/csrf": {
+      "get": {
+        "summary": "Materializar cookie XSRF-TOKEN",
+        "responses": {
+          "200": {
+            "description": "Operação concluída"
+          },
+          "401": {
+            "description": "Sessão necessária"
+          },
+          "409": {
+            "description": "Versão desatualizada"
+          },
+          "422": {
+            "description": "Regra de negócio não satisfeita",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": []
+      }
+    },
+    "/allocations": {
+      "get": {
+        "summary": "Associações ativas",
+        "responses": {
+          "200": {
+            "description": "Operação concluída"
+          },
+          "401": {
+            "description": "Sessão necessária"
+          },
+          "409": {
+            "description": "Versão desatualizada"
+          },
+          "422": {
+            "description": "Regra de negócio não satisfeita",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "summary": "Associar parcela ou estorno",
+        "responses": {
+          "200": {
+            "description": "Operação concluída"
+          },
+          "401": {
+            "description": "Sessão necessária"
+          },
+          "409": {
+            "description": "Versão desatualizada"
+          },
+          "422": {
+            "description": "Regra de negócio não satisfeita",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Allocation"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/allocations/{id}": {
+      "delete": {
+        "summary": "Desfazer associação",
+        "responses": {
+          "200": {
+            "description": "Operação concluída"
+          },
+          "401": {
+            "description": "Sessão necessária"
+          },
+          "409": {
+            "description": "Versão desatualizada"
+          },
+          "422": {
+            "description": "Regra de negócio não satisfeita",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
+      }
+    },
+    "/reconciliation/candidates": {
+      "get": {
+        "summary": "Candidatos e evidências",
+        "responses": {
+          "200": {
+            "description": "Operação concluída"
+          },
+          "401": {
+            "description": "Sessão necessária"
+          },
+          "409": {
+            "description": "Versão desatualizada"
+          },
+          "422": {
+            "description": "Regra de negócio não satisfeita",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/reconciliation/run": {
+      "post": {
+        "summary": "Reconciliar dados validados",
+        "responses": {
+          "200": {
+            "description": "Operação concluída"
+          },
+          "401": {
+            "description": "Sessão necessária"
+          },
+          "409": {
+            "description": "Versão desatualizada"
+          },
+          "422": {
+            "description": "Regra de negócio não satisfeita",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/balances": {
+      "get": {
+        "summary": "Todos os anos e meses",
+        "responses": {
+          "200": {
+            "description": "Operação concluída",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "year": {
+                        "type": "integer"
+                      },
+                      "months": {
+                        "type": "array",
+                        "items": {
+                          "$ref": "#/components/schemas/BalanceMonth"
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Sessão necessária"
+          },
+          "409": {
+            "description": "Versão desatualizada"
+          },
+          "422": {
+            "description": "Regra de negócio não satisfeita",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/balances/{year}": {
+      "get": {
+        "summary": "Doze saldos com reinício anual",
+        "responses": {
+          "200": {
+            "description": "Operação concluída",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/BalanceMonth"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Sessão necessária"
+          },
+          "409": {
+            "description": "Versão desatualizada"
+          },
+          "422": {
+            "description": "Regra de negócio não satisfeita",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "year",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer"
+            }
+          }
+        ]
+      }
+    },
+    "/accounts": {
+      "get": {
+        "summary": "Contas EUR",
+        "responses": {
+          "200": {
+            "description": "Operação concluída"
+          },
+          "401": {
+            "description": "Sessão necessária"
+          },
+          "409": {
+            "description": "Versão desatualizada"
+          },
+          "422": {
+            "description": "Regra de negócio não satisfeita",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "summary": "Guardar conta",
+        "responses": {
+          "200": {
+            "description": "Operação concluída"
+          },
+          "401": {
+            "description": "Sessão necessária"
+          },
+          "409": {
+            "description": "Versão desatualizada"
+          },
+          "422": {
+            "description": "Regra de negócio não satisfeita",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/categories": {
+      "get": {
+        "summary": "Categorias e aliases",
+        "responses": {
+          "200": {
+            "description": "Operação concluída"
+          },
+          "401": {
+            "description": "Sessão necessária"
+          },
+          "409": {
+            "description": "Versão desatualizada"
+          },
+          "422": {
+            "description": "Regra de negócio não satisfeita",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "summary": "Guardar categoria",
+        "responses": {
+          "200": {
+            "description": "Operação concluída"
+          },
+          "401": {
+            "description": "Sessão necessária"
+          },
+          "409": {
+            "description": "Versão desatualizada"
+          },
+          "422": {
+            "description": "Regra de negócio não satisfeita",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/categories/{id}": {
+      "delete": {
+        "summary": "Desativar categoria",
+        "responses": {
+          "200": {
+            "description": "Operação concluída"
+          },
+          "401": {
+            "description": "Sessão necessária"
+          },
+          "409": {
+            "description": "Versão desatualizada"
+          },
+          "422": {
+            "description": "Regra de negócio não satisfeita",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
+      }
+    },
+    "/documents": {
+      "get": {
+        "summary": "Todas as extrações",
+        "responses": {
+          "200": {
+            "description": "Operação concluída",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/DocumentMetadata"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Sessão necessária"
+          },
+          "409": {
+            "description": "Versão desatualizada"
+          },
+          "422": {
+            "description": "Regra de negócio não satisfeita",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "summary": "Upload múltiplo assíncrono",
+        "responses": {
+          "200": {
+            "description": "Operação concluída"
+          },
+          "401": {
+            "description": "Sessão necessária"
+          },
+          "409": {
+            "description": "Versão desatualizada"
+          },
+          "422": {
+            "description": "Regra de negócio não satisfeita",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "files",
+                  "kind"
+                ],
+                "properties": {
+                  "files": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "format": "binary"
+                    }
+                  },
+                  "kind": {
+                    "enum": [
+                      "INVOICE",
+                      "STATEMENT",
+                      "HISTORY",
+                      "ARCHIVE",
+                      "SUPPORT"
+                    ]
+                  },
+                  "accountId": {
+                    "type": "string",
+                    "format": "uuid"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/documents/{id}": {
+      "get": {
+        "summary": "Rascunho e dados documentais",
+        "responses": {
+          "200": {
+            "description": "Operação concluída",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Document"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Sessão necessária"
+          },
+          "409": {
+            "description": "Versão desatualizada"
+          },
+          "422": {
+            "description": "Regra de negócio não satisfeita",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
+      }
+    },
+    "/documents/{id}/original": {
+      "get": {
+        "summary": "Original autenticado",
+        "responses": {
+          "200": {
+            "description": "Operação concluída"
+          },
+          "401": {
+            "description": "Sessão necessária"
+          },
+          "409": {
+            "description": "Versão desatualizada"
+          },
+          "422": {
+            "description": "Regra de negócio não satisfeita",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
+      }
+    },
+    "/documents/{id}/pages/{page}": {
+      "get": {
+        "summary": "Página PDF",
+        "responses": {
+          "200": {
+            "description": "Operação concluída"
+          },
+          "401": {
+            "description": "Sessão necessária"
+          },
+          "409": {
+            "description": "Versão desatualizada"
+          },
+          "422": {
+            "description": "Regra de negócio não satisfeita",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "page",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer"
+            }
+          }
+        ]
+      }
+    },
+    "/documents/{id}/draft": {
+      "put": {
+        "summary": "Guardar rascunho ou validar e resolver",
+        "responses": {
+          "200": {
+            "description": "Operação concluída"
+          },
+          "401": {
+            "description": "Sessão necessária"
+          },
+          "409": {
+            "description": "Versão desatualizada"
+          },
+          "422": {
+            "description": "Regra de negócio não satisfeita",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EditDraft"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/documents/{id}/reprocess": {
+      "post": {
+        "summary": "Extrair novamente",
+        "responses": {
+          "200": {
+            "description": "Operação concluída"
+          },
+          "401": {
+            "description": "Sessão necessária"
+          },
+          "409": {
+            "description": "Versão desatualizada"
+          },
+          "422": {
+            "description": "Regra de negócio não satisfeita",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
+      }
+    },
+    "/documents/{id}/attempts": {
+      "get": {
+        "summary": "Tentativas e evidências",
+        "responses": {
+          "200": {
+            "description": "Operação concluída"
+          },
+          "401": {
+            "description": "Sessão necessária"
+          },
+          "409": {
+            "description": "Versão desatualizada"
+          },
+          "422": {
+            "description": "Regra de negócio não satisfeita",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
+      }
+    },
+    "/alerts": {
+      "get": {
+        "summary": "Alertas abertos e resolvidos",
+        "responses": {
+          "200": {
+            "description": "Operação concluída"
+          },
+          "401": {
+            "description": "Sessão necessária"
+          },
+          "409": {
+            "description": "Versão desatualizada"
+          },
+          "422": {
+            "description": "Regra de negócio não satisfeita",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/alerts/{id}/ai": {
+      "post": {
+        "summary": "Autorizar tentativa de correção",
+        "responses": {
+          "200": {
+            "description": "Operação concluída"
+          },
+          "401": {
+            "description": "Sessão necessária"
+          },
+          "409": {
+            "description": "Versão desatualizada"
+          },
+          "422": {
+            "description": "Regra de negócio não satisfeita",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
+      }
+    },
+    "/alerts/{id}/apply": {
+      "post": {
+        "summary": "Confirmar proposta atual",
+        "responses": {
+          "200": {
+            "description": "Operação concluída"
+          },
+          "401": {
+            "description": "Sessão necessária"
+          },
+          "409": {
+            "description": "Versão desatualizada"
+          },
+          "422": {
+            "description": "Regra de negócio não satisfeita",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
+      }
+    },
+    "/jobs": {
+      "get": {
+        "summary": "Trabalhos e estados",
+        "responses": {
+          "200": {
+            "description": "Operação concluída"
+          },
+          "401": {
+            "description": "Sessão necessária"
+          },
+          "409": {
+            "description": "Versão desatualizada"
+          },
+          "422": {
+            "description": "Regra de negócio não satisfeita",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "default": 500,
+              "minimum": 1,
+              "maximum": 10000
+            }
+          }
+        ]
+      }
+    },
+    "/jobs/{id}/retry": {
+      "post": {
+        "summary": "Repetir trabalho",
+        "responses": {
+          "200": {
+            "description": "Operação concluída"
+          },
+          "401": {
+            "description": "Sessão necessária"
+          },
+          "409": {
+            "description": "Versão desatualizada"
+          },
+          "422": {
+            "description": "Regra de negócio não satisfeita",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
+      }
+    },
+    "/history": {
+      "get": {
+        "summary": "Linhas históricas e células",
+        "responses": {
+          "200": {
+            "description": "Operação concluída"
+          },
+          "401": {
+            "description": "Sessão necessária"
+          },
+          "409": {
+            "description": "Versão desatualizada"
+          },
+          "422": {
+            "description": "Regra de negócio não satisfeita",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/history/{id}/link": {
+      "post": {
+        "summary": "Associar fatura histórica",
+        "responses": {
+          "200": {
+            "description": "Operação concluída"
+          },
+          "401": {
+            "description": "Sessão necessária"
+          },
+          "409": {
+            "description": "Versão desatualizada"
+          },
+          "422": {
+            "description": "Regra de negócio não satisfeita",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
+      }
+    },
+    "/imports": {
+      "get": {
+        "summary": "Checkpoints de ZIP",
+        "responses": {
+          "200": {
+            "description": "Operação concluída"
+          },
+          "401": {
+            "description": "Sessão necessária"
+          },
+          "409": {
+            "description": "Versão desatualizada"
+          },
+          "422": {
+            "description": "Regra de negócio não satisfeita",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/assistant": {
+      "get": {
+        "summary": "Modelos locais e recomendações",
+        "responses": {
+          "200": {
+            "description": "Operação concluída"
+          },
+          "401": {
+            "description": "Sessão necessária"
+          },
+          "409": {
+            "description": "Versão desatualizada"
+          },
+          "422": {
+            "description": "Regra de negócio não satisfeita",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/assistant/settings": {
+      "post": {
+        "summary": "Configurar modelos e janela temporal",
+        "responses": {
+          "200": {
+            "description": "Operação concluída"
+          },
+          "401": {
+            "description": "Sessão necessária"
+          },
+          "409": {
+            "description": "Versão desatualizada"
+          },
+          "422": {
+            "description": "Regra de negócio não satisfeita",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/assistant/excel-mapping/{kind}": {
+      "post": {
+        "summary": "Guardar mapeamento Excel",
+        "responses": {
+          "200": {
+            "description": "Operação concluída"
+          },
+          "401": {
+            "description": "Sessão necessária"
+          },
+          "409": {
+            "description": "Versão desatualizada"
+          },
+          "422": {
+            "description": "Regra de negócio não satisfeita",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "kind",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
+      }
+    },
+    "/assistant/executions": {
+      "get": {
+        "summary": "Proveniência IA",
+        "responses": {
+          "200": {
+            "description": "Operação concluída"
+          },
+          "401": {
+            "description": "Sessão necessária"
+          },
+          "409": {
+            "description": "Versão desatualizada"
+          },
+          "422": {
+            "description": "Regra de negócio não satisfeita",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/audit/{type}/{id}": {
+      "get": {
+        "summary": "Histórico de alterações",
+        "responses": {
+          "200": {
+            "description": "Operação concluída"
+          },
+          "401": {
+            "description": "Sessão necessária"
+          },
+          "409": {
+            "description": "Versão desatualizada"
+          },
+          "422": {
+            "description": "Regra de negócio não satisfeita",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "type",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
+      }
+    },
+    "/events": {
+      "get": {
+        "summary": "Progresso em SSE",
+        "responses": {
+          "200": {
+            "description": "Operação concluída"
+          },
+          "401": {
+            "description": "Sessão necessária"
+          },
+          "409": {
+            "description": "Versão desatualizada"
+          },
+          "422": {
+            "description": "Regra de negócio não satisfeita",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/logout": {
+      "post": {
+        "summary": "Terminar sessão",
+        "responses": {
+          "200": {
+            "description": "Operação concluída"
+          },
+          "401": {
+            "description": "Sessão necessária"
+          },
+          "409": {
+            "description": "Versão desatualizada"
+          },
+          "422": {
+            "description": "Regra de negócio não satisfeita",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/session": {
+      "post": {
+        "summary": "Iniciar sessão; obter CSRF primeiro",
+        "responses": {
+          "200": {
+            "description": "Operação concluída"
+          },
+          "401": {
+            "description": "Sessão necessária"
+          },
+          "409": {
+            "description": "Versão desatualizada"
+          },
+          "422": {
+            "description": "Regra de negócio não satisfeita",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/x-www-form-urlencoded": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "username": {
+                    "type": "string"
+                  },
+                  "password": {
+                    "type": "string",
+                    "format": "password"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/documents/{id}/records": {
+      "get": {
+        "summary": "Registos publicados a partir de um original",
+        "responses": {
+          "200": {
+            "description": "Operação concluída",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "invoices": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/Invoice"
+                      }
+                    },
+                    "movements": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/Movement"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Sessão necessária"
+          },
+          "409": {
+            "description": "Versão desatualizada"
+          },
+          "422": {
+            "description": "Regra de negócio não satisfeita",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
+      }
+    },
+    "/reconciliation/summary": {
+      "get": {
+        "summary": "Saldo do período e montante ainda por reconciliar",
+        "responses": {
+          "200": {
+            "description": "Operação concluída",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "closing": {
+                      "$ref": "#/components/schemas/Decimal"
+                    },
+                    "opening": {
+                      "$ref": "#/components/schemas/Decimal"
+                    },
+                    "change": {
+                      "$ref": "#/components/schemas/Decimal"
+                    },
+                    "outstanding": {
+                      "$ref": "#/components/schemas/Decimal"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Sessão necessária"
+          },
+          "409": {
+            "description": "Versão desatualizada"
+          },
+          "422": {
+            "description": "Regra de negócio não satisfeita",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "year",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "integer"
+            }
+          },
+          {
+            "name": "month",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer"
+            }
+          }
+        ]
+      }
+    },
+    "/reconciliation/ai-suggestions": {
+      "get": {
+        "summary": "Ordenações de candidatos para a versão atual, sem confirmação automática",
+        "responses": {
+          "200": {
+            "description": "Operação concluída",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "invoiceId": {
+                        "type": "string",
+                        "format": "uuid"
+                      },
+                      "model": {
+                        "type": "string"
+                      },
+                      "summary": {
+                        "type": "string"
+                      },
+                      "rankedCandidates": {
+                        "type": "array",
+                        "items": {
+                          "type": "object"
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Sessão necessária"
+          },
+          "409": {
+            "description": "Versão desatualizada"
+          },
+          "422": {
+            "description": "Regra de negócio não satisfeita",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

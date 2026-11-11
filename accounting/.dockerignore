@@ -1,0 +1,9 @@
+**/target
+**/node_modules
+**/dist
+**/.angular
+**/.venv
+**/__pycache__
+data
+.env
+**/*.backup

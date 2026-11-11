@@ -1,0 +1,51 @@
+services:
+  postgres:
+    image: postgres:18
+    environment:
+      POSTGRES_DB: accounting
+      POSTGRES_USER: accounting
+      POSTGRES_PASSWORD: ${DATABASE_PASSWORD:?Define DATABASE_PASSWORD}
+    volumes:
+      - postgres:/var/lib/postgresql
+    healthcheck:
+      test: [CMD-SHELL, "pg_isready -U accounting -d accounting"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    restart: unless-stopped
+  documents:
+    build: ./document-worker
+    volumes:
+      - models:/models
+    environment:
+      OCR_THREADS: 2
+    restart: unless-stopped
+  app:
+    build: .
+    environment:
+      SPRING_PROFILES_ACTIVE: ${SPRING_PROFILES_ACTIVE:-dev}
+      BIND_ADDRESS: 0.0.0.0
+      DATABASE_URL: jdbc:postgresql://postgres:5432/accounting
+      DATABASE_USER: accounting
+      DATABASE_PASSWORD: ${DATABASE_PASSWORD:?Define DATABASE_PASSWORD}
+      ADMIN_USERNAME: ${ADMIN_USERNAME:-gestor}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:?Define ADMIN_PASSWORD}
+      DOCUMENT_STORAGE: /data/documents
+      DOCUMENT_WORKER_URL: http://documents:8090
+      OLLAMA_URL: ${OLLAMA_URL:-http://host.docker.internal:11434}
+    ports:
+      - "127.0.0.1:8081:8081"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - documents:/data/documents
+    depends_on:
+      postgres:
+        condition: service_healthy
+      documents:
+        condition: service_started
+    restart: unless-stopped
+volumes:
+  postgres:
+  documents:
+  models:

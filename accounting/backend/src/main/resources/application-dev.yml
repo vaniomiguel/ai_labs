@@ -1,0 +1,7 @@
+spring:
+  datasource:
+    password: ${DATABASE_PASSWORD:accounting-dev}
+accounting:
+  admin-password: ${ADMIN_PASSWORD:alterar-em-desenvolvimento}
+server:
+  address: ${BIND_ADDRESS:127.0.0.1}

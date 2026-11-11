@@ -1,0 +1,141 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "draft": {
+      "type": "object",
+      "properties": {
+        "periodStart": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "periodEnd": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "openingBalance": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "closingBalance": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "movements": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "bookedOn": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "valueOn": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "occurredAt": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "description": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "bankReference": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "amount": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "currency": {
+                "type": "string"
+              },
+              "direction": {
+                "enum": [
+                  "DEBIT",
+                  "CREDIT",
+                  null
+                ]
+              }
+            },
+            "required": [
+              "bookedOn",
+              "description",
+              "amount",
+              "direction",
+              "currency"
+            ]
+          }
+        }
+      },
+      "required": [
+        "movements"
+      ]
+    },
+    "evidence": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "field": {
+            "type": "string"
+          },
+          "quote": {
+            "type": "string"
+          },
+          "page": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "reason": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "field",
+          "quote"
+        ]
+      }
+    },
+    "issues": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    }
+  },
+  "required": [
+    "draft",
+    "evidence",
+    "issues"
+  ]
+}

@@ -1,0 +1,1355 @@
+@if(!user()){
+<main class="login-page">
+  <section class="login-intro">
+    <div class="brand">
+      <span class="brand-mark">c</span>conta<span class="brand-dot">.</span>
+    </div>
+    <p class="eyebrow">CLAREZA EM CADA MOVIMENTO</p>
+    <h1>As contas da empresa.<br />O teu saldo.<br />Tudo no mesmo lugar.</h1>
+    <p>
+      Documentos, pagamentos e decisões com um histórico que podes consultar.
+    </p>
+  </section>
+  <form class="login-card" (ngSubmit)="login()">
+    <p class="eyebrow">O TEU ESPAÇO</p>
+    <h2>Bem-vindo de volta</h2>
+    <p>Inicia sessão para consultar as tuas contas.</p>
+    <label
+      >Utilizador<input
+        name="username"
+        autocomplete="username"
+        [(ngModel)]="username"
+        required /></label
+    ><label
+      >Palavra-passe<input
+        type="password"
+        name="password"
+        autocomplete="current-password"
+        [(ngModel)]="password"
+        required /></label
+    >@if(error()){
+    <p class="error" role="alert">{{error()}}</p>
+    }<button mat-flat-button type="submit">Entrar →</button
+    ><small>Os documentos ficam guardados no teu servidor.</small>
+  </form>
+</main>
+} @else {
+<div class="workspace">
+  <aside class="sidebar">
+    <div class="brand">
+      <span class="brand-mark">c</span>conta<span class="brand-dot">.</span>
+    </div>
+    <div class="company">
+      <span class="company-avatar">E</span>
+      <div>
+        <strong>A minha empresa</strong><small>Despesas e reconciliação</small>
+      </div>
+    </div>
+    <p class="nav-caption">ESPAÇO DE TRABALHO</p>
+    <nav aria-label="Navegação principal">
+      @for(item of navigation;track item[0]){<button
+        [class.active]="view()===item[0]"
+        (click)="navigate(item[0])"
+      >
+        <span class="nav-icon">{{item[1]}}</span
+        >{{item[2]}}@if(item[0]==='alerts'&&counts().alerts){<b
+          class="nav-count"
+          >{{counts().alerts}}</b
+        >}</button
+      >}
+    </nav>
+    <div class="sidebar-footer">
+      <span class="local-dot"></span><span>Guardado no teu servidor</span>
+    </div>
+    <button class="user-menu" (click)="logout()">
+      <span class="avatar">{{user().slice(0,1).toUpperCase()}}</span
+      ><span>{{user()}}<small>Terminar sessão</small></span
+      ><span>↪</span>
+    </button>
+  </aside>
+  <main class="main">
+    <header class="topbar">
+      <span
+        >Contabilidade <span class="crumb">/</span>
+        <strong>{{title()}}</strong></span
+      >
+      <div class="top-actions">
+        @if(counts().jobs){<span class="job-indicator"
+          >◌ {{counts().jobs}} em processamento</span
+        >}<button
+          class="icon-button"
+          aria-label="Atualizar dados"
+          (click)="refresh()"
+        >
+          ↻</button
+        ><span class="avatar small">{{user().slice(0,1).toUpperCase()}}</span>
+      </div>
+    </header>
+    <div class="content">
+      <div class="page-heading">
+        <div>
+          <p class="eyebrow">A MINHA EMPRESA</p>
+          <h1>{{title()}}</h1>
+          <p>
+            {{view()==='reconciliation'?'Cada despesa, ligada ao pagamento
+            certo.':view()==='documents'?'Originais guardados. Dados extraídos.
+            Tudo rastreável.':view()==='balances'?'A evolução do saldo, mês a
+            mês e ano a ano.':'Consulta, organiza e revê os teus registos.'}}
+          </p>
+        </div>
+        <div class="heading-actions">
+          <button mat-stroked-button (click)="newRecord('MOVEMENT')">
+            + Movimento</button
+          ><button mat-flat-button (click)="newRecord('INVOICE')">
+            + Nova fatura
+          </button>
+        </div>
+      </div>
+      @if(error()){
+      <div class="error banner" role="alert">
+        {{error()}}<button aria-label="Fechar mensagem" (click)="error.set('')">
+          ×
+        </button>
+      </div>
+      } @if(notice()){
+      <div class="success banner" role="status">
+        {{notice()}}<button
+          aria-label="Fechar mensagem"
+          (click)="notice.set('')"
+        >
+          ×
+        </button>
+      </div>
+      }
+      @if(['reconciliation','invoices','movements','balances','history'].includes(view())){
+      <section class="filter-bar" aria-label="Filtros">
+        <label
+          >Ano<input
+            type="number"
+            min="2016"
+            max="2100"
+            [(ngModel)]="filters.year"
+            (change)="filters.page=0;refresh()" /></label
+        ><label
+          >Mês<select
+            [(ngModel)]="filters.month"
+            (change)="filters.page=0;refresh()"
+          >
+            <option value="">Todo o ano</option>
+            @for(month of months;track $index){
+            <option [value]="$index+1">{{month}}</option>
+            }
+          </select></label
+        ><label class="search-field"
+          >Pesquisar<input
+            [(ngModel)]="filters.q"
+            (keyup.enter)="filters.page=0;refresh()"
+            placeholder="Fornecedor, descrição, texto…" /></label
+        ><button mat-stroked-button (click)="filters.page=0;refresh()">
+          Pesquisar
+        </button>
+        <details class="advanced-filters">
+          <summary>Mais filtros</summary>
+          <div class="filter-popover form-grid">
+            <label
+              >Dia<input
+                type="number"
+                [(ngModel)]="filters.day"
+                min="1"
+                max="31" /></label
+            ><label>Desde<input type="date" [(ngModel)]="filters.from" /></label
+            ><label>Até<input type="date" [(ngModel)]="filters.to" /></label
+            ><label
+              >Categoria<select [(ngModel)]="filters.category">
+                <option value="">Todas</option>
+                @for(c of state().categories;track c.id){
+                <option [value]="c.name">{{c.name}}</option>
+                }
+              </select></label
+            ><label
+              >Revisão<select [(ngModel)]="filters.status">
+                <option value="">Todos</option>
+                @for(s of
+                ['OPEN','AUTOMATIC','MANUAL','CORRECTED','EDITED'];track s){
+                <option [value]="s">{{labels[s]}}</option>
+                }
+              </select></label
+            ><label
+              >Direção<select [(ngModel)]="filters.direction">
+                <option value="">Ambas</option>
+                <option value="DEBIT">Débito</option>
+                <option value="CREDIT">Crédito</option>
+              </select></label
+            ><label
+              >Montante mínimo<input
+                [(ngModel)]="filters.min"
+                inputmode="decimal" /></label
+            ><label
+              >Montante máximo<input
+                [(ngModel)]="filters.max"
+                inputmode="decimal" /></label
+            ><label>Hora<input type="time" [(ngModel)]="filters.time" /></label
+            ><button mat-flat-button (click)="filters.page=0;refresh()">
+              Aplicar filtros
+            </button>
+          </div>
+        </details>
+      </section>
+      } @if(view()==='reconciliation'||view()==='balances'){
+      <section class="summary-grid">
+        <article class="summary-card featured">
+          <span>{{filters.month?'Saldo no fim do mês':'Saldo do ano'}}</span
+          ><strong>{{money(currentMonth()?.closing??'0.00')}}</strong
+          ><small
+            >{{filters.month?months[+filters.month-1]:filters.year}} ·
+            {{filters.month?'Acumulado dentro do ano':'Cada ano começa em
+            zero'}}</small
+          >
+        </article>
+        <article class="summary-card">
+          <span
+            >{{filters.month?'Saldo transitado':'Saldo inicial do ano'}}</span
+          ><strong>{{money(currentMonth()?.opening??'0.00')}}</strong
+          ><small
+            >{{filters.month?'Do mês anterior, no mesmo ano':'Sem transporte
+            entre anos'}}</small
+          >
+        </article>
+        <article class="summary-card">
+          <span>Faturas por reconciliar</span
+          ><strong>{{money(currentMonth()?.outstanding??'0.00')}}</strong
+          ><small>Faturas validadas emitidas neste período</small>
+        </article>
+        <article class="summary-card">
+          <span>Precisam da tua atenção</span
+          ><strong>{{counts().alerts}} <em>alertas</em></strong
+          ><button class="text-button" (click)="navigate('alerts')">
+            Rever agora →
+          </button>
+        </article>
+      </section>
+      } @if(view()==='reconciliation'||view()==='invoices'){
+      <section class="panel">
+        <div class="section-heading">
+          <div>
+            <h2>
+              {{view()==='reconciliation'?'Despesas e pagamentos':'Todas as
+              faturas'}} <span class="count">{{state().invoiceTotal}}</span>
+            </h2>
+            <p>O valor por reconciliar é independente do saldo anual.</p>
+          </div>
+          @if(view()==='reconciliation'){<button
+            mat-stroked-button
+            (click)="reconcile()"
+          >
+            ⇄ Reconciliar</button
+          >}
+        </div>
+        <div class="table-scroll">
+          <table>
+            <thead>
+              <tr>
+                <th>Data</th>
+                <th>Fatura / fornecedor</th>
+                <th>Categorias</th>
+                <th class="number">Total</th>
+                <th class="number">Por reconciliar</th>
+                <th>Estado</th>
+                <th></th>
+              </tr>
+            </thead>
+            <tbody>
+              @for(i of state().invoices;track i.id){
+              <tr [class.pending]="i.reviewStatus==='OPEN'">
+                <td class="nowrap">{{i.issuedOn||'Em falta'}}</td>
+                <td>
+                  <button class="row-title" (click)="editRecord('INVOICE',i)">
+                    {{i.supplier||'Fornecedor por identificar'}}</button
+                  ><small
+                    >{{i.number||'Sem número'}} ·
+                    {{labels[i.origin]||i.author||i.origin}}</small
+                  >@if(i.aiReview?.state==='REVIEWED'){<small
+                    >✧ Revisto por IA · {{i.aiReview.model}}</small
+                  >}@else if(i.aiReview?.state==='PENDING'){<small
+                    >✧ Revisão de IA agendada</small
+                  >}@else if(i.aiReview?.state==='FAILED'){<small
+                    >Revisão de IA com falha</small
+                  >}
+                </td>
+                <td>
+                  <div class="tags">
+                    @for(c of i.categories;track c){<button
+                      class="tag"
+                      (click)="filters.category=c;refresh()"
+                    >
+                      {{c}}</button
+                    >}
+                  </div>
+                </td>
+                <td class="number">{{money(i.total)}}</td>
+                <td class="number">{{money(i.remaining)}}</td>
+                <td>
+                  <span
+                    class="badge"
+                    [class.warning]="i.reviewStatus==='OPEN'"
+                    [class.processing]="i.reconciliationStatus==='PROCESSING'&&i.reviewStatus!=='OPEN'"
+                    >{{labels[i.reviewStatus==='OPEN'?'OPEN':i.reconciliationStatus]}}</span
+                  >
+                </td>
+                <td>
+                  <div class="row-actions">
+                    <button
+                      class="text-button"
+                      (click)="editRecord('INVOICE',i)"
+                    >
+                      Editar</button
+                    >@if(i.documentId){<button
+                      class="text-button"
+                      (click)="openDocument(i.documentId)"
+                    >
+                      Original</button
+                    >}<button
+                      class="icon-button danger"
+                      aria-label="Apagar fatura"
+                      (click)="requestRemoval('INVOICE',i)"
+                    >
+                      ×
+                    </button>
+                  </div>
+                </td>
+              </tr>
+              @if(view()==='reconciliation'){
+              <tr class="payment-detail">
+                <td></td>
+                <td colspan="6">
+                  <div class="payment-links">
+                    @if(aiFor(i.id);as suggestion){
+                    <details class="ai-suggestion">
+                      <summary>✧ Sugestão da IA · {{suggestion.model}}</summary>
+                      <p>{{suggestion.summary}}</p>
+                      @for(rank of suggestion.rankedCandidates;track
+                      rank.movementId){
+                      <div>
+                        <span>{{rank.reason}}</span
+                        ><button
+                          class="text-button"
+                          (click)="assign(i,{movementId:rank.movementId,amount:i.remaining})"
+                        >
+                          Rever associação →
+                        </button>
+                      </div>
+                      }
+                    </details>
+                    }@for(a of allocationsFor(i.id);track a.id){
+                    <div class="payment-link">
+                      <span class="match-icon">✓</span
+                      ><span
+                        >{{movementName(a.movementId)}}<small
+                          >{{a.evidence}} ·
+                          {{labels[a.origin]||a.author}}</small
+                        ></span
+                      ><strong
+                        >{{a.reversesId?'Estorno ·
+                        ':''}}{{money(a.amount)}}</strong
+                      ><button class="text-button" (click)="reverse(a)">
+                        Estornar</button
+                      ><button class="text-button" (click)="undo(a)">
+                        Desfazer
+                      </button>
+                    </div>
+                    } @if(i.reviewStatus!=='OPEN'&&i.remaining!=='0.00'){
+                    <div class="suggestion-row">
+                      @for(c of candidatesFor(i.id);track c.movementId){<button
+                        class="suggestion"
+                        (click)="assign(i,c)"
+                      >
+                        <span>◇</span>{{movementName(c.movementId)}}
+                        <strong>{{money(c.amount)}}</strong
+                        ><small>{{c.reason}}</small></button
+                      >}<button class="text-button" (click)="assign(i)">
+                        + Associar movimento
+                      </button>
+                    </div>
+                    } @if(i.reviewStatus==='OPEN'){<span class="hint"
+                      >Fora dos saldos até os dados serem validados.</span
+                    >}
+                  </div>
+                </td>
+              </tr>
+              } }@empty{
+              <tr>
+                <td colspan="7">
+                  <div class="empty-state">
+                    <span>▤</span>
+                    <h3>Ainda não há faturas neste período</h3>
+                    <p>
+                      Importa os documentos ou cria a primeira fatura
+                      manualmente.
+                    </p>
+                    <button mat-stroked-button (click)="navigate('documents')">
+                      Importar documentos
+                    </button>
+                  </div>
+                </td>
+              </tr>
+              }
+            </tbody>
+          </table>
+        </div>
+        <div class="panel-footer">
+          <span
+            >{{loading()?'A atualizar…':'Valores em EUR · categorias são
+            etiquetas e podem sobrepor-se'}}</span
+          >
+          <div>
+            <button
+              class="text-button"
+              [disabled]="filters.page===0"
+              (click)="filters.page=filters.page-1;refresh()"
+            >
+              ← Anterior</button
+            ><span>Página {{filters.page+1}}</span
+            ><button
+              class="text-button"
+              [disabled]="(filters.page+1)*100>=state().invoiceTotal"
+              (click)="filters.page=filters.page+1;refresh()"
+            >
+              Seguinte →
+            </button>
+          </div>
+        </div>
+      </section>
+      } @if(view()==='movements'){
+      <section class="panel">
+        <div class="section-heading">
+          <h2>
+            Movimentos bancários
+            <span class="count">{{state().movementTotal}}</span>
+          </h2>
+          <button
+            mat-stroked-button
+            (click)="navigate('documents');uploadKind='STATEMENT'"
+          >
+            Importar extrato
+          </button>
+        </div>
+        <div class="table-scroll">
+          <table>
+            <thead>
+              <tr>
+                <th>Data / hora</th>
+                <th>Descrição</th>
+                <th>Direção</th>
+                <th>Classificação</th>
+                <th class="number">Montante</th>
+                <th>Revisão</th>
+                <th></th>
+              </tr>
+            </thead>
+            <tbody>
+              @for(m of state().movements;track m.id){
+              <tr [class.pending]="m.reviewStatus==='OPEN'">
+                <td>
+                  {{m.bookedOn||'Em falta'}}<small>{{m.occurredAt||''}}</small>
+                </td>
+                <td>
+                  <button class="row-title" (click)="editRecord('MOVEMENT',m)">
+                    {{m.description||'Descrição por identificar'}}</button
+                  ><small>{{m.bankReference}}</small
+                  >@if(m.aiReview?.state==='REVIEWED'){<small
+                    >✧ Revisto por IA · {{m.aiReview.model}}</small
+                  >}@else if(m.aiReview?.state==='PENDING'){<small
+                    >✧ Revisão de IA agendada</small
+                  >}
+                </td>
+                <td>
+                  <span [class.negative]="m.direction==='DEBIT'"
+                    >{{m.direction==='DEBIT'?'↗':'↙'}}
+                    {{labels[m.direction]}}</span
+                  >
+                </td>
+                <td>{{labels[m.kind]}}</td>
+                <td class="number">
+                  {{money(m.amount)}}<small
+                    >Disponível {{money(m.remaining)}}</small
+                  >
+                </td>
+                <td>
+                  <span class="badge" [class.warning]="m.reviewStatus==='OPEN'"
+                    >{{labels[m.reviewStatus]}}</span
+                  >
+                </td>
+                <td>
+                  <div class="row-actions">
+                    <button
+                      class="text-button"
+                      (click)="editRecord('MOVEMENT',m)"
+                    >
+                      Editar</button
+                    >@if(m.documentId){<button
+                      class="text-button"
+                      (click)="openDocument(m.documentId)"
+                    >
+                      Extrato</button
+                    >}<button
+                      class="icon-button danger"
+                      aria-label="Apagar movimento"
+                      (click)="requestRemoval('MOVEMENT',m)"
+                    >
+                      ×
+                    </button>
+                  </div>
+                </td>
+              </tr>
+              }@empty{
+              <tr>
+                <td colspan="7" class="empty-state">
+                  Sem movimentos neste período.
+                </td>
+              </tr>
+              }
+            </tbody>
+          </table>
+        </div>
+        <div class="panel-footer">
+          <span
+            >Só transferências explicitamente classificadas afetam o saldo sem
+            uma fatura.</span
+          >
+          <div>
+            <button
+              class="text-button"
+              [disabled]="filters.page===0"
+              (click)="filters.page=filters.page-1;refresh()"
+            >
+              ← Anterior</button
+            ><button
+              class="text-button"
+              [disabled]="(filters.page+1)*100>=state().movementTotal"
+              (click)="filters.page=filters.page+1;refresh()"
+            >
+              Seguinte →
+            </button>
+          </div>
+        </div>
+      </section>
+      } @if(view()==='documents'||view()==='history'){
+      <section class="upload-panel">
+        <div class="upload-symbol">↥</div>
+        <div>
+          <h2>Acrescentar documentos</h2>
+          <p>
+            PDF, Excel ou arquivo ZIP. Os originais ficam sempre disponíveis.
+          </p>
+        </div>
+        <div class="upload-controls">
+          <label
+            >Tipo<select [(ngModel)]="uploadKind">
+              @for(k of ['INVOICE','STATEMENT','HISTORY','ARCHIVE'];track k){
+              <option [value]="k">{{labels[k]}}</option>
+              }
+            </select></label
+          >@if(uploadKind==='STATEMENT'||uploadKind==='ARCHIVE'){<label
+            >Conta<select [(ngModel)]="uploadAccount">
+              <option value="">Selecionar</option>
+              @for(a of state().accounts;track a.id){
+              <option [value]="a.id">{{a.name}}</option>
+              }
+            </select></label
+          >}<label class="file-button" [class.disabled]="uploading()"
+            >{{uploading()?'A enviar…':'Escolher ficheiros'}}<input
+              type="file"
+              multiple
+              accept=".pdf,.xlsx,.xls,.zip"
+              [disabled]="uploading()"
+              (change)="upload($event)"
+          /></label>
+        </div>
+      </section>
+      } @if(view()==='documents'){ @if(counts().alerts){<button
+        class="alert-strip"
+        (click)="navigate('alerts')"
+      >
+        ◉ {{counts().alerts}} alertas precisam de revisão
+        <span>Consultar →</span></button
+      >}
+      <section class="panel">
+        <div class="section-heading">
+          <h2>Extrações e originais</h2>
+          <label class="search-field"
+            ><input [(ngModel)]="filters.q" placeholder="Procurar ficheiro"
+          /></label>
+        </div>
+        <div class="table-scroll">
+          <table>
+            <thead>
+              <tr>
+                <th>Documento</th>
+                <th>Tipo</th>
+                <th>Estado</th>
+                <th>Data</th>
+                <th></th>
+              </tr>
+            </thead>
+            <tbody>
+              @for(d of filteredDocuments();track d.id){
+              <tr>
+                <td>
+                  <button class="row-title" (click)="openDocument(d.id)">
+                    ▧ {{d.filename}}</button
+                  ><small>{{d.sourcePath||'Upload direto'}}</small>
+                </td>
+                <td>{{labels[d.kind]}}</td>
+                <td>
+                  <span class="badge" [class.warning]="d.status==='OPEN'"
+                    >{{labels[d.status]}}</span
+                  >
+                </td>
+                <td>{{d.createdAt|date:'dd/MM/yyyy HH:mm'}}</td>
+                <td>
+                  <button class="text-button" (click)="openDocument(d.id)">
+                    Consultar e editar →
+                  </button>
+                </td>
+              </tr>
+              }@empty{
+              <tr>
+                <td colspan="5" class="empty-state">
+                  Importa o primeiro documento para começar.
+                </td>
+              </tr>
+              }
+            </tbody>
+          </table>
+        </div>
+      </section>
+      <details class="panel details-panel">
+        <summary>
+          Processamento em segundo plano
+          <span class="count">{{counts().jobs}}</span>
+        </summary>
+        <table>
+          <thead>
+            <tr>
+              <th>Tarefa</th>
+              <th>Estado</th>
+              <th>Detalhe</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody>
+            @for(job of state().jobs;track job.id){
+            <tr>
+              <td>{{labels[job.kind]||job.kind}}</td>
+              <td>{{labels[job.state]}}</td>
+              <td>{{job.error}}</td>
+              <td>
+                @if(job.state==='FAILED'||job.state==='WAITING'){<button
+                  class="text-button"
+                  (click)="retry(job)"
+                >
+                  Tentar de novo</button
+                >}
+              </td>
+            </tr>
+            }
+          </tbody>
+        </table>
+      </details>
+      } @if(view()==='alerts'){
+      <section class="panel">
+        <div class="section-heading">
+          <div>
+            <h2>
+              Revisões pendentes <span class="count">{{counts().alerts}}</span>
+            </h2>
+            <p>
+              Guardar alterações não resolve o alerta. Valida os dados quando
+              estiverem corretos.
+            </p>
+          </div>
+        </div>
+        <div class="alert-list">
+          @for(a of state().alerts;track a.id){
+          <article class="alert-item" [class.resolved]="a.status==='RESOLVED'">
+            <span class="alert-icon">{{a.status==='OPEN'?'!':'✓'}}</span>
+            <div>
+              <strong>{{a.message}}</strong
+              ><small
+                >{{a.documentId?sourceName(a.documentId):'Registo manual ou
+                tarefa'}} · {{labels[a.status]}}</small
+              >@if(a.resolvedAt){<small
+                >{{a.resolvedBy}} · {{a.resolvedAt|date:'dd/MM/yyyy
+                HH:mm'}}</small
+              >}
+            </div>
+            <button mat-stroked-button (click)="openAlert(a)">
+              Consultar →
+            </button>
+          </article>
+          }@empty{
+          <div class="empty-state">
+            <span>✓</span>
+            <h3>Tudo em dia</h3>
+            <p>Não existem alertas para rever.</p>
+          </div>
+          }
+        </div>
+      </section>
+      } @if(view()==='balances'){
+      <section class="panel">
+        <div class="section-heading">
+          <h2>Evolução anual</h2>
+          <span class="hint">Sem transporte automático entre anos</span>
+        </div>
+        @for(year of state().years;track year.year){
+        <details class="year-detail" [open]="year.year===+filters.year">
+          <summary>
+            <strong>{{year.year}}</strong
+            ><span>Saldo final <b>{{money(year.months[11].closing)}}</b></span>
+          </summary>
+          <table>
+            <thead>
+              <tr>
+                <th>Mês</th>
+                <th class="number">Transitado</th>
+                <th class="number">Entradas</th>
+                <th class="number">Reduções</th>
+                <th class="number">Variação</th>
+                <th class="number">Saldo final</th>
+              </tr>
+            </thead>
+            <tbody>
+              @for(m of year.months;track m.month){
+              <tr>
+                <td>{{months[m.month-1]}}</td>
+                <td class="number">{{money(m.opening)}}</td>
+                <td class="number">{{money(m.increases)}}</td>
+                <td class="number">{{money(m.reductions)}}</td>
+                <td class="number">{{money(m.change)}}</td>
+                <td class="number"><strong>{{money(m.closing)}}</strong></td>
+              </tr>
+              @if(m.entries.length){
+              <tr>
+                <td colspan="6">
+                  <details>
+                    <summary>
+                      Consultar {{m.entries.length}} lançamentos de
+                      {{months[m.month-1]}}
+                    </summary>
+                    @for(entry of m.entries;track entry.id){
+                    <div class="ledger-detail">
+                      <span>{{entry.date}} · {{entry.explanation}}</span
+                      ><strong>{{money(entry.amount)}}</strong
+                      >@if(entry.documentId){<button
+                        mat-button
+                        (click)="openDocument(entry.documentId)"
+                      >
+                        Original ↗</button
+                      >}
+                    </div>
+                    }
+                  </details>
+                </td>
+              </tr>
+              } }
+            </tbody>
+          </table>
+        </details>
+        }
+      </section>
+      } @if(view()==='history'){
+      <section class="panel">
+        <div class="section-heading">
+          <div>
+            <h2>Referências do Excel</h2>
+            <p>
+              Os documentos e os movimentos confirmam os valores. O Excel
+              permite comparar o histórico.
+            </p>
+          </div>
+          <button mat-stroked-button (click)="loadLinkOptions()">
+            Escolher faturas para associar
+          </button>
+        </div>
+        <div class="table-scroll">
+          <table>
+            <thead>
+              <tr>
+                <th>Folha / linha</th>
+                <th>Data e descrição</th>
+                <th class="number">Recebido</th>
+                <th class="number">Pagamento</th>
+                <th class="number">Saldo</th>
+                <th>Estado / associação</th>
+              </tr>
+            </thead>
+            <tbody>
+              @for(row of filteredHistory();track row.id){
+              <tr>
+                <td>
+                  <button
+                    class="text-button"
+                    (click)="openDocument(row.documentId)"
+                  >
+                    {{row.sheet}} · {{row.rowNumber}}
+                  </button>
+                </td>
+                <td>{{row.date}}<small>{{row.description}}</small></td>
+                <td class="number">{{money(row.received)}}</td>
+                <td class="number">{{money(row.payment)}}</td>
+                <td class="number">{{money(row.balance)}}</td>
+                <td>
+                  <span class="badge">{{labels[row.status]}}</span
+                  >@if(row.invoiceId){<small>Fatura associada</small
+                  >}@else{<select
+                    #linkChoice
+                    (change)="link(row,linkChoice.value)"
+                  >
+                    <option value="">Associar fatura…</option>
+                    @for(i of allInvoices();track i.id){
+                    <option [value]="i.id">
+                      {{i.number||i.supplier}} · {{money(i.total)}}
+                    </option>
+                    }</select
+                  ><button class="text-button" (click)="fromLegacy(row)">
+                    Criar fatura a partir da linha</button
+                  >}
+                </td>
+              </tr>
+              }@empty{
+              <tr>
+                <td colspan="6" class="empty-state">
+                  Importa um Excel anual para consultar as referências.
+                </td>
+              </tr>
+              }
+            </tbody>
+          </table>
+        </div>
+      </section>
+      <details class="panel details-panel">
+        <summary>Mapeamento de Excel não reconhecido</summary>
+        <p>
+          Escolhe a linha dos títulos e a coluna que contém cada informação.
+        </p>
+        <div class="form-grid">
+          <label
+            >Tipo de Excel<select [(ngModel)]="mappingKind">
+              <option value="HISTORY">Histórico anual</option>
+              <option value="STATEMENT">Extrato bancário</option>
+            </select></label
+          ><label
+            >Linha dos títulos<input
+              type="number"
+              min="1"
+              [ngModel]="mapping.headerRow+1"
+              (ngModelChange)="mapping.headerRow=$event-1" /></label
+          >@for(field of
+          mappingKind==='HISTORY'?['date','description','received','payment','balance']:['date','description','debit','credit','amount'];track
+          field){<label
+            >{{mappingNames[field]}}<select [(ngModel)]="mapping[field]">
+              @for(column of columnNames;track $index){
+              <option [ngValue]="$index">Coluna {{column}}</option>
+              }
+            </select></label
+          >}
+        </div>
+        <button mat-stroked-button (click)="saveMapping(mappingKind)">
+          Guardar formato
+        </button>
+        <p class="hint">
+          Abre depois a extração e escolhe «Extrair novamente».
+        </p>
+      </details>
+      <section class="panel">
+        <div class="section-heading"><h2>Arquivos importados</h2></div>
+        @for(batch of state().imports;track batch.id){
+        <div class="simple-row">
+          <strong>{{batch.filename}}</strong
+          ><span
+            >{{batch.completedEntries}} entradas ·
+            {{labels[batch.status]}}</span
+          >
+        </div>
+        }
+      </section>
+      } @if(view()==='settings'){
+      <div class="settings-grid">
+        <section class="panel">
+          <div class="section-heading">
+            <div>
+              <h2>Contas da empresa</h2>
+              <p>Adiciona uma conta antes de importar extratos.</p>
+            </div>
+          </div>
+          <div class="settings-body">
+            @for(a of state().accounts;track a.id){
+            <div class="settings-row">
+              <label>Nome<input [(ngModel)]="a.name" /></label
+              ><label>IBAN<input [(ngModel)]="a.iban" /></label
+              ><button mat-stroked-button (click)="saveAccount(a)">
+                Guardar
+              </button>
+            </div>
+            }
+            <h3>Nova conta</h3>
+            <label>Nome<input [(ngModel)]="newAccount.name" /></label
+            ><label
+              >IBAN · opcional<input [(ngModel)]="newAccount.iban" /></label
+            ><button mat-flat-button (click)="saveAccount(newAccount)">
+              Adicionar conta
+            </button>
+          </div>
+        </section>
+        <section class="panel">
+          <div class="section-heading">
+            <div>
+              <h2>Categorias e nomes alternativos</h2>
+              <p>
+                As categorias são etiquetas; os respetivos totais podem
+                sobrepor-se.
+              </p>
+            </div>
+          </div>
+          <div class="settings-body">
+            @for(c of state().categories;track c.id){
+            <div class="settings-row">
+              <label>Nome<input [(ngModel)]="c.name" /></label
+              ><label
+                >Nomes alternativos · separar por ;<input
+                  [ngModel]="c.aliasesText??c.aliases.join('; ')"
+                  (ngModelChange)="c.aliasesText=$event" /></label
+              ><button mat-stroked-button (click)="saveCategory(c)">
+                Guardar</button
+              ><button
+                class="icon-button danger"
+                aria-label="Remover categoria"
+                (click)="deleteCategory(c)"
+              >
+                ×
+              </button>
+            </div>
+            }
+            <h3>Nova categoria</h3>
+            <label>Nome<input [(ngModel)]="newCategory.name" /></label
+            ><label
+              >Nomes alternativos<input
+                [(ngModel)]="newCategory.aliasesText" /></label
+            ><button mat-flat-button (click)="saveCategory(newCategory)">
+              Adicionar categoria
+            </button>
+          </div>
+        </section>
+      </div>
+      } @if(view()==='assistant'){ @if(assistant();as ai){
+      <section class="panel">
+        <div class="section-heading">
+          <div>
+            <h2>Modelos locais</h2>
+            <p>
+              Revisão de todos os casos, em segundo plano. Correspondências
+              ambíguas exigem a tua decisão.
+            </p>
+          </div>
+          <button mat-stroked-button (click)="loadAssistant()">
+            Atualizar modelos
+          </button>
+        </div>
+        <div class="settings-body">
+          @if(ai.error){
+          <p class="notice">
+            {{ai.error}}. As tarefas de revisão ficam a aguardar; os dados
+            validados por regras continuam disponíveis.
+          </p>
+          }
+          <div class="form-grid">
+            @for(task of
+            ['extract-invoice','extract-statement','review','categories','reconciliation'];track
+            task){<label
+              >{{task==='extract-invoice'?'Extração de
+              faturas':task==='extract-statement'?'Extração de
+              extratos':task==='review'?'Revisão':task==='reconciliation'?'Reconciliação':'Categorias'}}<select
+                [(ngModel)]="ai.selected[task]"
+              >
+                <option [value]="ai.selected[task]">
+                  {{ai.selected[task]}}
+                </option>
+                @for(model of ai.models;track
+                model.name){@if(model.name!==ai.selected[task]){
+                <option [value]="model.name" [disabled]="!model.completion">
+                  {{model.name}} {{!model.completion?'· incompatível (sem
+                  geração)':model.vision?'· texto e imagem':'· apenas texto'}}
+                </option>
+                }}
+              </select></label
+            >}
+          </div>
+          <button
+            mat-flat-button
+            [disabled]="!ai.models.length"
+            (click)="saveModels()"
+          >
+            Guardar modelos
+          </button>
+          <div class="window-setting">
+            <label
+              >Meses permitidos entre anos<input
+                type="number"
+                min="0"
+                max="120"
+                [(ngModel)]="ai.crossYearMonths" /></label
+            ><button mat-stroked-button (click)="saveWindow()">
+              Guardar e reconciliar
+            </button>
+          </div>
+          <p class="hint">
+            Dentro do mesmo ano, todos os meses são considerados. Mudar de
+            modelo não reprocessa automaticamente o histórico.
+          </p>
+        </div>
+      </section>
+      <details
+        class="panel details-panel recommendations"
+        [open]="!ai.models.length"
+      >
+        <summary>
+          Modelos recomendados para o teu servidor <span>65 GB · CPU</span>
+        </summary>
+        <p>{{ai.recommendations.note}}</p>
+        <ol>
+          @for(model of ai.recommendations.models;track model.name){
+          <li>
+            <a [href]="model.url" target="_blank" rel="noopener"
+              >{{model.name}} ↗</a
+            ><span>{{model.downloadSize}} · {{model.purpose}}</span>
+          </li>
+          }
+        </ol>
+        <p class="hint">
+          Especialistas de OCR a avaliar:
+          {{ai.recommendations.ocrCandidates.join(', ')}}. Recomendações
+          revistas em {{ai.recommendations.reviewedOn}}.
+        </p>
+      </details>
+      <section class="panel">
+        <div class="section-heading"><h2>Histórico de IA</h2></div>
+        @for(e of executions();track e.id){
+        <details class="execution">
+          <summary>
+            <span>{{e.task}} · <strong>{{e.model}}</strong></span
+            ><span>{{e.outcome}} · {{e.durationMs}} ms</span>
+          </summary>
+          <p class="hint">
+            {{e.createdAt|date:'dd/MM/yyyy HH:mm'}} · prompt {{e.promptVersion}}
+            · modelo {{e.digest}}
+          </p>
+          <pre>{{e.response}}</pre>
+        </details>
+        }@empty{
+        <div class="empty-state">
+          Ainda não existem execuções. O processamento começa quando um modelo
+          configurado estiver disponível.
+        </div>
+        }
+      </section>
+      } }
+      <footer class="content-footer">
+        Conta · Documentos e decisões com história
+        <span>EUR · Europe/Lisbon</span>
+      </footer>
+    </div>
+  </main>
+</div>
+} @if(editor();as data){
+<div class="modal-backdrop">
+  <section
+    class="dialog wide"
+    role="dialog"
+    aria-modal="true"
+    aria-label="Editar registo"
+  >
+    <header class="dialog-heading">
+      <div>
+        <p class="eyebrow">{{data.id?'EDITAR REGISTO':'REGISTO MANUAL'}}</p>
+        <h2>{{recordKind==='INVOICE'?'Fatura':'Movimento bancário'}}</h2>
+      </div>
+      <button
+        class="icon-button"
+        aria-label="Fechar editor"
+        (click)="editor.set(null)"
+      >
+        ×
+      </button>
+    </header>
+    <div class="dialog-body" [class.split-editor]="data.documentId">
+      <div class="editable-fields">
+        <record-fields
+          [kind]="recordKind"
+          [data]="data"
+          [accounts]="state().accounts"
+        /><label
+          >Documento de suporte · opcional<input
+            type="file"
+            accept=".pdf,.xls,.xlsx"
+            (change)="attach($event)"
+        /></label>
+        <details class="details-panel">
+          <summary>Histórico de alterações</summary>
+          @for(event of timeline();track event.id){
+          <p>
+            {{event.actor}} · {{event.action}} ·
+            {{event.createdAt|date:'dd/MM/yyyy HH:mm'}}
+          </p>
+          <pre>{{event.after|json}}</pre>
+          }
+        </details>
+      </div>
+      @if(data.documentId){<source-pdf [documentId]="data.documentId" />}
+    </div>
+    <footer class="dialog-footer">
+      @if(error()){<span class="error">{{error()}}</span>}<button
+        mat-stroked-button
+        [disabled]="working()"
+        (click)="saveRecord(false)"
+      >
+        Guardar rascunho</button
+      ><button
+        mat-flat-button
+        [disabled]="working()"
+        (click)="saveRecord(true)"
+      >
+        Validar e guardar
+      </button>
+    </footer>
+  </section>
+</div>
+} @if(reviewDocument();as doc){
+<div class="modal-backdrop">
+  <section
+    class="dialog review-dialog"
+    role="dialog"
+    aria-modal="true"
+    aria-label="Rever extração"
+  >
+    <header class="dialog-heading">
+      <div>
+        <p class="eyebrow">ORIGINAL E DADOS EXTRAÍDOS</p>
+        <h2>{{doc.filename}}</h2>
+        <small
+          >{{labels[doc.status]}} · {{doc.pages||'—'}} páginas · Original
+          preservado</small
+        >
+      </div>
+      <button
+        class="icon-button"
+        aria-label="Fechar revisão"
+        (click)="reviewDocument.set(null);activeAlert.set(null)"
+      >
+        ×
+      </button>
+    </header>
+    <div class="dialog-body split-editor">
+      <div class="source-column">
+        @if(doc.mediaType==='application/pdf'){<source-pdf
+          [documentId]="doc.id"
+        />}@else{<a
+          class="text-button"
+          [href]="'/api/v1/documents/'+doc.id+'/original'"
+          target="_blank"
+          >Descarregar original ↗</a
+        >@for(sheet of doc.layout?.sheets??[];track sheet.name){
+        <details class="sheet-preview" open>
+          <summary>{{sheet.name}}</summary>
+          <div class="table-scroll">
+            <table>
+              @for(row of sheet.cells;track $index){
+              <tr>
+                @for(cell of row;track $index){
+                <td>{{cell}}</td>
+                }
+              </tr>
+              }
+            </table>
+          </div>
+        </details>
+        }@if(!doc.layout?.sheets){
+        <p class="hint">
+          O original está arquivado. A extração ainda pode estar em
+          processamento.
+        </p>
+        }}
+      </div>
+      <div class="editable-fields">
+        @if(activeAlert();as alert){
+        <div class="notice">
+          <strong>{{alert.message}}</strong>
+          <div class="row-actions">
+            <button mat-stroked-button (click)="repair()">
+              ✧ Pedir tentativa de correção à IA</button
+            ><button class="text-button" (click)="refreshProposal()">
+              Atualizar proposta
+            </button>
+          </div>
+        </div>
+        @if(alert.proposal){
+        <details class="proposal" open>
+          <summary>Proposta da IA · requer a tua confirmação</summary>
+          @if(alert.proposal.draft){@for(change of proposalChanges();track
+          change.field){
+          <div class="proposal-change">
+            <strong>{{change.field}}</strong>
+            <div>
+              <pre>{{change.before|json}}</pre>
+              <span>→</span>
+              <pre>{{change.after|json}}</pre>
+            </div>
+          </div>
+          }<button
+            mat-flat-button
+            [disabled]="working()"
+            (click)="applyProposal()"
+          >
+            Aplicar proposta e validar</button
+          >}@else{
+          <pre>{{alert.proposal|json}}</pre>
+          }
+        </details>
+        }} @if(doc.draft?.issues?.length){
+        <details class="notice" open>
+          <summary>Verificações da extração</summary>
+          <ul>
+            @for(issue of doc.draft.issues;track $index){
+            <li>{{issue}}</li>
+            }
+          </ul>
+        </details>
+        }
+        <record-fields
+          [kind]="doc.kind"
+          [data]="doc.draft"
+          [accounts]="state().accounts"
+        />
+        <details class="details-panel">
+          <summary>Texto integral extraído</summary>
+          <pre>{{doc.text}}</pre>
+        </details>
+        <details class="details-panel">
+          <summary>Tentativas e evidências</summary>
+          @for(attempt of timeline();track attempt.id){
+          <h4>
+            {{attempt.engine}} · {{attempt.createdAt|date:'dd/MM/yyyy HH:mm'}}
+          </h4>
+          <pre>{{attempt.evidence|json}}</pre>
+          }
+        </details>
+      </div>
+    </div>
+    <footer class="dialog-footer">
+      @if(error()){<span class="error">{{error()}}</span>}<button
+        class="text-button"
+        (click)="reprocess()"
+      >
+        Extrair novamente</button
+      ><button
+        mat-stroked-button
+        [disabled]="working()"
+        (click)="saveDraft(false)"
+      >
+        Guardar sem resolver</button
+      ><button
+        mat-flat-button
+        [disabled]="doc.kind==='ARCHIVE'||doc.kind==='SUPPORT'"
+        (click)="saveDraft(true)"
+      >
+        Validar e resolver
+      </button>
+    </footer>
+  </section>
+</div>
+} @if(assignment();as data){
+<div class="modal-backdrop">
+  <section
+    class="dialog compact"
+    role="dialog"
+    aria-modal="true"
+    aria-label="Associar pagamento"
+  >
+    <header class="dialog-heading">
+      <h2>{{data.reversesId?'Estornar pagamento':'Associar movimento'}}</h2>
+      <button
+        class="icon-button"
+        (click)="assignment.set(null)"
+        aria-label="Fechar associação"
+      >
+        ×
+      </button>
+    </header>
+    <div class="dialog-body">
+      <p>
+        <strong>{{data.invoice.number||data.invoice.supplier}}</strong> · Por
+        reconciliar {{money(data.invoice.remaining)}}
+      </p>
+      <label
+        >Procurar movimento<input
+          #movementSearch
+          (keyup.enter)="searchAssignment(movementSearch.value)"
+          placeholder="Descrição; Enter para pesquisar" /></label
+      ><label
+        >Movimento<select [(ngModel)]="data.movementId">
+          <option value="">Selecionar</option>
+          @for(m of assignmentMovements();track m.id){
+          <option [value]="m.id">
+            {{m.bookedOn}} · {{m.description}} · {{labels[m.direction]}} ·
+            {{money(m.remaining)}}
+          </option>
+          }
+        </select></label
+      ><label
+        >Valor a atribuir<input
+          [(ngModel)]="data.amount"
+          inputmode="decimal" /></label
+      ><label
+        >Justificação<textarea [(ngModel)]="data.evidence" rows="2"></textarea>
+      </label>
+      <p class="hint">
+        Podes atribuir apenas parte do montante. O servidor verifica os valores
+        disponíveis e o período permitido.
+      </p>
+      @if(error()){
+      <p class="error">{{error()}}</p>
+      }
+    </div>
+    <footer class="dialog-footer">
+      <button mat-flat-button [disabled]="working()" (click)="allocate()">
+        Confirmar associação
+      </button>
+    </footer>
+  </section>
+</div>
+} @if(confirmDelete();as data){
+<div class="modal-backdrop">
+  <section
+    class="dialog compact"
+    role="dialog"
+    aria-modal="true"
+    aria-label="Eliminar registo"
+  >
+    <div class="dialog-body">
+      <h2>Eliminar este registo?</h2>
+      <p>
+        Os efeitos no saldo serão anulados. O original e o histórico ficam
+        preservados.
+      </p>
+      <strong>{{data.supplier||data.description}}</strong>
+    </div>
+    <footer class="dialog-footer">
+      <button mat-stroked-button (click)="confirmDelete.set(null)">
+        Cancelar</button
+      ><button mat-flat-button [disabled]="working()" (click)="removeRecord()">
+        Eliminar
+      </button>
+    </footer>
+  </section>
+</div>
+}

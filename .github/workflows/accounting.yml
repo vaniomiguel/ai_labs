@@ -1,0 +1,58 @@
+name: Conta
+
+on:
+  push:
+    paths: ["accounting/**", ".github/workflows/accounting.yml"]
+  pull_request:
+    paths: ["accounting/**", ".github/workflows/accounting.yml"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  application:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "25"
+          cache: maven
+          cache-dependency-path: accounting/backend/pom.xml
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: accounting/frontend/package-lock.json
+      - name: Compilar interface
+        working-directory: accounting/frontend
+        run: npm ci && npm run build
+      - name: Incluir interface na aplicação
+        run: mkdir -p accounting/backend/src/main/resources/static && cp -R accounting/frontend/dist/conta/browser/. accounting/backend/src/main/resources/static/
+      - name: Verificar aplicação e PostgreSQL 18
+        run: mvn -B -f accounting/backend/pom.xml verify
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: conta-testes-java
+          path: accounting/backend/target/surefire-reports/
+  documents:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Preparar dependências documentais CPU
+        working-directory: accounting/document-worker
+        run: python -m pip install uv==0.13.6 && uv sync --frozen --group test
+      - name: Verificar serviço documental
+        working-directory: accounting/document-worker
+        run: uv run --frozen pytest
+      - name: Verificar avaliador
+        working-directory: accounting/evaluation
+        run: python -m unittest -v

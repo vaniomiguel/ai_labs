@@ -1,0 +1,41 @@
+{
+  "reviewedOn": "2026-11-11",
+  "hardware": "65 GB RAM, apenas CPU",
+  "note": "Ordem inicial de avaliação, não resultados medidos nestas faturas. Os tamanhos são de download, não de memória em execução.",
+  "models": [
+    {
+      "name": "qwen3.5:9b",
+      "downloadSize": "6,6–7,6 GB",
+      "purpose": "Modelo inicial para extração e revisão",
+      "url": "https://ollama.com/library/qwen3.5:9b"
+    },
+    {
+      "name": "qwen3.5:4b",
+      "downloadSize": "3,3–4 GB",
+      "purpose": "Alternativa para menor latência em CPU",
+      "url": "https://ollama.com/library/qwen3.5:4b"
+    },
+    {
+      "name": "gemma4:12b",
+      "downloadSize": "7,7–8 GB",
+      "purpose": "Alternativa multimodal a avaliar",
+      "url": "https://ollama.com/library/gemma4:12b"
+    },
+    {
+      "name": "qwen3.6:35b",
+      "downloadSize": "23 GB",
+      "purpose": "MoE para lotes exigentes; medir velocidade",
+      "url": "https://ollama.com/library/qwen3.6:35b"
+    },
+    {
+      "name": "qwen3.8:27b",
+      "downloadSize": "18 GB",
+      "purpose": "Candidato maior para avaliação",
+      "url": "https://ollama.com/library/qwen3.8:27b"
+    }
+  ],
+  "ocrCandidates": [
+    "glm-ocr",
+    "deepseek-ocr"
+  ]
+}

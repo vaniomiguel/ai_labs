@@ -88,6 +88,8 @@ Open [http://localhost:8080/personas](http://localhost:8080/personas) to start a
 
 The JSON API provides `GET /api/personas/models`, `POST /api/personas/conversations`, `GET /api/personas/conversations/{id}`, `POST /api/personas/conversations/{id}/stop`, `POST /api/personas/conversations/{id}/restart`, and `DELETE /api/personas/conversations/{id}`. Create and restart accept a topic and two personas, each with `name`, `model`, and `personality`. The service keeps at most 100 conversations; delete old ones through the API to free space.
 
+`PersonaConversationReplyService` owns the shared persona instructions and builds a role-based message history. Each speaker sees its own earlier replies as assistant messages and the other speaker's replies as user messages. `OllamaPersonaClient` only maps those messages to Ollama's chat API; another model adapter can reuse the same conversation logic through `ModelChatClient`.
+
 ### Company brochure
 
 The brochure API reads a website, selects relevant linked pages with the configured model, and returns a Markdown brochure:

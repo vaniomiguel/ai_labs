@@ -1,0 +1,428 @@
+package pt.conta.ai;
+
+import static pt.conta.shared.Inputs.*;
+
+import java.io.ByteArrayOutputStream;
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.util.*;
+import javax.imageio.ImageIO;
+import org.apache.pdfbox.Loader;
+import org.apache.pdfbox.rendering.PDFRenderer;
+import org.springframework.stereotype.Service;
+import pt.conta.bank.BankMovement;
+import pt.conta.document.*;
+import pt.conta.invoice.*;
+import pt.conta.jobs.JobQueue;
+import pt.conta.ledger.BookkeepingService;
+import pt.conta.reconciliation.Allocation;
+import pt.conta.review.Alert;
+import pt.conta.shared.*;
+
+/**
+ * Bounded document/model orchestration; external calls never execute inside financial transactions.
+ */
+@Service
+public class AiOrchestrator {
+  private final Store store;
+  private final AiProvider provider;
+  private final PromptCatalog prompts;
+  private final Settings settings;
+  private final AiResults results;
+  private final DocumentPublisher publisher;
+  private final DocumentStorage storage;
+  private final BookkeepingService book;
+
+  public AiOrchestrator(
+      Store store,
+      AiProvider provider,
+      PromptCatalog prompts,
+      Settings settings,
+      AiResults results,
+      DocumentPublisher publisher,
+      DocumentStorage storage,
+      BookkeepingService book) {
+    this.store = store;
+    this.provider = provider;
+    this.prompts = prompts;
+    this.settings = settings;
+    this.results = results;
+    this.publisher = publisher;
+    this.storage = storage;
+    this.book = book;
+  }
+
+  /** Executes one extraction, review or explicitly requested repair task. */
+  public void process(JobQueue.Claim job) throws Exception {
+    if (job.kind().equals("NORMALIZE_CATEGORIES")) {
+      normalizeCategories(job);
+      return;
+    }
+    SourceDocument doc = null;
+    Object subject;
+    BaseEntity target;
+    boolean suggest = job.kind().equals("SUGGEST_RECONCILIATION");
+    var candidateContext =
+        suggest
+            ? book.candidateContext(job.target(), book.candidates())
+            : List.<Map<String, Object>>of();
+    if (suggest
+        && (candidateContext.isEmpty()
+            || !Hashes.sha256(Json.write(candidateContext))
+                .equals(Json.read(job.payload()).path("fingerprint").asText()))) return;
+    if (job.kind().equals("REVIEW_INVOICE") || suggest) {
+      var i = store.get(Invoice.class, job.target());
+      target = i;
+      if (i.deleted) return;
+      subject = book.invoiceView(i);
+      if (i.documentId != null) doc = store.get(SourceDocument.class, i.documentId);
+    } else if (job.kind().equals("REVIEW_MOVEMENT")) {
+      var m = store.get(BankMovement.class, job.target());
+      target = m;
+      if (m.deleted) return;
+      subject = book.movementView(m);
+      if (m.documentId != null) doc = store.get(SourceDocument.class, m.documentId);
+    } else if (job.kind().equals("REVIEW_ALLOCATION")) {
+      var a = store.get(Allocation.class, job.target());
+      target = a;
+      if (!a.active) return;
+      var invoice = store.get(Invoice.class, a.invoiceId);
+      subject =
+          map(
+              "allocation",
+              book.allocationView(a),
+              "invoice",
+              book.invoiceView(invoice),
+              "movement",
+              book.movementView(store.get(BankMovement.class, a.movementId)));
+      if (invoice.documentId != null) doc = store.get(SourceDocument.class, invoice.documentId);
+    } else if (job.kind().equals("REPAIR_ALERT")) {
+      var alert = store.get(Alert.class, job.target());
+      target = alert;
+      if (alert.documentId == null || !alert.status.equals("OPEN")) return;
+      doc = store.get(SourceDocument.class, alert.documentId);
+      subject = Json.read(doc.draft);
+    } else {
+      doc = store.get(SourceDocument.class, job.target());
+      target = doc;
+      if (doc.deleted) return;
+      subject = Json.read(doc.draft);
+    }
+    if (target.version != job.revision()) return;
+    boolean repair = job.kind().equals("REPAIR_ALERT");
+    boolean extract =
+        (job.kind().equals("AI_EXTRACT_DOCUMENT") || repair)
+            && doc != null
+            && Set.of("INVOICE", "STATEMENT").contains(doc.kind);
+    String task =
+        suggest
+            ? "reconciliation"
+            : extract
+                ? doc.kind.equals("STATEMENT") ? "extract-statement" : "extract-invoice"
+                : "review";
+    String selected = settings.get("model:" + task, "qwen3.5:9b");
+    var model =
+        provider.models().stream()
+            .filter(AiProvider.Model::completion)
+            .filter(m -> m.name().equals(selected))
+            .findFirst()
+            .orElseThrow(
+                () ->
+                    new OllamaProvider.AiUnavailable(
+                        "Instala ou seleciona um modelo de geração: " + selected, null));
+    String source = doc == null ? "" : doc.text;
+    var responses = new ArrayList<Map<String, Object>>();
+    var chunks = chunks(doc, source);
+    int chunkNumber = 0;
+    for (var chunk : chunks) {
+      var images = new ArrayList<String>();
+      if (model.vision() && doc != null && doc.mediaType.equals("application/pdf"))
+        images.addAll(images(doc, chunk.pages()));
+      var payload =
+          map(
+              "data",
+              compact(subject, extract || job.kind().equals("REVIEW_DOCUMENT")),
+              "sourceText",
+              chunk.text(),
+              "sourcePages",
+              chunk.pages(),
+              "part",
+              ++chunkNumber,
+              "parts",
+              chunks.size(),
+              "existingCategories",
+              store.all(Category.class).stream()
+                  .filter(c -> !c.deleted)
+                  .map(c -> map("name", c.name, "aliases", Json.read(c.aliases)))
+                  .toList(),
+              "rules",
+              map(
+                  "currency",
+                  "EUR",
+                  "crossYearMonths",
+                  settings.get("crossYearMonths", "3"),
+                  "ambiguousMatches",
+                  "SUGGEST_ONLY"),
+              "candidates",
+              candidateContext,
+              "candidateFingerprint",
+              suggest ? Json.read(job.payload()).path("fingerprint").asText() : null);
+      String input = Json.write(payload), prompt = prompts.prompt(task);
+      if (input.length() > 50000)
+        throw DomainException.invalid(
+            "O conteúdo excede o contexto seguro; revê este documento manualmente");
+      String hash = hash(input + model.digest() + prompt + (doc == null ? "" : doc.sha256));
+      var cached =
+          store.all(AiExecution.class).stream()
+              .filter(e -> e.inputHash.equals(hash) && "VALID".equals(e.outcome))
+              .findFirst();
+      String raw;
+      long started = System.nanoTime();
+      if (cached.isPresent()) raw = cached.get().response;
+      else {
+        raw =
+            provider.complete(
+                new AiProvider.Request(model.name(), prompt, input, prompts.schema(task), images));
+        var execution = new AiExecution();
+        execution.targetId = job.target();
+        execution.targetVersion = job.revision();
+        execution.task = task;
+        execution.model = model.name();
+        execution.modelDigest = model.digest();
+        execution.promptVersion = "v1:" + hash(prompt);
+        execution.inputHash = hash;
+        execution.durationMs = (System.nanoTime() - started) / 1_000_000;
+        execution.request = input;
+        execution.response = raw;
+        try {
+          StructuredOutput.parse(raw, prompts.schema(task));
+          execution.outcome = "VALID";
+        } catch (Exception e) {
+          execution.outcome = "INVALID";
+          results.record(execution);
+          throw e;
+        }
+        results.record(execution);
+      }
+      var parsed = StructuredOutput.parse(raw, prompts.schema(task));
+      if (suggest) {
+        var allowed =
+            candidateContext.stream()
+                .map(c -> Json.read(Json.write(c.get("movement"))).path("id").asText())
+                .collect(java.util.stream.Collectors.toSet());
+        for (var ranked : rows(parsed, "rankedCandidates"))
+          if (!allowed.contains(ranked.get("movementId").toString()))
+            throw DomainException.invalid("A IA sugeriu um movimento que não está nos candidatos");
+      }
+      responses.add(parsed);
+    }
+    if (suggest) return;
+    if (extract) {
+      var merged = merge(responses, doc.kind);
+      var draft = Json.object(Json.write(merged.get("draft")));
+      draft.put("issues", merged.get("issues"));
+      boolean safe =
+          (doc.kind.equals("INVOICE")
+                  ? AiEvidence.supportsInvoice(draft, rows(merged, "evidence"), source)
+                  : AiEvidence.supportsStatement(draft, rows(merged, "evidence"), source))
+              && ((List<?>) merged.get("issues")).isEmpty();
+      draft.put("validate", safe);
+      if (job.kind().equals("REPAIR_ALERT"))
+        results.repair(
+            job.target(),
+            job.revision(),
+            map("draft", draft, "evidence", merged.get("evidence"), "issues", merged.get("issues")),
+            doc.version);
+      else publisher.aiExtracted(doc.id, job.revision(), draft, Json.write(merged.get("evidence")));
+    } else {
+      var concerns = new ArrayList<Map<String, Object>>();
+      var suggestions = new ArrayList<Object>();
+      var summaries = new ArrayList<String>();
+      for (var response : responses) {
+        concerns.addAll(rows(response, "concerns"));
+        if (response.get("suggestions") instanceof List<?> list) suggestions.addAll(list);
+        summaries.add(Objects.toString(response.get("summary"), ""));
+      }
+      var combined =
+          map(
+              "verdict",
+              concerns.isEmpty() ? "PASS" : "CONCERN",
+              "concerns",
+              concerns,
+              "suggestions",
+              suggestions,
+              "summary",
+              String.join("; ", summaries));
+      if (repair) results.repair(job.target(), job.revision(), combined, doc.version);
+      else results.reviewed(job, combined, source);
+    }
+  }
+
+  /**
+   * Keeps header/control data bounded; complete source pages and individual movement reviews remain
+   * available.
+   */
+  private Object compact(Object subject, boolean headerOnly) {
+    var result = Json.object(Json.write(subject));
+    result.remove("aiReview");
+    if (headerOnly)
+      for (String key : List.of("movements", "lines", "rows", "sheets")) {
+        Object removed = result.remove(key);
+        if (removed instanceof List<?> list) result.put(key + "Count", list.size());
+      }
+    if (result.get("description") instanceof String text && text.length() > 2000)
+      result.put("description", text.substring(0, 2000) + " [consultar o texto da página]");
+    return result;
+  }
+
+  /** Uses the separately configured category task and schema without duplicating its prompt. */
+  private void normalizeCategories(JobQueue.Claim job) {
+    var invoice = store.get(Invoice.class, job.target());
+    if (invoice.version != job.revision() || invoice.manuallyConfirmed || invoice.deleted) return;
+    var model =
+        provider.models().stream()
+            .filter(AiProvider.Model::completion)
+            .filter(m -> m.name().equals(settings.get("model:categories", "qwen3.5:9b")))
+            .findFirst()
+            .orElseThrow(
+                () -> new OllamaProvider.AiUnavailable("Modelo de categorias indisponível", null));
+    String prompt = prompts.prompt("categories"),
+        input =
+            Json.write(
+                map(
+                    "invoice",
+                    compact(book.invoiceView(invoice), true),
+                    "catalog",
+                    store.all(Category.class).stream()
+                        .filter(c -> !c.deleted)
+                        .map(c -> map("name", c.name, "aliases", Json.read(c.aliases)))
+                        .toList()));
+    long started = System.nanoTime();
+    String raw =
+        provider.complete(
+            new AiProvider.Request(
+                model.name(), prompt, input, prompts.schema("categories"), List.of()));
+    var execution = new AiExecution();
+    execution.targetId = job.target();
+    execution.targetVersion = job.revision();
+    execution.task = "categories";
+    execution.model = model.name();
+    execution.modelDigest = model.digest();
+    execution.promptVersion = "v1:" + hash(prompt);
+    execution.inputHash = hash(input + prompt + model.digest());
+    execution.request = input;
+    execution.response = raw;
+    execution.durationMs = (System.nanoTime() - started) / 1_000_000;
+    Map<String, Object> parsed;
+    try {
+      parsed = StructuredOutput.parse(raw, prompts.schema("categories"));
+      execution.outcome = "VALID";
+    } catch (Exception e) {
+      execution.outcome = "INVALID";
+      results.record(execution);
+      throw e;
+    }
+    results.record(execution);
+    results.categories(
+        job, ((List<?>) parsed.get("categories")).stream().map(Object::toString).toList());
+  }
+
+  private record Chunk(String text, List<Integer> pages) {}
+
+  private List<Chunk> chunks(SourceDocument doc, String source) {
+    var result = new ArrayList<Chunk>();
+    if (doc != null && Json.read(doc.layout).path("pages").isArray()) {
+      for (var page : Json.read(doc.layout).path("pages")) {
+        String text = page.path("text").asText();
+        int number = page.path("page").asInt(result.size() + 1);
+        for (int from = 0; from < Math.max(1, text.length()); from += 32000)
+          result.add(
+              new Chunk(
+                  text.substring(
+                      Math.min(from, text.length()), Math.min(from + 32000, text.length())),
+                  List.of(number)));
+      }
+    }
+    if (result.isEmpty())
+      for (int from = 0; from < Math.max(1, source.length()); from += 32000)
+        result.add(
+            new Chunk(
+                source.substring(
+                    Math.min(from, source.length()), Math.min(from + 32000, source.length())),
+                List.of()));
+    return result;
+  }
+
+  private List<String> images(SourceDocument doc, List<Integer> pages) throws Exception {
+    var images = new ArrayList<String>();
+    if (pages.isEmpty()) return images;
+    try (var pdf = Loader.loadPDF(storage.path(doc.storageKey).toFile())) {
+      var renderer = new PDFRenderer(pdf);
+      for (int page : pages) {
+        if (page < 1 || page > pdf.getNumberOfPages()) continue;
+        var output = new ByteArrayOutputStream();
+        ImageIO.write(renderer.renderImageWithDPI(page - 1, 110), "png", output);
+        images.add(Base64.getEncoder().encodeToString(output.toByteArray()));
+      }
+    }
+    return images;
+  }
+
+  private Map<String, Object> merge(List<Map<String, Object>> responses, String kind) {
+    var draft = new LinkedHashMap<String, Object>();
+    var issues = new LinkedHashSet<String>();
+    var evidence = new ArrayList<Map<String, Object>>();
+    var lineItems = new ArrayList<Map<String, Object>>();
+    var categories = new LinkedHashSet<String>();
+    for (var response : responses) {
+      var part = Json.object(Json.write(response.get("draft")));
+      int offset = lineItems.size();
+      for (var entry : rows(response, "evidence")) {
+        var e = new LinkedHashMap<>(entry);
+        String field = Objects.toString(e.get("field"), "");
+        var matcher =
+            java.util.regex.Pattern.compile("^(lines|movements)\\[(\\d+)\\](.*)$").matcher(field);
+        if (matcher.matches())
+          e.put(
+              "field",
+              matcher.group(1)
+                  + "["
+                  + (Integer.parseInt(matcher.group(2)) + offset)
+                  + "]"
+                  + matcher.group(3));
+        evidence.add(e);
+      }
+      if (response.get("issues") instanceof List<?> list)
+        list.forEach(i -> issues.add(i.toString()));
+      lineItems.addAll(rows(part, kind.equals("STATEMENT") ? "movements" : "lines"));
+      if (part.get("categories") instanceof List<?> list)
+        list.forEach(c -> categories.add(c.toString()));
+      for (var entry : part.entrySet()) {
+        if (Set.of("movements", "lines", "categories").contains(entry.getKey())
+            || entry.getValue() == null) continue;
+        if (kind.equals("STATEMENT")
+            && Set.of("closingBalance", "periodEnd").contains(entry.getKey())) {
+          draft.put(entry.getKey(), entry.getValue());
+          continue;
+        }
+        if (!draft.containsKey(entry.getKey())) draft.put(entry.getKey(), entry.getValue());
+        else if (!Objects.equals(draft.get(entry.getKey()), entry.getValue())
+            && Set.of("total", "issuedOn", "number", "supplier").contains(entry.getKey()))
+          issues.add("Páginas com valores diferentes para " + entry.getKey());
+      }
+    }
+    draft.put(kind.equals("STATEMENT") ? "movements" : "lines", lineItems);
+    if (!kind.equals("STATEMENT")) draft.put("categories", new ArrayList<>(categories));
+    return map("draft", draft, "evidence", evidence, "issues", new ArrayList<>(issues));
+  }
+
+  private static String hash(String value) {
+    try {
+      return HexFormat.of()
+          .formatHex(
+              MessageDigest.getInstance("SHA-256").digest(value.getBytes(StandardCharsets.UTF_8)));
+    } catch (Exception e) {
+      throw new IllegalStateException(e);
+    }
+  }
+}

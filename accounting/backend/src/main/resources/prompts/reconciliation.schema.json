@@ -1,0 +1,32 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "rankedCandidates": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "movementId": {
+            "type": "string"
+          },
+          "reason": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "movementId",
+          "reason"
+        ]
+      }
+    },
+    "summary": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "rankedCandidates",
+    "summary"
+  ]
+}

@@ -1,0 +1,54 @@
+spring:
+  application:
+    name: conta
+  profiles:
+    default: dev
+  datasource:
+    url: ${DATABASE_URL:jdbc:postgresql://localhost:5432/accounting}
+    username: ${DATABASE_USER:accounting}
+    password: ${DATABASE_PASSWORD}
+  task:
+    scheduling:
+      pool:
+        size: 2
+  jpa:
+    open-in-view: false
+    hibernate:
+      ddl-auto: validate
+    properties:
+      hibernate:
+        jdbc.time_zone: UTC
+        default_batch_fetch_size: 256
+  servlet:
+    multipart:
+      max-file-size: 256MB
+      max-request-size: 512MB
+server:
+  port: ${PORT:8081}
+  shutdown: graceful
+  servlet:
+    session:
+      timeout: 8h
+      cookie:
+        http-only: true
+        same-site: strict
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics
+  endpoint:
+    health:
+      show-details: when-authorized
+accounting:
+  storage: ${DOCUMENT_STORAGE:./data/documents}
+  admin-username: ${ADMIN_USERNAME:gestor}
+  admin-password: ${ADMIN_PASSWORD}
+  ollama-url: ${OLLAMA_URL:http://localhost:11434}
+  document-worker-url: ${DOCUMENT_WORKER_URL:http://localhost:8090}
+  prompt-directory: ${PROMPT_DIRECTORY:}
+  cross-year-months: 3
+  jobs-enabled: ${JOBS_ENABLED:true}
+  max-zip-entries: 20000
+  max-expanded-bytes: 5368709120
+  max-document-bytes: 268435456

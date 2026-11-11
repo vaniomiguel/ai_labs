@@ -1,0 +1,286 @@
+@if(kind==='INVOICE'){
+<div class="form-grid">
+  <label
+    >Fornecedor<input
+      matInput
+      [(ngModel)]="data.supplier"
+      placeholder="Nome do fornecedor"
+  /></label>
+  <label
+    >NIF do fornecedor<input matInput [(ngModel)]="data.supplierTaxId"
+  /></label>
+  <label>Número da fatura<input matInput [(ngModel)]="data.number" /></label>
+  <label
+    >Tipo<select [(ngModel)]="data.type">
+      <option value="INVOICE">Fatura</option>
+      <option value="CREDIT_NOTE">Nota de crédito</option>
+    </select></label
+  >
+  <label
+    >Data de emissão<input type="date" [(ngModel)]="data.issuedOn"
+  /></label>
+  <label>Vencimento<input type="date" [(ngModel)]="data.dueOn" /></label>
+  <label
+    >Total com IVA<input
+      inputmode="decimal"
+      [(ngModel)]="data.total"
+      placeholder="0.00"
+  /></label>
+  <label
+    >Base sem IVA<input
+      inputmode="decimal"
+      [(ngModel)]="data.net"
+      placeholder="Desconhecida"
+  /></label>
+  <label
+    >IVA<input
+      inputmode="decimal"
+      [(ngModel)]="data.tax"
+      placeholder="Desconhecido"
+  /></label>
+  <label
+    >Desconto<input inputmode="decimal" [(ngModel)]="data.discount"
+  /></label>
+  <label>Moeda<input [(ngModel)]="data.currency" placeholder="EUR" /></label>
+  <label
+    >Categorias · separar por ;<input
+      [(ngModel)]="categories"
+      placeholder="Combustível; Deslocações"
+  /></label>
+</div>
+@if(data.type==='CREDIT_NOTE'){
+<label
+  >Procurar fatura original<input
+    #invoiceSearch
+    (input)="searchInvoices(invoiceSearch.value)"
+    placeholder="Fornecedor ou número"
+/></label>
+<label
+  >Fatura original<select [(ngModel)]="data.relatedInvoiceId">
+    <option [ngValue]="null">Selecionar</option>
+    @for(i of invoiceOptions();track i.id){
+    <option [value]="i.id">
+      {{i.number||i.supplier}} · {{money(i.total)}}
+    </option>
+    }
+  </select></label
+>
+}
+<label
+  >Descrição<textarea [(ngModel)]="data.description" rows="3"></textarea>
+</label>
+<div class="section-heading">
+  <h3>Artigos <span>{{lines.length}}</span></h3>
+  <button mat-stroked-button type="button" (click)="addLine()">+ Artigo</button>
+</div>
+<div class="table-scroll">
+  <table class="editable">
+    <thead>
+      <tr>
+        <th>Descrição</th>
+        <th>Quantidade</th>
+        <th>Preço unitário</th>
+        <th>Base</th>
+        <th>IVA</th>
+        <th>Desconto</th>
+        <th>Total</th>
+        <th></th>
+      </tr>
+    </thead>
+    <tbody>
+      @for(line of lines;track $index){
+      <tr>
+        <td><input [(ngModel)]="line.description" /></td>
+        <td><input [(ngModel)]="line.quantity" inputmode="decimal" /></td>
+        <td><input [(ngModel)]="line.unitPrice" inputmode="decimal" /></td>
+        <td><input [(ngModel)]="line.net" inputmode="decimal" /></td>
+        <td><input [(ngModel)]="line.tax" inputmode="decimal" /></td>
+        <td><input [(ngModel)]="line.discount" inputmode="decimal" /></td>
+        <td><input [(ngModel)]="line.total" inputmode="decimal" /></td>
+        <td>
+          <button
+            type="button"
+            class="icon-button"
+            aria-label="Remover artigo"
+            (click)="lines.splice($index,1)"
+          >
+            ×
+          </button>
+        </td>
+      </tr>
+      }
+    </tbody>
+  </table>
+</div>
+<p class="hint">
+  Um campo vazio significa desconhecido. Preenche os valores monetários com
+  ponto decimal.
+</p>
+} @if(kind==='MOVEMENT'){
+<div class="form-grid">
+  <label
+    >Conta<select [(ngModel)]="data.accountId">
+      <option [ngValue]="null">Selecionar</option>
+      @for(a of accounts;track a.id){
+      <option [value]="a.id">{{a.name}}</option>
+      }
+    </select></label
+  >
+  <label
+    >Data do movimento<input type="date" [(ngModel)]="data.bookedOn"
+  /></label>
+  <label>Data valor<input type="date" [(ngModel)]="data.valueOn" /></label>
+  <label
+    >Hora · opcional<input type="time" [(ngModel)]="data.occurredAt"
+  /></label>
+  <label
+    >Montante positivo<input
+      [(ngModel)]="data.amount"
+      inputmode="decimal"
+      placeholder="0.00"
+  /></label>
+  <label
+    >Direção<select [(ngModel)]="data.direction">
+      <option [ngValue]="null">Selecionar</option>
+      <option value="DEBIT">Débito · saída</option>
+      <option value="CREDIT">Crédito · entrada</option>
+    </select></label
+  >
+  <label
+    >Classificação<select [(ngModel)]="data.kind">
+      @for(k of
+      ['UNCLASSIFIED','INVOICE_PAYMENT','REFUND','REIMBURSEMENT','ADVANCE','RETURN','INTERNAL_TRANSFER','OTHER'];track
+      k){
+      <option [value]="k">{{labels[k]}}</option>
+      }
+    </select></label
+  >
+  <label>Referência bancária<input [(ngModel)]="data.bankReference" /></label>
+</div>
+<label
+  >Descrição original<textarea
+    [(ngModel)]="data.description"
+    rows="3"
+  ></textarea>
+</label>
+} @if(kind==='STATEMENT'){
+<div class="form-grid">
+  <label
+    >Início do período<input
+      type="date"
+      [(ngModel)]="data.periodStart" /></label
+  ><label
+    >Fim do período<input type="date" [(ngModel)]="data.periodEnd"
+  /></label>
+  <label
+    >Saldo inicial<input
+      [(ngModel)]="data.openingBalance"
+      inputmode="decimal" /></label
+  ><label
+    >Saldo final<input [(ngModel)]="data.closingBalance" inputmode="decimal"
+  /></label>
+</div>
+<div class="section-heading">
+  <h3>Movimentos <span>{{movements.length}}</span></h3>
+  <button mat-stroked-button (click)="addMovement()">+ Movimento</button>
+</div>
+<div class="table-scroll">
+  <table class="editable">
+    <thead>
+      <tr>
+        <th>Data</th>
+        <th>Data valor</th>
+        <th>Hora</th>
+        <th>Descrição</th>
+        <th>Referência</th>
+        <th>Montante</th>
+        <th>Direção</th>
+        <th></th>
+      </tr>
+    </thead>
+    <tbody>
+      @for(m of movements;track $index){
+      <tr>
+        <td><input type="date" [(ngModel)]="m.bookedOn" /></td>
+        <td><input type="date" [(ngModel)]="m.valueOn" /></td>
+        <td><input type="time" [(ngModel)]="m.occurredAt" /></td>
+        <td><textarea [(ngModel)]="m.description" rows="2"></textarea></td>
+        <td><input [(ngModel)]="m.bankReference" /></td>
+        <td><input [(ngModel)]="m.amount" inputmode="decimal" /></td>
+        <td>
+          <select [(ngModel)]="m.direction">
+            <option [ngValue]="null">Em falta</option>
+            <option value="DEBIT">Débito</option>
+            <option value="CREDIT">Crédito</option>
+          </select>
+        </td>
+        <td>
+          <button
+            class="icon-button"
+            aria-label="Remover movimento"
+            (click)="movements.splice($index,1)"
+          >
+            ×
+          </button>
+        </td>
+      </tr>
+      }
+    </tbody>
+  </table>
+</div>
+} @if(kind==='HISTORY'){
+<p class="notice">
+  Estas linhas são referências históricas. Validar os dados não cria pagamentos
+  bancários.
+</p>
+@for(sheet of data.sheets??[];track sheet.name){@if(sheet.controls){
+<details class="details-panel">
+  <summary>{{sheet.name}} · totais e saldo transitado</summary>
+  <div class="form-grid">
+    <label
+      >Início de saldo<input
+        [(ngModel)]="sheet.controls.opening"
+        inputmode="decimal" /></label
+    ><label
+      >Total recebido<input
+        [(ngModel)]="sheet.controls.received"
+        inputmode="decimal" /></label
+    ><label
+      >Total de pagamentos<input
+        [(ngModel)]="sheet.controls.payment"
+        inputmode="decimal" /></label
+    ><label
+      >Saldo a transitar<input
+        [(ngModel)]="sheet.controls.closing"
+        inputmode="decimal"
+    /></label>
+  </div>
+</details>
+}}
+<div class="table-scroll">
+  <table class="editable">
+    <thead>
+      <tr>
+        <th>Folha / linha</th>
+        <th>Data</th>
+        <th>Descrição</th>
+        <th>Recebido</th>
+        <th>Pagamento</th>
+        <th>Saldo</th>
+      </tr>
+    </thead>
+    <tbody>
+      @for(row of rows;track $index){
+      <tr>
+        <td>{{row.sheet}} · {{row.rowNumber}}</td>
+        <td><input type="date" [(ngModel)]="row.date" /></td>
+        <td><input [(ngModel)]="row.description" /></td>
+        <td><input [(ngModel)]="row.received" /></td>
+        <td><input [(ngModel)]="row.payment" /></td>
+        <td><input [(ngModel)]="row.balance" /></td>
+      </tr>
+      }
+    </tbody>
+  </table>
+</div>
+}
