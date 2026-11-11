@@ -359,7 +359,8 @@
             "type": "integer"
           },
           "draft": {
-            "type": "object"
+            "type": "object",
+            "description": "Rascunho editável. Para vários comprovativos independentes num original de faturas, invoices contém os rascunhos individuais; os registos publicados são devolvidos separadamente em /documents/{id}/records. Guardar sem resolver mantém os registos fora dos saldos."
           },
           "resolve": {
             "type": "boolean"

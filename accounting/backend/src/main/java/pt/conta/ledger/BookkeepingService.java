@@ -329,19 +329,6 @@ public class BookkeepingService {
     if (movement.statementId != null) {
       var statement = store.get(BankStatement.class, movement.statementId);
       if (!statement.validated) errors.add("O extrato tem inconsistências por resolver");
-      if (!batching.get() && statement.openingBalance != null && statement.closingBalance != null) {
-        var sum =
-            store.all(BankMovement.class).stream()
-                .filter(
-                    m ->
-                        movement.statementId.equals(m.statementId)
-                            && !m.deleted
-                            && m.amount != null)
-                .map(m -> m.direction == Direction.DEBIT ? m.amount.negate() : m.amount)
-                .reduce(Money.ZERO, BigDecimal::add);
-        if (statement.openingBalance.add(sum).compareTo(statement.closingBalance) != 0)
-          errors.add("A alteração não respeita os saldos do extrato; revê o extrato completo");
-      }
     }
     return errors;
   }

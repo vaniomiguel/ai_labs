@@ -149,4 +149,98 @@ class DocumentRulesTest {
     assertThat(Json.write(rows.getFirst().get("cells"))).contains("formula");
     Files.delete(path);
   }
+
+  @Test
+  void bankBalancesAreIgnoredRatherThanComparedWithMovementAmounts() {
+    var result =
+        new PortugueseDocumentParser()
+            .statement(
+                "Saldo contabilístico 9.999,99 EUR\n"
+                    + "Saldo contabilístico\n"
+                    + "após movimento\n"
+                    + "Tipos de movimento Todos\n"
+                    + "Intervalo de 01-02-2016 a 29-02-2016\n"
+                    + "29-02-2016 29-02-2016 Mensalidade -10,00 IGNORADO\n"
+                    + "29-02-2016 29-02-2016 Transferencia 500,00 -999.999,99\n"
+                    + "18-02-2016 18-02-2016 TSU -30,00 58,00\n"
+                    + "17-02-2016 17-02-2016 Imposto -12,00 88,00\n");
+    assertThat(result).doesNotContainKeys("openingBalance", "closingBalance", "balanceDerivation");
+    assertThat(Inputs.rows(result, "movements").getFirst().get("amount")).isEqualTo("10.00");
+    assertThat(result.get("validate")).isEqualTo(true);
+  }
+
+  @Test
+  void splitOpeningBalanceAndCrossYearDatePreserveOriginalSheet() throws Exception {
+    var path = Files.createTempFile("conta-split-opening-", ".xlsx");
+    try (var workbook = new XSSFWorkbook()) {
+      var sheet = workbook.createSheet("Janeiro");
+      sheet.createRow(7).createCell(6).setCellValue("Início");
+      var opening = sheet.createRow(8);
+      opening.createCell(6).setCellValue("Saldo");
+      opening.createCell(7).setCellValue(90.25);
+      var header = sheet.createRow(12);
+      String[] names = {"Data", "Descrição do item", "Recebido", "Pagamento", "Saldo"};
+      int[] columns = {2, 3, 6, 7, 8};
+      for (int n = 0; n < names.length; n++) header.createCell(columns[n]).setCellValue(names[n]);
+      var row = sheet.createRow(13);
+      row.createCell(2).setCellValue("02/12/2015");
+      row.createCell(3).setCellValue("Alojamento");
+      row.createCell(6).setCellValue(10);
+      row.createCell(8).setCellValue(100.25);
+      try (var out = Files.newOutputStream(path)) {
+        workbook.write(out);
+      }
+    }
+    var draft = new ExcelReader().read(path, "HISTORY", "2016.xlsx", Map.of());
+    assertThat((List<?>) draft.get("issues")).isEmpty();
+    assertThat(Inputs.rows(draft, "sheets").getFirst().get("controls").toString())
+        .contains("90.25");
+    assertThat(Inputs.rows(draft, "rows").getFirst())
+        .containsEntry("sheet", "Janeiro")
+        .containsEntry("date", "2015-12-02");
+    Files.delete(path);
+  }
+
+  @Test
+  void statementsNeedOnlyTheFourMovementFieldsAndTheirEvidence() {
+    String source = "02/01/2026 Compra de teste -7,00";
+    var row =
+        map(
+            "bookedOn",
+            "2026-01-02",
+            "description",
+            "Compra de teste",
+            "amount",
+            "7.00",
+            "direction",
+            "DEBIT");
+    var proof = new ArrayList<Map<String, Object>>();
+    for (String field : List.of("bookedOn", "description", "amount", "direction"))
+      proof.add(map("field", "movements[0]." + field, "quote", source));
+    assertThat(AiEvidence.supportsStatement(map("movements", List.of(row)), proof, source))
+        .isTrue();
+    proof.removeLast();
+    assertThat(AiEvidence.supportsStatement(map("movements", List.of(row)), proof, source))
+        .isFalse();
+  }
+
+  @Test
+  void completeMovementsWithoutControlBalancesOrPeriodAreValid() {
+    var result =
+        new PortugueseDocumentParser()
+            .statement("02/01/2026 Compra -7,00\n03/01/2026 Devolucao 3,00 C\n");
+    assertThat(result.get("validate")).isEqualTo(true);
+    assertThat(Inputs.rows(result, "movements")).hasSize(2);
+    assertThat(result).doesNotContainKeys("openingBalance", "closingBalance");
+    var cgd =
+        new PortugueseDocumentParser()
+            .statement(
+                "Saldo contabilístico após movimento\n"
+                    + "02-01-2026 02-01-2026 Compra -7,00  \n"
+                    + "CONTA\n");
+    assertThat(cgd.get("validate")).isEqualTo(true);
+    assertThat(Inputs.rows(cgd, "movements").getFirst())
+        .containsEntry("amount", "7.00")
+        .containsEntry("description", "Compra CONTA");
+  }
 }

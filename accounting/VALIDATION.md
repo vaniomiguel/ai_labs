@@ -1,6 +1,18 @@
 # Verificação da entrega — 11 de novembro de 2026
 
-## Resultados executados
+## Ajuste dos critérios bancários
+
+Os extratos são agora validados apenas por data, descrição, montante e débito/crédito. Foram retiradas a exigência e a comparação de saldos bancários, incluindo das prompts e do editor. Os três extratos reais foram reprocessados nas duas instalações: dez movimentos corretos e validados em cada uma, com descrições completas e sem saldos nos rascunhos. Os 42 testes Java passaram. As verificações do saldo do gestor e do Excel histórico mantêm-se. Os resultados anteriores abaixo documentam a versão então ensaiada.
+
+## Atualização com documentos reais
+
+Foram executados os dois ensaios de 2016: documentos individuais sem IA e Excel seguido do ZIP selecionado, com revisão local por `qwen3.5:9b`. Os resultados, referências, respostas brutas, base de dados de auditoria e relatórios permanecem em `data/evaluation/2016-Q1/`, fora do Git. Os originais foram preservados e a reimportação foi verificada sem duplicação.
+
+As falhas de leitura dos controlos Excel e das colunas bancárias foram corrigidas; foram acrescentados suporte a vários comprovativos por original, controlo de âmbito da revisão e preservação de campos conhecidos. A validação automática integral continua **não aprovada**: há despesas em aberto, pareceres contraditórios do modelo e uma revisão com respostas JSON inválidas. O relatório privado distingue importação técnica, evidência documental e aprovação financeira.
+
+Verificação atual do código: **39 testes Java, seis testes do avaliador e quatro testes do serviço documental aprovados**, além da compilação Angular e da imagem Docker usada nos ensaios.
+
+## Resultados da verificação inicial
 
 | Verificação | Resultado |
 |---|---|
@@ -23,7 +35,7 @@ No ensaio Docker de recuperação, uma fatura de **100,00 € em dezembro de 202
 
 ## Limites da validação
 
-Não foram disponibilizados os Excel, faturas ou extratos históricos reais. A precisão por formato bancário, artigos, datas, correspondências e modelos Ollama **não está aprovada num corpus real**. O exemplo OCR é um teste funcional sintético, não uma medição de qualidade em digitalizações difíceis. Não foi executada uma comparação dos modelos recomendados nem medido o consumo de memória no servidor de destino.
+Na verificação inicial não tinham sido disponibilizados os Excel, faturas ou extratos históricos reais. Os ensaios posteriores acima não aprovam a precisão geral por formato bancário, artigos, datas, correspondências ou modelos. O exemplo OCR inicial é funcional e sintético. Não foi executada uma comparação dos modelos recomendados nem medido o consumo de memória no servidor CPU de destino; os ensaios posteriores usaram o modelo local com runner MLX.
 
 Antes de usar a aplicação para decisões financeiras, preparar a referência manual e executar `evaluation/README.md` numa instalação isolada. O critério de aprovação continua a ser zero erros financeiros silenciosos e zero correspondências automáticas incorretas nesse conjunto. Casos incompletos ficam em revisão e as revisões sem um modelo disponível permanecem pendentes.
 

@@ -5,30 +5,6 @@
     "draft": {
       "type": "object",
       "properties": {
-        "periodStart": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "periodEnd": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "openingBalance": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "closingBalance": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
         "movements": {
           "type": "array",
           "items": {
@@ -41,25 +17,7 @@
                   "null"
                 ]
               },
-              "valueOn": {
-                "type": [
-                  "string",
-                  "null"
-                ]
-              },
-              "occurredAt": {
-                "type": [
-                  "string",
-                  "null"
-                ]
-              },
               "description": {
-                "type": [
-                  "string",
-                  "null"
-                ]
-              },
-              "bankReference": {
                 "type": [
                   "string",
                   "null"
@@ -70,9 +28,6 @@
                   "string",
                   "null"
                 ]
-              },
-              "currency": {
-                "type": "string"
               },
               "direction": {
                 "enum": [
@@ -86,15 +41,15 @@
               "bookedOn",
               "description",
               "amount",
-              "direction",
-              "currency"
+              "direction"
             ]
           }
         }
       },
       "required": [
         "movements"
-      ]
+      ],
+      "additionalProperties": false
     },
     "evidence": {
       "type": "array",

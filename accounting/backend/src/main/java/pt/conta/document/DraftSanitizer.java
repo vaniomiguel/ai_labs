@@ -20,6 +20,10 @@ public final class DraftSanitizer {
     if (draft.get("issues") instanceof List<?> list)
       list.forEach(issue -> issues.add(Objects.toString(issue)));
     if (kind.equals("INVOICE")) {
+      if (!Inputs.rows(draft, "invoices").isEmpty())
+        draft.put(
+            "invoices",
+            Inputs.rows(draft, "invoices").stream().map(r -> sanitize("INVOICE", r)).toList());
       dates(draft, List.of("issuedOn", "dueOn"), issues, "");
       money(draft, List.of("total", "net", "tax", "discount"), issues, "");
       if (Inputs.text(draft, "relatedInvoiceId") != null)
@@ -43,8 +47,10 @@ public final class DraftSanitizer {
             }
       }
     } else if (kind.equals("STATEMENT")) {
-      dates(draft, List.of("periodStart", "periodEnd"), issues, "");
-      money(draft, List.of("openingBalance", "closingBalance"), issues, "");
+      for (String ignored :
+          List.of(
+              "periodStart", "periodEnd", "openingBalance", "closingBalance", "balanceDerivation"))
+        draft.remove(ignored);
       int n = 0;
       for (var movement : Inputs.rows(draft, "movements")) {
         String prefix = "Movimento " + (++n) + ": ";

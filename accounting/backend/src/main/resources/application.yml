@@ -41,6 +41,8 @@ management:
     health:
       show-details: when-authorized
 accounting:
+  ai-enabled: ${AI_ENABLED:true}
+  ai-history-months: ${AI_HISTORY_MONTHS:}
   storage: ${DOCUMENT_STORAGE:./data/documents}
   admin-username: ${ADMIN_USERNAME:gestor}
   admin-password: ${ADMIN_PASSWORD}

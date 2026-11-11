@@ -17,9 +17,11 @@ public class BankStatement extends BaseEntity {
   public LocalDate periodEnd;
 
   @Column(precision = 19, scale = 2)
+  /** Legacy storage only; excluded from extraction, review and financial validation. */
   public BigDecimal openingBalance;
 
   @Column(precision = 19, scale = 2)
+  /** Legacy storage only; excluded from extraction, review and financial validation. */
   public BigDecimal closingBalance;
 
   public boolean validated;

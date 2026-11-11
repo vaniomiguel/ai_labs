@@ -33,6 +33,8 @@ services:
       DOCUMENT_STORAGE: /data/documents
       DOCUMENT_WORKER_URL: http://documents:8090
       OLLAMA_URL: ${OLLAMA_URL:-http://host.docker.internal:11434}
+      AI_ENABLED: ${AI_ENABLED:-true}
+      AI_HISTORY_MONTHS: ${AI_HISTORY_MONTHS:-}
     ports:
       - "127.0.0.1:8081:8081"
     extra_hosts:

@@ -33,6 +33,9 @@ public class AiOrchestrator {
   private final DocumentStorage storage;
   private final BookkeepingService book;
 
+  @org.springframework.beans.factory.annotation.Value("${accounting.ai-history-months:}")
+  private String historyMonths;
+
   public AiOrchestrator(
       Store store,
       AiProvider provider,
@@ -131,6 +134,10 @@ public class AiOrchestrator {
                     new OllamaProvider.AiUnavailable(
                         "Instala ou seleciona um modelo de geração: " + selected, null));
     String source = doc == null ? "" : doc.text;
+    if (doc != null && doc.kind.equals("HISTORY") && !historyMonths.isBlank()) {
+      subject = historyScope(Json.object(doc.draft));
+      source = Json.write(subject);
+    }
     var responses = new ArrayList<Map<String, Object>>();
     var chunks = chunks(doc, source);
     int chunkNumber = 0;
@@ -227,6 +234,29 @@ public class AiOrchestrator {
                   : AiEvidence.supportsStatement(draft, rows(merged, "evidence"), source))
               && ((List<?>) merged.get("issues")).isEmpty();
       draft.put("validate", safe);
+      if (doc.kind.equals("INVOICE") && !rows(draft, "invoices").isEmpty()) {
+        boolean all = true;
+        int n = 0;
+        for (var child : rows(draft, "invoices")) {
+          String prefix = "invoices[" + (n++) + "].";
+          var proof =
+              rows(merged, "evidence").stream()
+                  .filter(e -> Objects.toString(e.get("field"), "").startsWith(prefix))
+                  .map(
+                      e -> {
+                        var copy = new LinkedHashMap<>(e);
+                        copy.put("field", e.get("field").toString().substring(prefix.length()));
+                        return (Map<String, Object>) copy;
+                      })
+                  .toList();
+          boolean valid =
+              AiEvidence.supportsInvoice(child, proof, source)
+                  && ((List<?>) merged.get("issues")).isEmpty();
+          child.put("validate", valid);
+          all &= valid;
+        }
+        draft.put("validate", ((List<?>) merged.get("issues")).isEmpty());
+      }
       if (job.kind().equals("REPAIR_ALERT"))
         results.repair(
             job.target(),
@@ -273,6 +303,50 @@ public class AiOrchestrator {
     if (result.get("description") instanceof String text && text.length() > 2000)
       result.put("description", text.substring(0, 2000) + " [consultar o texto da página]");
     return result;
+  }
+
+  /** Restricts optional evaluation history reviews by original sheet, never by invoice date. */
+  private Map<String, Object> historyScope(Map<String, Object> draft) {
+    var monthNames =
+        List.of(
+            "JANEIRO",
+            "FEVEREIRO",
+            "MARCO",
+            "ABRIL",
+            "MAIO",
+            "JUNHO",
+            "JULHO",
+            "AGOSTO",
+            "SETEMBRO",
+            "OUTUBRO",
+            "NOVEMBRO",
+            "DEZEMBRO");
+    var allowed = new HashSet<String>();
+    for (String part : historyMonths.split(",")) {
+      int number = Integer.parseInt(part.trim());
+      if (number < 1 || number > 12)
+        throw DomainException.invalid("Mês de revisão histórica inválido");
+      allowed.add(monthNames.get(number - 1));
+    }
+    var rows =
+        rows(draft, "rows").stream()
+            .filter(
+                r ->
+                    allowed.contains(
+                        pt.conta.reconciliation.MatchingRules.normalize(
+                            Objects.toString(r.get("sheet"), ""))))
+            .toList();
+    var sheets =
+        rows(draft, "sheets").stream()
+            .filter(
+                s ->
+                    allowed.contains(
+                        pt.conta.reconciliation.MatchingRules.normalize(
+                            Objects.toString(s.get("name"), ""))))
+            .map(s -> map("name", s.get("name"), "controls", s.get("controls")))
+            .toList();
+    return map(
+        "rows", rows, "sheets", sheets, "reviewMonths", historyMonths, "year", draft.get("year"));
   }
 
   /** Uses the separately configured category task and schema without duplicating its prompt. */
@@ -350,6 +424,10 @@ public class AiOrchestrator {
                 source.substring(
                     Math.min(from, source.length()), Math.min(from + 32000, source.length())),
                 List.of()));
+    if (result.size() > 1 && result.size() <= 3 && source.length() < 32000) {
+      var pages = result.stream().flatMap(c -> c.pages().stream()).distinct().toList();
+      return List.of(new Chunk(source, pages));
+    }
     return result;
   }
 
@@ -374,8 +452,10 @@ public class AiOrchestrator {
     var evidence = new ArrayList<Map<String, Object>>();
     var lineItems = new ArrayList<Map<String, Object>>();
     var categories = new LinkedHashSet<String>();
+    var invoices = new ArrayList<Map<String, Object>>();
     for (var response : responses) {
       var part = Json.object(Json.write(response.get("draft")));
+      invoices.addAll(rows(part, "invoices"));
       int offset = lineItems.size();
       for (var entry : rows(response, "evidence")) {
         var e = new LinkedHashMap<>(entry);
@@ -400,11 +480,6 @@ public class AiOrchestrator {
       for (var entry : part.entrySet()) {
         if (Set.of("movements", "lines", "categories").contains(entry.getKey())
             || entry.getValue() == null) continue;
-        if (kind.equals("STATEMENT")
-            && Set.of("closingBalance", "periodEnd").contains(entry.getKey())) {
-          draft.put(entry.getKey(), entry.getValue());
-          continue;
-        }
         if (!draft.containsKey(entry.getKey())) draft.put(entry.getKey(), entry.getValue());
         else if (!Objects.equals(draft.get(entry.getKey()), entry.getValue())
             && Set.of("total", "issuedOn", "number", "supplier").contains(entry.getKey()))
@@ -413,6 +488,7 @@ public class AiOrchestrator {
     }
     draft.put(kind.equals("STATEMENT") ? "movements" : "lines", lineItems);
     if (!kind.equals("STATEMENT")) draft.put("categories", new ArrayList<>(categories));
+    if (!invoices.isEmpty()) draft.put("invoices", invoices);
     return map("draft", draft, "evidence", evidence, "issues", new ArrayList<>(issues));
   }
 

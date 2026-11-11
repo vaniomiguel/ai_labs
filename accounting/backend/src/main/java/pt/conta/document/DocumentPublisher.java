@@ -98,6 +98,26 @@ public class DocumentPublisher {
     store.lockFinancialWrites();
     var doc = store.get(SourceDocument.class, id);
     if (doc.version != version || doc.deleted) return;
+    var previous = Json.object(doc.draft);
+    for (String field :
+        List.of(
+            "number",
+            "supplier",
+            "supplierTaxId",
+            "issuedOn",
+            "dueOn",
+            "total",
+            "net",
+            "tax",
+            "discount",
+            "description",
+            "currency",
+            "type",
+            "relatedInvoiceId"))
+      if ((draft.get(field) == null || Objects.toString(draft.get(field), "").isBlank())
+          && previous.get(field) != null) draft.put(field, previous.get(field));
+    if (rows(draft, "lines").isEmpty() && !rows(previous, "lines").isEmpty())
+      draft.put("lines", previous.get("lines"));
     draft = DraftSanitizer.sanitize(doc.kind, draft);
     doc.draft = Json.write(draft);
     var attempt = new ExtractionAttempt();
@@ -135,13 +155,17 @@ public class DocumentPublisher {
       history.importRows(doc, draft);
       doc.status = human || !issues ? "DONE" : "OPEN";
     } else if (doc.kind.equals("INVOICE")) {
-      var existing =
-          store.all(Invoice.class).stream()
-              .filter(i -> Objects.equals(i.documentId, doc.id) && !i.deleted)
-              .findFirst();
-      existing.ifPresent(i -> draft.put("version", i.version));
-      var result = book.saveInvoice(existing.map(i -> i.id).orElse(null), draft, origin, human);
-      doc.status = result.get("reviewStatus") == ReviewStatus.OPEN ? "OPEN" : "DONE";
+      if (!rows(draft, "invoices").isEmpty()) {
+        publishInvoices(doc, draft, origin, human);
+      } else {
+        var existing =
+            store.all(Invoice.class).stream()
+                .filter(i -> Objects.equals(i.documentId, doc.id) && !i.deleted)
+                .findFirst();
+        existing.ifPresent(i -> draft.put("version", i.version));
+        var result = book.saveInvoice(existing.map(i -> i.id).orElse(null), draft, origin, human);
+        doc.status = result.get("reviewStatus") == ReviewStatus.OPEN ? "OPEN" : "DONE";
+      }
     } else if (doc.kind.equals("STATEMENT")) {
       publishStatement(doc, draft, origin, human);
     }
@@ -165,6 +189,34 @@ public class DocumentPublisher {
     history.refresh();
   }
 
+  /** Publishes independent receipts in one original as separate identities, never summed lines. */
+  private void publishInvoices(
+      SourceDocument doc, Map<String, Object> draft, String origin, boolean human) {
+    var existing =
+        store.all(Invoice.class).stream()
+            .filter(i -> doc.id.equals(i.documentId) && !i.deleted)
+            .toList();
+    var receipts = rows(draft, "invoices");
+    var results = new ArrayList<Map<String, Object>>();
+    book.batch(
+        () -> {
+          for (int n = 0; n < receipts.size(); n++) {
+            var child = new LinkedHashMap<>(receipts.get(n));
+            child.put("documentId", doc.id.toString());
+            child.put("validate", human || flag(child, "validate") && flag(draft, "validate"));
+            var old = n < existing.size() ? existing.get(n) : null;
+            if (old != null) child.put("version", old.version);
+            results.add(book.saveInvoice(old == null ? null : old.id, child, origin, human));
+          }
+          for (int n = receipts.size(); n < existing.size(); n++)
+            book.delete("invoice", existing.get(n).id, existing.get(n).version);
+        });
+    doc.status =
+        results.stream().anyMatch(r -> r.get("reviewStatus") == ReviewStatus.OPEN)
+            ? "OPEN"
+            : "DONE";
+  }
+
   private void publishStatement(
       SourceDocument doc, Map<String, Object> draft, String origin, boolean human) {
     var statement =
@@ -178,19 +230,21 @@ public class DocumentPublisher {
                   return store.add(s);
                 });
     statement.accountId = doc.accountId;
-    statement.openingBalance = Money.optional(draft.get("openingBalance"));
-    statement.closingBalance = Money.optional(draft.get("closingBalance"));
+    // Historical balance columns are retained in storage only; movements determine validation.
+    statement.openingBalance = null;
+    statement.closingBalance = null;
+    for (String ignored :
+        List.of(
+            "openingBalance", "closingBalance", "balanceDerivation", "periodStart", "periodEnd"))
+      draft.remove(ignored);
     var rows = rows(draft, "movements");
     var dates =
         rows.stream().map(r -> date(r, "bookedOn")).filter(Objects::nonNull).sorted().toList();
-    statement.periodStart = date(draft, "periodStart");
-    statement.periodEnd = date(draft, "periodEnd");
-    if (statement.periodStart == null && !dates.isEmpty()) statement.periodStart = dates.getFirst();
-    if (statement.periodEnd == null && !dates.isEmpty()) statement.periodEnd = dates.getLast();
+    statement.periodStart = dates.isEmpty() ? null : dates.getFirst();
+    statement.periodEnd = dates.isEmpty() ? null : dates.getLast();
     var errors = new ArrayList<String>();
     if (rows.isEmpty()) errors.add("Não existem movimentos para confirmar");
     if (statement.accountId == null) errors.add("Falta a conta bancária");
-    BigDecimal signed = Money.ZERO;
     for (var row : rows) {
       BigDecimal amount = Money.optional(row.get("amount"));
       String direction = text(row, "direction");
@@ -199,21 +253,19 @@ public class DocumentPublisher {
           || direction == null
           || date(row, "bookedOn") == null
           || text(row, "description") == null) errors.add("Existe um movimento incompleto");
-      else signed = signed.add(direction.equals("DEBIT") ? amount.negate() : amount);
       if (direction != null && !Set.of("DEBIT", "CREDIT").contains(direction))
         errors.add("Direção de movimento inválida");
       if (row.get("currency") != null && !row.get("currency").equals("EUR"))
         errors.add("Moeda diferente de EUR");
     }
-    if (statement.openingBalance != null
-        && statement.closingBalance != null
-        && statement.openingBalance.add(signed).compareTo(statement.closingBalance) != 0)
-      errors.add("Os movimentos não explicam os saldos inicial/final");
-    if (!human && (statement.openingBalance == null || statement.closingBalance == null))
-      errors.add("Confirmar a integridade do extrato sem saldos de controlo");
     if (human && flag(draft, "validate") && !errors.isEmpty())
       throw DomainException.invalid(String.join("; ", errors));
     statement.validated = flag(draft, "validate") && errors.isEmpty();
+    for (var row : rows) {
+      row.remove("postBalance");
+      row.remove("balance");
+    }
+    doc.draft = Json.write(draft);
     book.batch(
         () -> {
           var old =

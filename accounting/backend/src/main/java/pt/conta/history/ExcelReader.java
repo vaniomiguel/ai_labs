@@ -78,7 +78,14 @@ public class ExcelReader {
           if (detectedYear == null) detectedYear = year(String.join(" ", cells));
           for (int c = 0; c < cells.size(); c++) {
             String normalized = MatchingRules.normalize(cells.get(c));
-            if (normalized.equals("SALDO INICIAL") || normalized.equals("INICIO DE SALDO")) {
+            boolean splitOpening =
+                normalized.equals("SALDO")
+                    && row.getRowNum() > 0
+                    && MatchingRules.normalize(cell(sheet.getRow(row.getRowNum() - 1), c, format))
+                        .equals("INICIO");
+            if (normalized.equals("SALDO INICIAL")
+                || normalized.equals("INICIO DE SALDO")
+                || splitOpening) {
               sheetOpening = nextAmount(row, c, format);
               if (opening == null) opening = sheetOpening;
             }
@@ -133,6 +140,7 @@ public class ExcelReader {
                     Money.text(expectedPayment),
                     "closing",
                     Money.text(expectedClosing)));
+        if (!kind.equals("HISTORY")) sheetResult.remove("controls");
         sheets.add(sheetResult);
         if (header < 0) {
           issues.add("Não foi reconhecido o cabeçalho da folha " + sheet.getSheetName());
@@ -284,25 +292,16 @@ public class ExcelReader {
     }
     if (kind.equals("HISTORY"))
       return Inputs.map("rows", items, "sheets", sheets, "issues", issues, "year", detectedYear);
-    if (opening == null || closing == null)
-      issues.add("Confirmar saldos inicial/final e integridade do extrato");
+    for (var movement : movements)
+      movement
+          .keySet()
+          .retainAll(Set.of("bookedOn", "description", "amount", "direction", "currency", "kind"));
     return Inputs.map(
-        "movements",
-        movements,
-        "sheets",
-        sheets,
-        "openingBalance",
-        Money.text(opening),
-        "closingBalance",
-        Money.text(closing),
-        "issues",
-        issues,
-        "validate",
-        issues.isEmpty());
+        "movements", movements, "sheets", sheets, "issues", issues, "validate", issues.isEmpty());
   }
 
   private static String cell(Row row, Integer column, DataFormatter format) {
-    return column == null ? "" : format.formatCellValue(row.getCell(column)).trim();
+    return column == null || row == null ? "" : format.formatCellValue(row.getCell(column)).trim();
   }
 
   private static BigDecimal numeric(Row row, Integer column, DataFormatter format) {

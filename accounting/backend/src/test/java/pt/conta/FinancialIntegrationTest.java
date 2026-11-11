@@ -437,7 +437,8 @@ class FinancialIntegrationTest {
   }
 
   @Test
-  void inconsistentStatementBlocksEveryRowUntilExplicitCorrection() throws Exception {
+  void statementIgnoresMissingOrInvalidBankBalancesWhenValidatingAndEditingMovements()
+      throws Exception {
     var doc =
         documents.upload(
             new ByteArrayInputStream(pdf("Extrato de teste")),
@@ -449,9 +450,9 @@ class FinancialIntegrationTest {
     var draft =
         map(
             "openingBalance",
-            "100.00",
+            "não interessa",
             "closingBalance",
-            "30.00",
+            "saldo irrelevante",
             "movements",
             List.of(
                 map(
@@ -473,19 +474,17 @@ class FinancialIntegrationTest {
         new DocumentConverter.Converted("Extrato", 1, map("pages", List.of()), "TEST"),
         draft);
     var m = store.all(pt.conta.bank.BankMovement.class).getFirst();
-    assertThat(m.reviewStatus).isEqualTo(pt.conta.shared.Types.ReviewStatus.OPEN);
+    assertThat(m.reviewStatus).isEqualTo(pt.conta.shared.Types.ReviewStatus.AUTOMATIC);
     assertThat(m.amount).isEqualByComparingTo("60.00");
-    draft.put("closingBalance", "40.00");
-    var current = store.get(SourceDocument.class, (UUID) doc.get("id"));
-    publisher.edit(
-        current.id, map("version", current.version, "draft", draft, "resolve", true), documents);
-    assertThat(m.reviewStatus).isEqualTo(pt.conta.shared.Types.ReviewStatus.CORRECTED);
+    var statement = store.get(pt.conta.bank.BankStatement.class, m.statementId);
+    statement.openingBalance = new java.math.BigDecimal("100.00");
+    statement.closingBalance = new java.math.BigDecimal("30.00");
     var edit = new LinkedHashMap<>(book.movementView(m));
     edit.put("amount", "70.00");
     edit.put("validate", true);
-    assertThatThrownBy(() -> book.saveMovement(m.id, edit))
-        .isInstanceOf(DomainException.class)
-        .hasMessageContaining("saldos");
+    book.saveMovement(m.id, edit);
+    assertThat(m.amount).isEqualByComparingTo("70.00");
+    assertThat(m.reviewStatus).isEqualTo(pt.conta.shared.Types.ReviewStatus.EDITED);
   }
 
   @Test
@@ -672,14 +671,7 @@ class FinancialIntegrationTest {
     processing.extract(
         new JobQueue.Claim(
             UUID.randomUUID(), "EXTRACT", statementDoc.id, statementDoc.version, "{}", 0));
-    assertThat(closing(2016, 1)).isEqualTo("123.45");
-    var draft = Json.object(statementDoc.draft);
-    draft.put("openingBalance", "200.00");
-    draft.put("closingBalance", "76.55");
-    publisher.edit(
-        statementDoc.id,
-        map("version", statementDoc.version, "draft", draft, "resolve", true),
-        documents);
+    assertThat(closing(2016, 1)).isEqualTo("0.00");
     if (!excelFirst) importLegacyWorkbook();
     assertThat(store.all(pt.conta.history.LegacyRow.class)).hasSize(1);
     assertThat(store.all(pt.conta.history.LegacyRow.class).getFirst().status)
@@ -723,5 +715,158 @@ class FinancialIntegrationTest {
             store.all(Job.class).stream()
                 .anyMatch(j -> j.targetId.equals(source.id) && j.kind.equals("REVIEW_DOCUMENT")))
         .isTrue();
+  }
+
+  @Test
+  void independentReceiptsKeepSeparateIdentitiesAndSavingDraftSuspendsBoth() throws Exception {
+    var original =
+        documents.upload(
+            new ByteArrayInputStream(pdf("Comprovativos independentes")),
+            "comprovativos.pdf",
+            "INVOICE",
+            null,
+            null,
+            null);
+    UUID id = (UUID) original.get("id");
+    var source = store.get(SourceDocument.class, id);
+    var one =
+        map(
+            "issuedOn",
+            "2016-03-04",
+            "supplier",
+            "Transportes de teste",
+            "total",
+            "4.50",
+            "currency",
+            "EUR",
+            "type",
+            "INVOICE",
+            "lines",
+            List.of());
+    var two =
+        map(
+            "issuedOn",
+            "2016-03-06",
+            "supplier",
+            "Transportes de teste",
+            "total",
+            "13.50",
+            "currency",
+            "EUR",
+            "type",
+            "INVOICE",
+            "lines",
+            List.of());
+    var draft = map("invoices", List.of(one, two));
+    publisher.edit(id, map("version", source.version, "draft", draft, "resolve", true), documents);
+    assertThat(store.all(Invoice.class)).hasSize(2);
+    var ids = store.all(Invoice.class).stream().map(i -> i.id).toList();
+    assertThat(closing(2016, 3)).isEqualTo("18.00");
+    publisher.edit(id, map("version", source.version, "draft", draft, "resolve", true), documents);
+    assertThat(store.all(Invoice.class).stream().map(i -> i.id)).containsExactlyElementsOf(ids);
+    assertThat(closing(2016, 3)).isEqualTo("18.00");
+    publisher.edit(id, map("version", source.version, "draft", draft, "resolve", false), documents);
+    assertThat(closing(2016, 3)).isEqualTo("0.00");
+  }
+
+  @Test
+  void disablingAiKeepsReviewQueuedWhileDocumentProcessingCanRun() {
+    queue.enqueue("REVIEW_DOCUMENT", UUID.randomUUID(), 0, "{}");
+    queue.enqueue("EXTRACT", UUID.randomUUID(), 0, "{}");
+    var rulesQueue = new JobQueue(jdbc, false);
+    var claim = rulesQueue.claim().orElseThrow();
+    assertThat(claim.kind()).isEqualTo("EXTRACT");
+    rulesQueue.finish(claim, null, false);
+    assertThat(rulesQueue.claim()).isEmpty();
+    assertThat(
+            jdbc.queryForObject("select state from job where kind='REVIEW_DOCUMENT'", String.class))
+        .isEqualTo("QUEUED");
+  }
+
+  @Test
+  void anUnknownAiFieldNeverErasesAnAlreadyReadInvoiceField() throws Exception {
+    var upload =
+        documents.upload(
+            new ByteArrayInputStream(pdf("Fatura: FT-KEEP-1", "Total: 37,82")),
+            "preservar.pdf",
+            "INVOICE",
+            null,
+            null,
+            null);
+    var source = store.get(SourceDocument.class, (UUID) upload.get("id"));
+    processing.extract(
+        new JobQueue.Claim(UUID.randomUUID(), "EXTRACT", source.id, source.version, "{}", 0));
+    publisher.aiExtracted(
+        source.id,
+        source.version,
+        map(
+            "total",
+            null,
+            "number",
+            null,
+            "supplier",
+            null,
+            "issuedOn",
+            null,
+            "currency",
+            "EUR",
+            "type",
+            "INVOICE",
+            "lines",
+            List.of(),
+            "validate",
+            false),
+        "[]");
+    assertThat(Json.object(source.draft))
+        .containsEntry("total", "37.82")
+        .containsEntry("number", "FT-KEEP-1");
+    assertThat(store.all(Invoice.class).getFirst().total).isEqualByComparingTo("37.82");
+  }
+
+  @Test
+  void bankBalanceConcernsCannotSuspendValidMovementFacts() {
+    var data =
+        map(
+            "accountId",
+            account.toString(),
+            "bookedOn",
+            "2026-01-02",
+            "description",
+            "Compra de teste",
+            "amount",
+            "7.00",
+            "direction",
+            "DEBIT",
+            "validate",
+            true);
+    var view = book.saveMovement(null, data, "RULES", false);
+    var m = store.get(pt.conta.bank.BankMovement.class, (UUID) view.get("id"));
+    var claim = new JobQueue.Claim(UUID.randomUUID(), "REVIEW_MOVEMENT", m.id, m.version, "{}", 0);
+    aiResults.reviewed(
+        claim,
+        map(
+            "verdict",
+            "CONCERN",
+            "summary",
+            "Saldo divergente",
+            "concerns",
+            List.of(map("field", "openingBalance", "quote", "Saldo inicial 999,00"))),
+        "Saldo inicial 999,00");
+    assertThat(m.reviewStatus).isEqualTo(pt.conta.shared.Types.ReviewStatus.AUTOMATIC);
+    assertThat(
+            store.all(pt.conta.review.Alert.class).stream()
+                .filter(a -> a.code.equals("AI_CONCERN")))
+        .isEmpty();
+    aiResults.reviewed(
+        claim,
+        map(
+            "verdict",
+            "CONCERN",
+            "summary",
+            "Montante divergente",
+            "concerns",
+            List.of(map("field", "amount", "quote", "Montante -8,00 EUR"))),
+        "Montante -8,00 EUR");
+    assertThat(m.reviewStatus).isEqualTo(pt.conta.shared.Types.ReviewStatus.OPEN);
   }
 }

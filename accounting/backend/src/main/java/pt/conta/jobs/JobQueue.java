@@ -10,9 +10,14 @@ import org.springframework.transaction.annotation.Transactional;
 @Service
 public class JobQueue {
   private final JdbcTemplate jdbc;
+  private final boolean aiEnabled;
 
-  public JobQueue(JdbcTemplate jdbc) {
+  public JobQueue(
+      JdbcTemplate jdbc,
+      @org.springframework.beans.factory.annotation.Value("${accounting.ai-enabled:true}")
+          boolean aiEnabled) {
     this.jdbc = jdbc;
+    this.aiEnabled = aiEnabled;
   }
 
   /** Enqueues work in the caller's transaction, once per target revision. */
@@ -43,7 +48,7 @@ public class JobQueue {
             """
             update job set state='RUNNING', lease_token=?, leased_until=now()+interval '30 minutes', updated_at=now()
             where id=(select id from job where ((state in ('QUEUED','WAITING') and available_at<=now())
-              or (state='RUNNING' and leased_until<now())) order by created_at for update skip locked limit 1)
+              or (state='RUNNING' and leased_until<now())) and (? or kind in ('EXTRACT','IMPORT_ZIP')) order by created_at for update skip locked limit 1)
             returning id,kind,target_id,target_version,payload,attempts,lease_token
             """,
             (rs, n) ->
@@ -55,7 +60,8 @@ public class JobQueue {
                     rs.getString(5),
                     rs.getInt(6),
                     rs.getObject(7, UUID.class)),
-            UUID.randomUUID());
+            UUID.randomUUID(),
+            aiEnabled);
     return rows.stream().findFirst();
   }
 

@@ -133,6 +133,16 @@ public class AiResults {
                   .anyMatch(m -> d.id.equals(m.documentId) && m.manuallyConfirmed);
     }
     if (target.version != job.revision()) return;
+    if (target instanceof BankMovement
+        || target instanceof SourceDocument d && d.kind.equals("STATEMENT")) {
+      grounded =
+          grounded.stream()
+              .filter(c -> AiEvidence.bankFieldRelevant(Objects.toString(c.get("field"), "")))
+              .toList();
+      if (grounded.isEmpty()) return;
+      result = new LinkedHashMap<>(result);
+      result.put("concerns", grounded);
+    }
     var alert =
         review.open(
             document,

@@ -141,6 +141,160 @@
               "total"
             ]
           }
+        },
+        "invoices": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "issuedOn": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "dueOn": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "number": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "supplier": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "supplierTaxId": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "description": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "total": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "net": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "tax": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "discount": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "relatedInvoiceId": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "currency": {
+                "type": "string"
+              },
+              "type": {
+                "enum": [
+                  "INVOICE",
+                  "CREDIT_NOTE"
+                ]
+              },
+              "categories": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "lines": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "description": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    },
+                    "quantity": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    },
+                    "unitPrice": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    },
+                    "net": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    },
+                    "tax": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    },
+                    "discount": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    },
+                    "total": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "description",
+                    "total"
+                  ]
+                }
+              }
+            },
+            "required": [
+              "issuedOn",
+              "supplier",
+              "total",
+              "currency",
+              "type",
+              "categories",
+              "lines"
+            ]
+          }
         }
       },
       "required": [

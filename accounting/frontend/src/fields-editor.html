@@ -1,3 +1,7 @@
+@if(kind==='INVOICE' && data.invoices?.length){
+  <p>Este original contém {{data.invoices.length}} comprovativos independentes.</p>
+  @for(invoice of data.invoices;track $index){<details [open]="true"><summary>Comprovativo {{$index+1}} · {{invoice.supplier || 'Por identificar'}}</summary><record-fields kind="INVOICE" [data]="invoice" [accounts]="accounts" /></details>}
+} @else {
 @if(kind==='INVOICE'){
 <div class="form-grid">
   <label
@@ -164,22 +168,6 @@
   ></textarea>
 </label>
 } @if(kind==='STATEMENT'){
-<div class="form-grid">
-  <label
-    >Início do período<input
-      type="date"
-      [(ngModel)]="data.periodStart" /></label
-  ><label
-    >Fim do período<input type="date" [(ngModel)]="data.periodEnd"
-  /></label>
-  <label
-    >Saldo inicial<input
-      [(ngModel)]="data.openingBalance"
-      inputmode="decimal" /></label
-  ><label
-    >Saldo final<input [(ngModel)]="data.closingBalance" inputmode="decimal"
-  /></label>
-</div>
 <div class="section-heading">
   <h3>Movimentos <span>{{movements.length}}</span></h3>
   <button mat-stroked-button (click)="addMovement()">+ Movimento</button>
@@ -189,10 +177,7 @@
     <thead>
       <tr>
         <th>Data</th>
-        <th>Data valor</th>
-        <th>Hora</th>
         <th>Descrição</th>
-        <th>Referência</th>
         <th>Montante</th>
         <th>Direção</th>
         <th></th>
@@ -202,10 +187,7 @@
       @for(m of movements;track $index){
       <tr>
         <td><input type="date" [(ngModel)]="m.bookedOn" /></td>
-        <td><input type="date" [(ngModel)]="m.valueOn" /></td>
-        <td><input type="time" [(ngModel)]="m.occurredAt" /></td>
         <td><textarea [(ngModel)]="m.description" rows="2"></textarea></td>
-        <td><input [(ngModel)]="m.bankReference" /></td>
         <td><input [(ngModel)]="m.amount" inputmode="decimal" /></td>
         <td>
           <select [(ngModel)]="m.direction">
@@ -283,4 +265,6 @@
     </tbody>
   </table>
 </div>
+}
+
 }

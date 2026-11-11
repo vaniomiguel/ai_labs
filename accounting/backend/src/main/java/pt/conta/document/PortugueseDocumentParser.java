@@ -116,6 +116,8 @@ public class PortugueseDocumentParser {
    * Parses explicit, dated bank rows and requires a complete header/row count before publication.
    */
   public Map<String, Object> statement(String text) {
+    if (normalizedText(text).contains("SALDO CONTABILISTICO APOS MOVIMENTO"))
+      return runningBalanceStatement(text);
     var rows = new ArrayList<Map<String, Object>>();
     var issues = new ArrayList<String>();
     var pattern =
@@ -152,10 +154,59 @@ public class PortugueseDocumentParser {
       }
     }
     if (rows.isEmpty()) issues.add("Não foram reconhecidos movimentos bancários");
-    // A generic PDF parser cannot prove that no row was missed. AI or the owner reviews the
-    // complete statement.
-    issues.add("Confirmar a integridade do extrato e os saldos inicial/final");
-    return Inputs.map("movements", rows, "issues", issues, "validate", false);
+    long dated =
+        Pattern.compile("(?m)^\\s*\\d{2}[/-]\\d{2}[/-]\\d{4}\\s+").matcher(text).results().count();
+    if (dated != rows.size()) issues.add("Existem linhas de movimentos por reconhecer");
+    return Inputs.map("movements", rows, "issues", issues, "validate", issues.isEmpty());
+  }
+
+  /** Reads the movement column of CGD tables, ignoring headline and row balances. */
+  private Map<String, Object> runningBalanceStatement(String text) {
+    var movements = new ArrayList<Map<String, Object>>();
+    var issues = new ArrayList<String>();
+    String prefix =
+        "^[ \\t]*(\\d{2}-\\d{2}-\\d{4})[ \\t]+(\\d{2}-\\d{2}-\\d{4})[ \\t]+(.+)[ \\t]+([+-]?"
+            + AMOUNT
+            + ")";
+    var withIgnoredColumn = Pattern.compile(prefix + "[ \\t]+\\S[^\\r\\n]*$");
+    var withoutIgnoredColumn = Pattern.compile(prefix + "[ \\t]*$");
+    var lines = text.split("\\R");
+    int dated = 0;
+    for (int n = 0; n < lines.length; n++) {
+      String line = lines[n];
+      if (!line.matches("^[ \\t]*\\d{2}-\\d{2}-\\d{4}[ \\t]+\\d{2}-\\d{2}-\\d{4}.*")) continue;
+      dated++;
+      var row = withIgnoredColumn.matcher(line);
+      if (!row.matches()) {
+        row = withoutIgnoredColumn.matcher(line);
+        if (!row.matches()) continue;
+      }
+      String description = row.group(3).trim();
+      if (n + 1 < lines.length && lines[n + 1].trim().matches("[A-ZÀ-Ý][A-ZÀ-Ý \\t]{1,50}"))
+        description += " " + lines[++n].trim();
+      String raw = row.group(4);
+      movements.add(
+          Inputs.map(
+              "bookedOn",
+              safeBankDate(row.group(1), issues),
+              "description",
+              description,
+              "amount",
+              amount(raw.replaceFirst("^[+-]", "")),
+              "direction",
+              raw.startsWith("-") ? "DEBIT" : "CREDIT",
+              "currency",
+              "EUR",
+              "kind",
+              "UNCLASSIFIED"));
+    }
+    if (movements.isEmpty() || movements.size() != dated)
+      issues.add("Existem linhas de movimentos por reconhecer");
+    return Inputs.map("movements", movements, "issues", issues, "validate", issues.isEmpty());
+  }
+
+  private String normalizedText(String text) {
+    return pt.conta.reconciliation.MatchingRules.normalize(text).replaceAll("\\s+", " ");
   }
 
   /** Blanks only an unreadable date while retaining the bank row's description and amount. */
