@@ -17,11 +17,13 @@ public class AssistantController {
   private final AiProvider provider;
   private final Settings settings;
   private final Store store;
+  private final String endpoint;
 
-  public AssistantController(AiProvider provider, Settings settings, Store store) {
+  public AssistantController(AiProvider provider, Settings settings, Store store, AccountingProperties properties) {
     this.provider = provider;
     this.settings = settings;
     this.store = store;
+    this.endpoint = OllamaProvider.endpoint(properties.ollamaUrl());
   }
 
   /** Returns a usable offline state and versioned recommendations when Ollama is unavailable. */
@@ -38,6 +40,7 @@ public class AssistantController {
     var selected = new LinkedHashMap<String, String>();
     for (String task : TASKS) selected.put(task, settings.get("model:" + task, "qwen3.5:9b"));
     return map(
+        "endpoint", endpoint,
         "models",
         models,
         "selected",

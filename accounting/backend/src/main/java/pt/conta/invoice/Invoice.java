@@ -47,6 +47,7 @@ public class Invoice extends BaseEntity {
   public String author;
   public boolean manuallyConfirmed;
   public boolean deleted;
+  public boolean excluded;
 
   @ElementCollection
   @CollectionTable(name = "invoice_category", joinColumns = @JoinColumn(name = "invoice_id"))

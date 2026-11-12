@@ -1,5 +1,15 @@
 # Verificação da entrega — 11 de novembro de 2026
 
+## Reconciliação completa — 12 de novembro de 2026
+
+Implementadas as entradas sem correspondência, o efeito integral dos débitos/créditos e a exclusão reversível de faturas e movimentos. As associações organizam os registos numa linha por grupo, sem duplicar efeitos financeiros. As diferenças de data e valor ficam visíveis; grupos entre períodos mostram o saldo global e o impacto do período em separado.
+
+Verificação local: **69 testes Java aprovados**, incluindo uma atualização de PostgreSQL V1 com dados e associações existentes para V2. O ensaio confirma a preservação dos lançamentos antigos e das associações, as anulações datadas, os novos sinais bancários e duas sincronizações da aplicação sem lançamentos adicionais. A suite cobre ainda exclusão de cada lado e de ambos, seleção parcial em grupos, estornos dependentes, reinclusão, dados por validar, versões antigas, concorrência e preservação do marcador ao republicar ou reordenar movimentos e comprovativos. A identificação usa os registos e referências guardados; uma alteração ambígua não transfere uma exclusão para outra linha.
+
+**Cinco testes Playwright aprovados**, com API e PostgreSQL reais numa instalação temporária: entrada sem fatura e correspondência posterior; exclusão/reinclusão de cada lado e de ambos; pagamentos agrupados; datas entre anos; navegação por teclado e apresentação num ecrã de 390 px. A compilação Angular de produção, Maven `verify`, as referências internas OpenAPI e a sintaxe do lançador de testes também passaram. Os testes de interface foram acrescentados ao workflow de integração contínua; a execução alojada ainda depende desse workflow.
+
+Estes ensaios usam dados sintéticos e uma base isolada. A migração da instalação do utilizador ocorre no próximo arranque com o novo backend; essa instalação não foi alterada pelos testes.
+
 ## Ajuste dos critérios bancários
 
 Os extratos são agora validados apenas por data, descrição, montante e débito/crédito. Foram retiradas a exigência e a comparação de saldos bancários, incluindo das prompts e do editor. Os três extratos reais foram reprocessados nas duas instalações: dez movimentos corretos e validados em cada uma, com descrições completas e sem saldos nos rascunhos. Os 42 testes Java passaram. As verificações do saldo do gestor e do Excel histórico mantêm-se. Os resultados anteriores abaixo documentam a versão então ensaiada.

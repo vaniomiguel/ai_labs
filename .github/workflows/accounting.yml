@@ -34,6 +34,17 @@ jobs:
         run: mkdir -p accounting/backend/src/main/resources/static && cp -R accounting/frontend/dist/conta/browser/. accounting/backend/src/main/resources/static/
       - name: Verificar aplicação e PostgreSQL 18
         run: mvn -B -f accounting/backend/pom.xml verify
+      - name: Preparar Chromium para os testes de interface
+        working-directory: accounting/frontend
+        run: npx playwright install --with-deps chromium
+      - name: Verificar reconciliação na interface
+        working-directory: accounting/frontend
+        run: npm run test:e2e
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: conta-interface-falhas
+          path: accounting/frontend/test-results/
       - uses: actions/upload-artifact@v4
         if: always()
         with:

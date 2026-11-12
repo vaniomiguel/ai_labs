@@ -2,6 +2,84 @@ import { Injectable, inject } from "@angular/core";
 import { HttpClient, HttpErrorResponse } from "@angular/common/http";
 import { firstValueFrom } from "rxjs";
 
+export interface ReconciliationEntry {
+  id: string;
+  status: string;
+  excluded: boolean;
+  invoices: any[];
+  movements: any[];
+  allocations: any[];
+  differences: { dates: boolean; amounts: boolean };
+  invoiceTotal: string;
+  debitTotal: string;
+  creditTotal: string;
+  balanceImpact: string | null;
+  periodImpact: string | null;
+  spansPeriods: boolean;
+  firstDate: string | null;
+  lastDate: string | null;
+}
+export interface ReconciliationPage {
+  items: ReconciliationEntry[];
+  total: number;
+  page: number;
+  size: number;
+}
+export interface ExclusionItem {
+  type: "invoice" | "movement";
+  id: string;
+  version: number;
+}
+export interface ExclusionRequest {
+  excluded: boolean;
+  items: ExclusionItem[];
+  reason?: string;
+}
+
+export interface JobCounts {
+  QUEUED: number;
+  RUNNING: number;
+  WAITING: number;
+  DONE: number;
+  FAILED: number;
+  active: number;
+  total: number;
+}
+export interface JobTarget {
+  type: "invoice" | "movement" | "document" | "allocation" | "alert" | "unknown";
+  id: string;
+  label: string;
+  available: boolean;
+  documentId: string | null;
+  invoiceId?: string;
+  movementId?: string;
+  invoiceAvailable?: boolean;
+  movementAvailable?: boolean;
+  amount?: string;
+  active?: boolean;
+  evidence?: string;
+}
+export interface JobItem {
+  id: string;
+  kind: string;
+  targetId: string;
+  targetVersion: number;
+  state: string;
+  attempts: number;
+  error: string | null;
+  createdAt: string;
+  updatedAt: string;
+  availableAt: string | null;
+  target: JobTarget;
+}
+export interface JobPage {
+  items: JobItem[];
+  total: number;
+  page: number;
+  size: number;
+  counts: JobCounts;
+}
+
 /** Same-origin API client. Angular supplies XSRF headers from the authenticated cookie. */
 @Injectable({ providedIn: "root" })
 export class Api {
@@ -92,6 +170,12 @@ export const labels: Record<string, string> = {
   PROCESSING: "Em processamento",
   PARTIAL: "Parcial",
   RECONCILED: "Reconciliado",
+  EXCLUDED: "Excluído do saldo",
+  PENDING_REVIEW: "Por validar",
+  UNMATCHED_INVOICE: "Sem movimento",
+  UNMATCHED_MOVEMENT: "Sem fatura",
+  MATCHED: "Correspondência",
+  MATCHED_DIFFERENCES: "Com diferenças",
   RESOLVED: "Resolvido",
   QUEUED: "Em fila",
   RUNNING: "A processar",

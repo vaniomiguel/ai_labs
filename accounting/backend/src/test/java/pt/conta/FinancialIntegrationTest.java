@@ -2,6 +2,7 @@ package pt.conta;
 
 import static org.assertj.core.api.Assertions.*;
 import static pt.conta.shared.Inputs.map;
+import static pt.conta.shared.Inputs.rows;
 
 import io.zonky.test.db.postgres.embedded.EmbeddedPostgres;
 import java.io.*;
@@ -13,6 +14,7 @@ import java.util.concurrent.*;
 import org.junit.jupiter.api.*;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
+import org.junit.jupiter.params.provider.CsvSource;
 import org.springframework.beans.factory.annotation.*;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.jdbc.core.JdbcTemplate;
@@ -25,6 +27,9 @@ import pt.conta.invoice.Invoice;
 import pt.conta.jobs.*;
 import pt.conta.ledger.*;
 import pt.conta.reconciliation.Allocation;
+import pt.conta.reconciliation.ExclusionRequest;
+import pt.conta.reconciliation.ReconciliationService;
+import pt.conta.bank.BankMovement;
 import pt.conta.shared.*;
 
 /** Exercises real PostgreSQL 18 migrations, transactional money invariants and session security. */
@@ -53,6 +58,8 @@ class FinancialIntegrationTest {
   @Autowired ProcessingService processing;
   @Autowired DocumentStorage storage;
   @Autowired JobQueue queue;
+  @Autowired JobMonitor jobMonitor;
+  @Autowired pt.conta.api.ProgressController progress;
   @Autowired JdbcTemplate jdbc;
   @Autowired DocumentPublisher publisher;
   @Autowired pt.conta.ai.AiResults aiResults;
@@ -271,6 +278,10 @@ class FinancialIntegrationTest {
             .cookieHandler(new CookieManager(null, CookiePolicy.ACCEPT_ALL))
             .build();
     String base = "http://127.0.0.1:" + port;
+    for (String path : List.of("/jobs/page", "/jobs/" + UUID.randomUUID(), "/events", "/reconciliation/entries")) {
+      assertThat(client.send(HttpRequest.newBuilder(URI.create(base + "/api/v1" + path)).GET().build(),
+          HttpResponse.BodyHandlers.ofString()).statusCode()).isEqualTo(401);
+    }
     assertThat(
             client
                 .send(
@@ -292,6 +303,32 @@ class FinancialIntegrationTest {
             .build();
     assertThat(client.send(login, HttpResponse.BodyHandlers.ofString()).statusCode())
         .isEqualTo(200);
+    String nextToken = Json.read(client.send(HttpRequest.newBuilder(URI.create(base + "/api/v1/csrf")).GET().build(),
+        HttpResponse.BodyHandlers.ofString()).body()).path("token").asText();
+    for (String invalid : List.of("{}", "{\"excluded\":true,\"items\":[]}",
+        "{\"excluded\":true,\"items\":[{\"type\":\"other\",\"id\":\"" + UUID.randomUUID() + "\",\"version\":0}]}")) {
+      assertThat(client.send(HttpRequest.newBuilder(URI.create(base + "/api/v1/reconciliation/exclusions"))
+          .header("Content-Type", "application/json").header("X-XSRF-TOKEN", nextToken)
+          .POST(HttpRequest.BodyPublishers.ofString(invalid)).build(), HttpResponse.BodyHandlers.ofString()).statusCode()).isEqualTo(400);
+    }
+    assertThat(client.send(HttpRequest.newBuilder(URI.create(base + "/api/v1/reconciliation/exclusions"))
+        .header("Content-Type", "application/json").POST(HttpRequest.BodyPublishers.ofString("{}"))
+        .build(), HttpResponse.BodyHandlers.ofString()).statusCode()).isEqualTo(403);
+    var page = client.send(HttpRequest.newBuilder(URI.create(base + "/api/v1/jobs/page")).GET().build(),
+        HttpResponse.BodyHandlers.ofString());
+    assertThat(page.statusCode()).isEqualTo(200);
+    assertThat(Json.read(page.body()).path("size").asInt()).isEqualTo(50);
+    assertThat(client.send(HttpRequest.newBuilder(URI.create(base + "/api/v1/jobs/" + UUID.randomUUID())).GET().build(),
+        HttpResponse.BodyHandlers.ofString()).statusCode()).isEqualTo(404);
+    var stream = client.send(HttpRequest.newBuilder(URI.create(base + "/api/v1/events")).GET().build(),
+        HttpResponse.BodyHandlers.ofInputStream());
+    assertThat(stream.statusCode()).isEqualTo(200);
+    try (var lines = new BufferedReader(new InputStreamReader(stream.body()))) {
+      assertThat(lines.readLine()).isEqualTo("event:progress");
+      String data = lines.readLine();
+      assertThat(data).startsWith("data:");
+      assertThat(Json.read(data.substring(5)).path("jobStates").has("WAITING")).isTrue();
+    }
     assertThat(
             client
                 .send(
@@ -309,6 +346,101 @@ class FinancialIntegrationTest {
                     HttpResponse.BodyHandlers.ofString())
                 .statusCode())
         .isEqualTo(403);
+    client.close();
+  }
+
+  @Test
+  void processingExplainsTwoMovementsAndOneDocumentWithoutFinancialFilters() {
+    jdbc.update("delete from job");
+    var first = movement("138.21", "2016-01-11", "FIDELIDADE COMPANHI", "UNCLASSIFIED", "DEBIT");
+    movement("100.00", "2016-01-29", "Contabilidade Janeiro", "UNCLASSIFIED", "DEBIT");
+    var doc = new SourceDocument();
+    doc.filename = "ExtratoMensalJan.pdf";
+    doc.kind = "STATEMENT";
+    store.add(doc);
+    store.flush();
+    queue.enqueue("REVIEW_DOCUMENT", doc.id, doc.version, "{}");
+    jdbc.update("update job set state='WAITING',error='Ollama indisponível'");
+    var page = jobMonitor.page("active", 0, 50);
+    assertThat(page.get("total")).isEqualTo(3L);
+    assertThat((Map<String, Object>) page.get("counts")).containsEntry("WAITING", 3L);
+    var items = (List<?>) page.get("items");
+    assertThat(items).hasSize(3);
+    assertThat(items.stream().map(item -> ((Map<?, ?>) item).get("kind").toString()).toList())
+        .containsExactlyInAnyOrder("REVIEW_MOVEMENT", "REVIEW_MOVEMENT", "REVIEW_DOCUMENT");
+    var jobId = jdbc.queryForObject("select id from job where target_id=?", UUID.class, first.get("id"));
+    var detail = jobMonitor.detail(jobId);
+    assertThat((Map<String, Object>) detail.get("target")).containsEntry("label", "FIDELIDADE COMPANHI");
+    assertThat(detail.get("attempts")).isEqualTo(0);
+    assertThat(progress.snapshot().get("jobs")).isEqualTo(3L);
+    jdbc.update("update job set state='DONE',error=null,updated_at=now() where id=?", jobId);
+    assertThat(jobMonitor.page("active", 0, 50).get("total")).isEqualTo(2L);
+    assertThat(jobMonitor.detail(jobId).get("state")).isEqualTo("DONE");
+    assertThat(book.movementView(store.get(pt.conta.bank.BankMovement.class, (UUID) first.get("id"))).get("kind"))
+        .hasToString("UNCLASSIFIED");
+  }
+
+  @Test
+  void processingPagesFiltersAndHandlesMissingOrDeletedRecords() {
+    jdbc.update("delete from job");
+    assertThat(jobMonitor.page("active", 0, 50).get("total")).isEqualTo(0L);
+    jdbc.update("""
+        insert into job(id,version,created_at,updated_at,kind,target_id,target_version,state,attempts,available_at)
+        select gen_random_uuid(),0,now(),now(),'EXTRACT',gen_random_uuid(),0,'DONE',0,now()
+        from generate_series(1,55)
+        """);
+    for (String state : List.of("QUEUED", "RUNNING", "WAITING", "FAILED")) {
+      UUID target = UUID.randomUUID();
+      queue.enqueue("REVIEW_MOVEMENT", target, 0, "{}");
+      jdbc.update("update job set state=? where target_id=?", state, target);
+      assertThat(jobMonitor.page(state, 0, 50).get("total")).isEqualTo(1L);
+    }
+    assertThat(jobMonitor.page("active", 0, 50).get("total")).isEqualTo(3L);
+    assertThat(jobMonitor.page("all", 0, 50).get("total")).isEqualTo(59L);
+    var firstPage = (List<Object>) jobMonitor.page("all", 0, 50).get("items");
+    var secondPage = (List<Object>) jobMonitor.page("all", 1, 50).get("items");
+    assertThat(firstPage).hasSize(50);
+    assertThat(secondPage).hasSize(9).doesNotContainAnyElementsOf(firstPage);
+    assertThat((List<?>) jobMonitor.page("all", 2, 50).get("items")).isEmpty();
+    UUID orphan = jdbc.queryForObject("select id from job where state='WAITING'", UUID.class);
+    assertThat((Map<String, Object>) jobMonitor.detail(orphan).get("target")).containsEntry("available", false);
+    var m = movement("10.00", "2016-01-01", "Eliminado", "UNCLASSIFIED", "DEBIT");
+    store.get(pt.conta.bank.BankMovement.class, (UUID) m.get("id")).deleted = true;
+    store.flush();
+    UUID deleted = jdbc.queryForObject("select id from job where target_id=?", UUID.class, m.get("id"));
+    assertThat((Map<String, Object>) jobMonitor.detail(deleted).get("target"))
+        .containsEntry("available", false).containsEntry("label", "Eliminado");
+    assertThatThrownBy(() -> jobMonitor.page("unexpected", 0, 50)).isInstanceOf(DomainException.class);
+    assertThatThrownBy(() -> jobMonitor.page("all", -1, 50)).isInstanceOf(DomainException.class);
+    assertThatThrownBy(() -> jobMonitor.page("all", 0, 101)).isInstanceOf(DomainException.class);
+    assertThatThrownBy(() -> jobMonitor.detail(UUID.randomUUID())).isInstanceOf(DomainException.class);
+  }
+
+  @Test
+  void processingResolvesInvoicesAllocationsAndAlerts() {
+    jdbc.update("delete from job");
+    var i = invoice("25.00", "2016-02-01", "MONITOR-25");
+    var m = movement("25.00", "2016-02-02", "Pagamento monitorizado", "UNCLASSIFIED", "DEBIT");
+    var allocation = new Allocation();
+    allocation.invoiceId = (UUID) i.get("id");
+    allocation.movementId = (UUID) m.get("id");
+    allocation.amount = new java.math.BigDecimal("25.00");
+    allocation.evidence = "Associação confirmada";
+    store.add(allocation);
+    var alert = new pt.conta.review.Alert();
+    alert.message = "Confirmar documento";
+    store.add(alert);
+    store.flush();
+    queue.enqueue("REVIEW_ALLOCATION", allocation.id, allocation.version, "{}");
+    queue.enqueue("REPAIR_ALERT", alert.id, alert.version, "{}");
+    UUID allocationJob = jdbc.queryForObject("select id from job where target_id=?", UUID.class, allocation.id);
+    var target = (Map<String, Object>) jobMonitor.detail(allocationJob).get("target");
+    assertThat(target).containsEntry("type", "allocation").containsEntry("available", true)
+        .containsEntry("invoiceId", i.get("id")).containsEntry("movementId", m.get("id"))
+        .containsEntry("amount", "25.00").containsEntry("evidence", "Associação confirmada");
+    var items = (List<Map<String, Object>>) jobMonitor.page("all", 0, 50).get("items");
+    assertThat(items.stream().map(item -> ((Map<?, ?>) item.get("target")).get("type").toString()).toList())
+        .contains("invoice", "movement", "allocation", "alert");
   }
 
   @Test
@@ -476,6 +608,7 @@ class FinancialIntegrationTest {
     var m = store.all(pt.conta.bank.BankMovement.class).getFirst();
     assertThat(m.reviewStatus).isEqualTo(pt.conta.shared.Types.ReviewStatus.AUTOMATIC);
     assertThat(m.amount).isEqualByComparingTo("60.00");
+    assertThat(closing(2026, 1)).isEqualTo("-60.00");
     var statement = store.get(pt.conta.bank.BankStatement.class, m.statementId);
     statement.openingBalance = new java.math.BigDecimal("100.00");
     statement.closingBalance = new java.math.BigDecimal("30.00");
@@ -484,6 +617,7 @@ class FinancialIntegrationTest {
     edit.put("validate", true);
     book.saveMovement(m.id, edit);
     assertThat(m.amount).isEqualByComparingTo("70.00");
+    assertThat(closing(2026, 1)).isEqualTo("-70.00");
     assertThat(m.reviewStatus).isEqualTo(pt.conta.shared.Types.ReviewStatus.EDITED);
   }
 
@@ -533,7 +667,7 @@ class FinancialIntegrationTest {
     assertThat(store.all(Allocation.class).stream().filter(a -> a.active)).hasSize(1);
     var second = invoice("100.00", "2026-03-01", "LATE-2");
     assertThat(store.all(Allocation.class).stream().filter(a -> a.active)).isEmpty();
-    assertThat(closing(2026, 3)).isEqualTo("200.00");
+    assertThat(closing(2026, 3)).isEqualTo("100.00");
     allocate(second, payment, "100.00");
     assertThat(
             store.all(pt.conta.review.Alert.class).stream()
@@ -868,5 +1002,311 @@ class FinancialIntegrationTest {
             List.of(map("field", "amount", "quote", "Montante -8,00 EUR"))),
         "Montante -8,00 EUR");
     assertThat(m.reviewStatus).isEqualTo(pt.conta.shared.Types.ReviewStatus.OPEN);
+  }
+
+  private ExclusionRequest.Item selection(String type, Map<String, Object> row) {
+    UUID id = (UUID) row.get("id");
+    var entity = type.equals("invoice") ? store.get(Invoice.class, id) : store.get(BankMovement.class, id);
+    return new ExclusionRequest.Item(type, id, entity.version);
+  }
+
+  private void participation(boolean excluded, ExclusionRequest.Item... items) {
+    book.exclude(new ExclusionRequest(excluded, List.of(items), null));
+  }
+
+  private ReconciliationService.Page entries() {
+    return finance.entries(Map.of("year", "2026"));
+  }
+
+  @Test
+  void everyUnmatchedSourceAppearsAndContributesItsFullSignedValue() {
+    invoice("100.00", "2026-01-01", "ISOLATED-INVOICE");
+    movement("60.00", "2026-01-02", "Débito sem referência", "OTHER", "DEBIT");
+    movement("25.00", "2026-01-03", "Crédito sem referência", "UNCLASSIFIED", "CREDIT");
+    assertThat(closing(2026, 1)).isEqualTo("65.00");
+    assertThat(entries().items()).hasSize(3);
+    assertThat(entries().items()).extracting(ReconciliationService.Entry::balanceImpact)
+        .containsExactly("100.00", "-60.00", "25.00");
+    assertThat(entries().items()).extracting(ReconciliationService.Entry::status)
+        .containsExactly("UNMATCHED_INVOICE", "UNMATCHED_MOVEMENT", "UNMATCHED_MOVEMENT");
+  }
+
+  @ParameterizedTest
+  @CsvSource({"60.00,40.00,true", "100.00,0.00,true", "120.00,-20.00,true",
+      "60.00,40.00,false", "100.00,0.00,false", "120.00,-20.00,false"})
+  void referencedPairsMatchInEitherArrivalOrderIncludingOverpayments(
+      String amount, String expected, boolean invoiceFirst) {
+    if (invoiceFirst) invoice("100.00", "2026-01-01", "REFERENCE-1001");
+    movement(amount, "2026-01-02", "Pagamento REFERENCE-1001", "UNCLASSIFIED", "DEBIT");
+    if (!invoiceFirst) invoice("100.00", "2026-01-01", "REFERENCE-1001");
+    var page = entries();
+    assertThat(page.items()).hasSize(1);
+    var row = page.items().getFirst();
+    assertThat(row.invoices()).hasSize(1);
+    assertThat(row.movements()).hasSize(1);
+    assertThat(row.allocations()).hasSize(1);
+    assertThat(row.balanceImpact()).isEqualTo(expected);
+    assertThat(row.differences().dates()).isTrue();
+    assertThat(row.differences().amounts()).isEqualTo(!amount.equals("100.00"));
+    assertThat(closing(2026, 1)).isEqualTo(expected);
+    int postings = store.all(LedgerEntry.class).size();
+    finance.reconcile();
+    finance.reconcile();
+    assertThat(store.all(LedgerEntry.class)).hasSize(postings);
+    assertThat(entries().items().getFirst().id()).isEqualTo(row.id());
+    book.unallocate((UUID) row.allocations().getFirst().get("id"));
+    assertThat(entries().items()).hasSize(2);
+    assertThat(closing(2026, 1)).isEqualTo(expected);
+  }
+
+  @Test
+  void exactPairHasNoDifferencesAndGroupedSourcesAreNeverDuplicated() {
+    var a = invoice("60.00", "2026-01-01", "PAIR-A");
+    var b = invoice("40.00", "2026-01-01", "PAIR-B");
+    var m = movement("100.00", "2026-01-01", "Pagamento agrupado", "UNCLASSIFIED", "DEBIT");
+    allocate(a, m, "60.00");
+    allocate(b, m, "40.00");
+    var group = entries().items().getFirst();
+    assertThat(entries().total()).isEqualTo(1);
+    assertThat(group.invoices()).hasSize(2);
+    assertThat(group.movements()).hasSize(1);
+    assertThat(group.status()).isEqualTo("MATCHED");
+    assertThat(group.differences()).isEqualTo(new ReconciliationService.Differences(false, false));
+    assertThat(group.balanceImpact()).isEqualTo("0.00");
+  }
+
+  @Test
+  void filteringAndPagingKeepTheWholeCrossYearGroupAndItsPeriodEffect() {
+    var i = invoice("100.00", "2025-12-10", "DATES-1001");
+    var m = movement("60.00", "2026-02-12", "Pagamento DATES-1001", "UNCLASSIFIED", "DEBIT");
+    invoice("7.00", "2026-02-13", "UNRELATED-1001");
+    var february = finance.entries(Map.of("year", "2026", "month", "2", "size", "1"));
+    assertThat(february.total()).isEqualTo(2);
+    var row = february.items().getFirst();
+    assertThat(row.invoices().getFirst().get("id")).isEqualTo(i.get("id"));
+    assertThat(row.movements().getFirst().get("id")).isEqualTo(m.get("id"));
+    assertThat(row.balanceImpact()).isEqualTo("40.00");
+    assertThat(row.periodImpact()).isEqualTo("-60.00");
+    assertThat(row.spansPeriods()).isTrue();
+    var december = finance.entries(Map.of("year", "2025", "month", "12")).items().getFirst();
+    assertThat(december.id()).isEqualTo(row.id());
+    assertThat(december.periodImpact()).isEqualTo("100.00");
+    assertThat(finance.entries(Map.of("year", "2026", "month", "2", "page", "1", "size", "1")).items().getFirst().id()).isNotEqualTo(row.id());
+    assertThat(finance.entries(Map.of("q", "DATES-1001")).items()).hasSize(1);
+    assertThat(finance.entries(Map.of("year", "2026", "month", "1")).items()).isEmpty();
+    assertThat(closing(2025, 12)).isEqualTo("100.00");
+    assertThat(closing(2026, 2)).isEqualTo("-53.00");
+  }
+
+  @ParameterizedTest
+  @ValueSource(strings = {"invoice", "movement", "both"})
+  void excludingEitherSideOrBothDetachesAndReincludingUsesCurrentEvidence(String side) {
+    var i = invoice("100.00", "2026-01-01", "EXCLUDE-1001");
+    var m = movement("100.00", "2026-01-02", "Pagamento EXCLUDE-1001", "UNCLASSIFIED", "DEBIT");
+    var selected = new ArrayList<ExclusionRequest.Item>();
+    if (!side.equals("movement")) selected.add(selection("invoice", i));
+    if (!side.equals("invoice")) selected.add(selection("movement", m));
+    book.exclude(new ExclusionRequest(true, selected, "Desconsiderado pelo gestor"));
+    assertThat(entries().items()).hasSize(2);
+    assertThat(entries().items().stream().filter(ReconciliationService.Entry::excluded)).hasSize(selected.size());
+    assertThat(entries().items().stream().filter(ReconciliationService.Entry::excluded))
+        .allSatisfy(row -> assertThat(row.balanceImpact()).isEqualTo("0.00"));
+    assertThat(closing(2026, 1)).isEqualTo(side.equals("both") ? "0.00" : side.equals("invoice") ? "-100.00" : "100.00");
+    assertThat(store.all(Allocation.class).stream().filter(a -> a.active)).isEmpty();
+    assertThat(book.candidates()).isEmpty();
+    assertThat(store.all(AppSetting.class).stream().filter(s -> s.name.startsWith("rejected:"))).isEmpty();
+    assertThat(store.all(pt.conta.review.Alert.class).stream().filter(a -> a.status.equals("OPEN") && a.entityType.equals("allocation"))).isEmpty();
+    participation(false, selection("invoice", i), selection("movement", m));
+    assertThat(entries().items()).hasSize(1);
+    assertThat(entries().items().getFirst().excluded()).isFalse();
+    assertThat(closing(2026, 1)).isEqualTo("0.00");
+    assertThat(store.all(Allocation.class)).hasSize(2);
+  }
+
+  @Test
+  void excludedInvoiceReleasesMovementToAnotherInvoiceImmediately() {
+    var first = invoice("100.00", "2026-01-01", "PRIMARY-1001");
+    movement("100.00", "2026-01-02", "Fornecedor Exemplo PRIMARY-1001", "UNCLASSIFIED", "DEBIT");
+    var next = invoice("100.00", "2026-01-03", "SECONDARY-1001");
+    participation(true, selection("invoice", first));
+    var active = store.all(Allocation.class).stream().filter(a -> a.active).toList();
+    assertThat(active).hasSize(1);
+    assertThat(active.getFirst().invoiceId).isEqualTo(next.get("id"));
+    assertThat(closing(2026, 1)).isEqualTo("0.00");
+    assertThat(finance.summary(2026, 1).get("outstanding")).isEqualTo("0.00");
+  }
+
+  @Test
+  void partialGroupExclusionKeepsUnaffectedManualAllocations() {
+    var a = invoice("60.00", "2026-01-01", "GROUP-EX-A");
+    var b = invoice("40.00", "2026-01-02", "GROUP-EX-B");
+    var m = movement("100.00", "2026-01-03", "Pagamento genérico", "UNCLASSIFIED", "DEBIT");
+    allocate(a, m, "60.00");
+    var kept = allocate(b, m, "40.00");
+    participation(true, selection("invoice", a));
+    assertThat(store.get(Allocation.class, (UUID) kept.get("id")).active).isTrue();
+    assertThat(entries().items()).hasSize(2);
+    assertThat(entries().items().stream().filter(row -> !row.excluded()).findFirst().orElseThrow().balanceImpact()).isEqualTo("-60.00");
+    assertThat(closing(2026, 1)).isEqualTo("-60.00");
+  }
+
+  @Test
+  void excludingOriginalPaymentDetachesItsReversalButCreditStillCounts() {
+    var i = invoice("100.00", "2026-01-01", "REV-EX-1001");
+    var debit = movement("100.00", "2026-01-02", "Débito", "UNCLASSIFIED", "DEBIT");
+    var original = allocate(i, debit, "100.00");
+    var credit = movement("40.00", "2026-01-03", "Estorno", "REFUND", "CREDIT");
+    book.allocate(map("invoiceId", i.get("id").toString(), "movementId", credit.get("id").toString(),
+        "amount", "40.00", "reversesId", original.get("id").toString()));
+    participation(true, selection("movement", debit));
+    assertThat(store.all(Allocation.class).stream().filter(a -> a.active)).isEmpty();
+    assertThat(closing(2026, 1)).isEqualTo("140.00");
+    assertThat(entries().items()).hasSize(3);
+  }
+
+  @Test
+  void editsAndPublicationPreserveExclusionAndDraftReinclusionDoesNotValidate() {
+    var i = invoice("100.00", "2026-01-01", "PRESERVE-EX");
+    participation(true, selection("invoice", i));
+    var entity = store.get(Invoice.class, (UUID) i.get("id"));
+    var edit = new LinkedHashMap<>(book.invoiceView(entity));
+    edit.put("excluded", false); // Only the dedicated versioned action can remove the marker.
+    edit.put("total", "120.00");
+    edit.put("validate", true);
+    book.saveInvoice(entity.id, edit, "RULES", false);
+    assertThat(entity.excluded).isTrue();
+    assertThat(closing(2026, 1)).isEqualTo("0.00");
+    edit = new LinkedHashMap<>(book.invoiceView(entity));
+    edit.put("validate", false);
+    book.saveInvoice(entity.id, edit);
+    participation(false, selection("invoice", i));
+    assertThat(entity.reviewStatus).isEqualTo(pt.conta.shared.Types.ReviewStatus.OPEN);
+    assertThat(entries().items().getFirst().status()).isEqualTo("PENDING_REVIEW");
+    assertThat(entries().items().getFirst().balanceImpact()).isNull();
+    assertThat(closing(2026, 1)).isEqualTo("0.00");
+  }
+
+  @Test
+  void staleSelectionRejectsTheEntireExclusionBeforeChangingAnyRecord() {
+    var i = invoice("100.00", "2026-01-01", "STALE-EX");
+    var m = movement("100.00", "2026-01-02", "Pagamento STALE-EX", "UNCLASSIFIED", "DEBIT");
+    var wrong = new ExclusionRequest.Item("movement", (UUID) m.get("id"), 999L);
+    assertThatThrownBy(() -> participation(true, selection("invoice", i), wrong)).isInstanceOf(DomainException.class);
+    assertThat(store.get(Invoice.class, (UUID) i.get("id")).excluded).isFalse();
+    assertThat(store.get(BankMovement.class, (UUID) m.get("id")).excluded).isFalse();
+    assertThat(store.all(Allocation.class).stream().filter(a -> a.active)).hasSize(1);
+  }
+
+  @Test
+  void statementRepublicationKeepsTheExcludedMovementAndItsSource() throws Exception {
+    var doc = documents.upload(new ByteArrayInputStream(pdf("Extrato com exclusão")), "exclusao.pdf", "STATEMENT", account, null, null);
+    var source = store.get(SourceDocument.class, (UUID) doc.get("id"));
+    var draft = map("movements", List.of(map("bookedOn", "2026-01-02", "description", "Comissão bancária", "amount", "5.00", "direction", "DEBIT", "currency", "EUR")), "validate", true);
+    publisher.extracted(source.id, source.version, new DocumentConverter.Converted("Comissão bancária 5,00", 1, map("pages", List.of()), "TEST"), draft);
+    var movement = store.all(BankMovement.class).getFirst();
+    participation(true, selection("movement", book.movementView(movement)));
+    var oldId = movement.id;
+    store.flush();
+    publisher.extracted(source.id, source.version, new DocumentConverter.Converted("Comissão bancária 5,00", 1, map("pages", List.of()), "TEST"), draft);
+    assertThat(store.all(BankMovement.class)).hasSize(1);
+    assertThat(movement.id).isEqualTo(oldId);
+    assertThat(movement.excluded).isTrue();
+    assertThat(movement.documentId).isEqualTo(source.id);
+    assertThat(closing(2026, 1)).isEqualTo("0.00");
+    participation(false, selection("movement", book.movementView(movement)));
+    assertThat(closing(2026, 1)).isEqualTo("-5.00");
+  }
+
+  @Test
+  void reorderingStatementRowsDoesNotMoveTheHumanExclusionEvenWithRepeatedBankReferences() throws Exception {
+    var doc = documents.upload(new ByteArrayInputStream(pdf("Extrato reordenado")), "ordem.pdf", "STATEMENT", account, null, null);
+    var source = store.get(SourceDocument.class, (UUID) doc.get("id"));
+    var fee = map("bookedOn", "2026-01-02", "description", "Comissão", "amount", "5.00", "direction", "DEBIT", "bankReference", "SHARED");
+    var other = map("bookedOn", "2026-01-03", "description", "Outra despesa", "amount", "10.00", "direction", "DEBIT", "bankReference", "SHARED");
+    var converted = new DocumentConverter.Converted("Extrato", 1, map("pages", List.of()), "TEST");
+    publisher.extracted(source.id, source.version, converted, map("movements", List.of(fee, other), "validate", true));
+    var movement = store.all(BankMovement.class).stream().filter(m -> m.description.equals("Comissão")).findFirst().orElseThrow();
+    UUID originalId = movement.id;
+    participation(true, selection("movement", book.movementView(movement)));
+    store.flush();
+    publisher.extracted(source.id, source.version, converted, map("movements", List.of(other, fee), "validate", true));
+    assertThat(store.all(BankMovement.class)).hasSize(2);
+    assertThat(store.get(BankMovement.class, originalId)).satisfies(m -> {
+      assertThat(m.description).isEqualTo("Comissão");
+      assertThat(m.amount).isEqualByComparingTo("5.00");
+      assertThat(m.excluded).isTrue();
+    });
+    assertThat(closing(2026, 1)).isEqualTo("-10.00");
+    assertThat(rows(Json.object(source.draft), "movements")).allSatisfy(row -> assertThat(row.get("id")).isNotNull());
+  }
+
+  @Test
+  void reorderingIndependentInvoicesPreservesExcludedIdentity() throws Exception {
+    var doc = documents.upload(new ByteArrayInputStream(pdf("Comprovativos reordenados")), "comprovativos-ordem.pdf", "INVOICE", null, null, null);
+    var source = store.get(SourceDocument.class, (UUID) doc.get("id"));
+    var a = map("issuedOn", "2026-01-01", "supplier", "Papelaria Fonte", "number", "ORDER-A", "total", "5.00", "validate", true);
+    var b = map("issuedOn", "2026-01-02", "supplier", "Papelaria Fonte", "number", "ORDER-B", "total", "10.00", "validate", true);
+    var converted = new DocumentConverter.Converted("Comprovativos", 1, map("pages", List.of()), "TEST");
+    publisher.extracted(source.id, source.version, converted, map("invoices", List.of(a, b), "validate", true));
+    var invoice = store.all(Invoice.class).stream().filter(i -> i.number.equals("ORDER-A")).findFirst().orElseThrow();
+    UUID originalId = invoice.id;
+    participation(true, selection("invoice", book.invoiceView(invoice)));
+    store.flush();
+    publisher.extracted(source.id, source.version, converted, map("invoices", List.of(b, a), "validate", true));
+    assertThat(store.all(Invoice.class)).hasSize(2);
+    assertThat(store.get(Invoice.class, originalId)).satisfies(i -> {
+      assertThat(i.number).isEqualTo("ORDER-A");
+      assertThat(i.excluded).isTrue();
+      assertThat(i.total).isEqualByComparingTo("5.00");
+    });
+    assertThat(closing(2026, 1)).isEqualTo("10.00");
+  }
+
+  @Test
+  void unidentifiedChangedExtractionCannotTransferAnExclusionToAnotherRecord() throws Exception {
+    var doc = documents.upload(new ByteArrayInputStream(pdf("Extrato alterado")), "alterado.pdf", "STATEMENT", account, null, null);
+    var source = store.get(SourceDocument.class, (UUID) doc.get("id"));
+    var converted = new DocumentConverter.Converted("Extrato", 1, map("pages", List.of()), "TEST");
+    publisher.extracted(source.id, source.version, converted, map("movements", List.of(map("bookedOn", "2026-01-02", "description", "Comissão", "amount", "5.00", "direction", "DEBIT")), "validate", true));
+    var movement = store.all(BankMovement.class).getFirst();
+    participation(true, selection("movement", book.movementView(movement)));
+    store.flush();
+    assertThatThrownBy(() -> publisher.extracted(source.id, source.version, converted,
+        map("movements", List.of(map("bookedOn", "2026-01-03", "description", "Novo movimento", "amount", "20.00", "direction", "DEBIT")), "validate", true)))
+        .isInstanceOf(DomainException.class).hasMessageContaining("exclusão não foi transferida");
+    assertThat(movement.excluded).isTrue();
+    assertThat(movement.amount).isEqualByComparingTo("5.00");
+    assertThat(store.all(BankMovement.class)).hasSize(1);
+  }
+
+  @Test
+  @Transactional(propagation = Propagation.NOT_SUPPORTED)
+  void concurrentExclusionAndAllocationCannotLeaveAnExcludedRecordMatched() throws Exception {
+    var i = invoice("100.00", "2097-01-01", "CONCURRENT-EXCLUDE");
+    var m = movement("100.00", "2097-01-02", "Pagamento genérico", "UNCLASSIFIED", "DEBIT");
+    var start = new CountDownLatch(1);
+    try (var executor = Executors.newVirtualThreadPerTaskExecutor()) {
+      var exclude = executor.submit(() -> {
+        try {
+          start.await();
+          participation(true, new ExclusionRequest.Item("invoice", (UUID) i.get("id"), ((Number) i.get("version")).longValue()));
+        } catch (Exception e) { throw new RuntimeException(e); }
+      });
+      var associate = executor.submit(() -> {
+        try { start.await(); allocate(i, m, "100.00"); }
+        catch (DomainException expected) { /* Exclusion may acquire the financial lock first. */ }
+        catch (Exception e) { throw new RuntimeException(e); }
+      });
+      start.countDown();
+      exclude.get(15, TimeUnit.SECONDS);
+      associate.get(15, TimeUnit.SECONDS);
+      transactions.executeWithoutResult(status -> {
+        assertThat(store.get(Invoice.class, (UUID) i.get("id")).excluded).isTrue();
+        assertThat(store.all(Allocation.class).stream().filter(a -> a.active)).isEmpty();
+        assertThat(closing(2097, 1)).isEqualTo("-100.00");
+      });
+    } finally {
+      jdbc.execute("truncate invoice,invoice_line,invoice_category,bank_account,bank_movement,allocation,ledger_entry,audit_event,job,alert cascade");
+    }
   }
 }

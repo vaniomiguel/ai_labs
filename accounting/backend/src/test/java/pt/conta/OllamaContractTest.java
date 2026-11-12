@@ -15,6 +15,32 @@ import pt.conta.shared.*;
 /** Verifies the native Ollama transport against an HTTP stub, without downloading model weights. */
 class OllamaContractTest {
   @Test
+  void explainsAnOutageAndRecoversWithoutReplacingTheProvider() throws Exception {
+    var server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+    var unavailable = new java.util.concurrent.atomic.AtomicBoolean(true);
+    server.createContext("/api/tags", exchange -> {
+      byte[] body = "{\"models\":[]}".getBytes();
+      exchange.sendResponseHeaders(unavailable.get() ? 503 : 200, body.length);
+      exchange.getResponseBody().write(body);
+      exchange.close();
+    });
+    server.start();
+    try {
+      String endpoint = "http://127.0.0.1:" + server.getAddress().getPort();
+      var provider = new OllamaProvider(new AccountingProperties(Path.of("/tmp"), "owner", "unused",
+          endpoint, "http://localhost:8090", "", 3, false, 100, 1000000, 1000000));
+      assertThatThrownBy(provider::models).isInstanceOf(OllamaProvider.AiUnavailable.class)
+          .hasMessageContaining(endpoint).hasMessageContaining("HTTP 503");
+      unavailable.set(false);
+      assertThat(provider.models()).isEmpty();
+      assertThat(OllamaProvider.endpoint("http://user:secret@localhost:11434/path?token=secret"))
+          .isEqualTo("http://localhost:11434/path");
+    } finally {
+      server.stop(0);
+    }
+  }
+
+  @Test
   void discoversCapabilitiesAndSendsImagesAndSchema() throws Exception {
     var server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
     var request = new AtomicReference<String>();

@@ -74,8 +74,9 @@
         <strong>{{title()}}</strong></span
       >
       <div class="top-actions">
-        @if(counts().jobs){<span class="job-indicator"
-          >◌ {{counts().jobs}} em processamento</span
+        @if(counts().jobs){<button class="job-indicator"
+          (click)="navigate('processing')"
+          >◌ {{counts().jobs}} {{counts().jobs===1?'tarefa pendente':'tarefas pendentes'}}</button
         >}<button
           class="icon-button"
           aria-label="Atualizar dados"
@@ -93,7 +94,7 @@
           <p>
             {{view()==='reconciliation'?'Cada despesa, ligada ao pagamento
             certo.':view()==='documents'?'Originais guardados. Dados extraídos.
-            Tudo rastreável.':view()==='balances'?'A evolução do saldo, mês a
+            Tudo rastreável.':view()==='processing'?'Acompanha as tarefas, consulta o histórico e abre cada registo.':view()==='balances'?'A evolução do saldo, mês a
             mês e ano a ano.':'Consulta, organiza e revê os teus registos.'}}
           </p>
         </div>
@@ -132,6 +133,7 @@
             (change)="filters.page=0;refresh()" /></label
         ><label
           >Mês<select
+            aria-label="Mês"
             [(ngModel)]="filters.month"
             (change)="filters.page=0;refresh()"
           >
@@ -151,6 +153,11 @@
         <details class="advanced-filters">
           <summary>Mais filtros</summary>
           <div class="filter-popover form-grid">
+            @if(view()==='reconciliation'){
+            <label>Participação no saldo<select [(ngModel)]="filters.participation">
+              <option value="">Todos, incluindo excluídos</option><option value="active">Incluídos</option><option value="excluded">Excluídos</option>
+            </select></label>
+            }
             <label
               >Dia<input
                 type="number"
@@ -228,22 +235,23 @@
           </button>
         </article>
       </section>
-      } @if(view()==='reconciliation'||view()==='invoices'){
+      } @if(view()==='reconciliation'){
+      <reconciliation-table [data]="state().reconciliation" [loading]="loading()" [working]="working()"
+        [candidates]="state().candidates" [aiSuggestions]="state().aiSuggestions"
+        (reconcile)="reconcile()" (changed)="refresh()" (pageChange)="filters.page=$event;refresh()"
+        (edit)="editRecord($event.kind,$event.record)" (original)="openDocument($event)"
+        (remove)="requestRemoval($event.kind,$event.record)"
+        (assign)="assign($event.invoice,$event.candidate)" (assignMovement)="assignFromMovement($event)"
+        (undo)="undo($event)" (reverse)="reverse($event)" />
+      } @if(view()==='invoices'){
       <section class="panel">
         <div class="section-heading">
           <div>
             <h2>
-              {{view()==='reconciliation'?'Despesas e pagamentos':'Todas as
-              faturas'}} <span class="count">{{state().invoiceTotal}}</span>
+              Todas as faturas <span class="count">{{state().invoiceTotal}}</span>
             </h2>
             <p>O valor por reconciliar é independente do saldo anual.</p>
           </div>
-          @if(view()==='reconciliation'){<button
-            mat-stroked-button
-            (click)="reconcile()"
-          >
-            ⇄ Reconciliar</button
-          >}
         </div>
         <div class="table-scroll">
           <table>
@@ -287,13 +295,12 @@
                   </div>
                 </td>
                 <td class="number">{{money(i.total)}}</td>
-                <td class="number">{{money(i.remaining)}}</td>
+                <td class="number">{{i.excluded?'—':money(i.remaining)}}</td>
                 <td>
                   <span
                     class="badge"
                     [class.warning]="i.reviewStatus==='OPEN'"
-                    [class.processing]="i.reconciliationStatus==='PROCESSING'&&i.reviewStatus!=='OPEN'"
-                    >{{labels[i.reviewStatus==='OPEN'?'OPEN':i.reconciliationStatus]}}</span
+                    >{{labels[i.excluded?'EXCLUDED':i.reviewStatus==='OPEN'?'PENDING_REVIEW':i.reconciliationStatus]}}</span
                   >
                 </td>
                 <td>
@@ -318,65 +325,7 @@
                   </div>
                 </td>
               </tr>
-              @if(view()==='reconciliation'){
-              <tr class="payment-detail">
-                <td></td>
-                <td colspan="6">
-                  <div class="payment-links">
-                    @if(aiFor(i.id);as suggestion){
-                    <details class="ai-suggestion">
-                      <summary>✧ Sugestão da IA · {{suggestion.model}}</summary>
-                      <p>{{suggestion.summary}}</p>
-                      @for(rank of suggestion.rankedCandidates;track
-                      rank.movementId){
-                      <div>
-                        <span>{{rank.reason}}</span
-                        ><button
-                          class="text-button"
-                          (click)="assign(i,{movementId:rank.movementId,amount:i.remaining})"
-                        >
-                          Rever associação →
-                        </button>
-                      </div>
-                      }
-                    </details>
-                    }@for(a of allocationsFor(i.id);track a.id){
-                    <div class="payment-link">
-                      <span class="match-icon">✓</span
-                      ><span
-                        >{{movementName(a.movementId)}}<small
-                          >{{a.evidence}} ·
-                          {{labels[a.origin]||a.author}}</small
-                        ></span
-                      ><strong
-                        >{{a.reversesId?'Estorno ·
-                        ':''}}{{money(a.amount)}}</strong
-                      ><button class="text-button" (click)="reverse(a)">
-                        Estornar</button
-                      ><button class="text-button" (click)="undo(a)">
-                        Desfazer
-                      </button>
-                    </div>
-                    } @if(i.reviewStatus!=='OPEN'&&i.remaining!=='0.00'){
-                    <div class="suggestion-row">
-                      @for(c of candidatesFor(i.id);track c.movementId){<button
-                        class="suggestion"
-                        (click)="assign(i,c)"
-                      >
-                        <span>◇</span>{{movementName(c.movementId)}}
-                        <strong>{{money(c.amount)}}</strong
-                        ><small>{{c.reason}}</small></button
-                      >}<button class="text-button" (click)="assign(i)">
-                        + Associar movimento
-                      </button>
-                    </div>
-                    } @if(i.reviewStatus==='OPEN'){<span class="hint"
-                      >Fora dos saldos até os dados serem validados.</span
-                    >}
-                  </div>
-                </td>
-              </tr>
-              } }@empty{
+              }@empty{
               <tr>
                 <td colspan="7">
                   <div class="empty-state">
@@ -471,12 +420,12 @@
                 <td>{{labels[m.kind]}}</td>
                 <td class="number">
                   {{money(m.amount)}}<small
-                    >Disponível {{money(m.remaining)}}</small
+                    >{{m.excluded?'Fora dos cálculos':'Disponível '+money(m.remaining)}}</small
                   >
                 </td>
                 <td>
                   <span class="badge" [class.warning]="m.reviewStatus==='OPEN'"
-                    >{{labels[m.reviewStatus]}}</span
+                    >{{labels[m.excluded?'EXCLUDED':m.reviewStatus]}}</span
                   >
                 </td>
                 <td>
@@ -513,8 +462,7 @@
         </div>
         <div class="panel-footer">
           <span
-            >Só transferências explicitamente classificadas afetam o saldo sem
-            uma fatura.</span
+            >Débitos reduzem o saldo; créditos aumentam-no. Os registos excluídos não contam.</span
           >
           <div>
             <button
@@ -623,39 +571,98 @@
           </table>
         </div>
       </section>
-      <details class="panel details-panel">
-        <summary>
-          Processamento em segundo plano
-          <span class="count">{{counts().jobs}}</span>
-        </summary>
-        <table>
-          <thead>
-            <tr>
-              <th>Tarefa</th>
-              <th>Estado</th>
-              <th>Detalhe</th>
-              <th></th>
-            </tr>
-          </thead>
-          <tbody>
-            @for(job of state().jobs;track job.id){
-            <tr>
-              <td>{{labels[job.kind]||job.kind}}</td>
-              <td>{{labels[job.state]}}</td>
-              <td>{{job.error}}</td>
-              <td>
-                @if(job.state==='FAILED'||job.state==='WAITING'){<button
-                  class="text-button"
-                  (click)="retry(job)"
-                >
-                  Tentar de novo</button
-                >}
-              </td>
-            </tr>
+      <button class="processing-link" (click)="navigate('processing')">
+        Processamento em segundo plano <span>{{counts().jobs}} tarefas pendentes · Consultar →</span>
+      </button>
+      } @if(view()==='processing'){
+      <section class="panel processing-overview" aria-label="Estados das tarefas">
+        <div class="section-heading">
+          <div><h2>Tarefas em segundo plano</h2><p>Todos os anos e documentos. Um documento pode originar várias tarefas de revisão.</p></div>
+          <button mat-stroked-button (click)="loadProcessing()" [disabled]="jobsLoading()">Atualizar tarefas</button>
+        </div>
+        <div class="processing-filters">
+          @for(filter of processingFilters;track filter.value){
+          <button [class.selected]="processingState===filter.value" [attr.aria-pressed]="processingState===filter.value" (click)="filterJobs(filter.value)">
+            {{filter.label}} <strong>{{jobCount(filter.value)}}</strong>
+          </button>
+          }
+        </div>
+      </section>
+      @if(selectedJobId() && !jobDetail() && jobsLoading()){
+      <p role="status">A carregar o detalhe da tarefa…</p>
+      }
+      @if(jobDetail();as job){
+      <section class="panel job-detail" aria-labelledby="job-detail-heading">
+        <div class="section-heading">
+          <div><h2 id="job-detail-heading" tabindex="-1">{{labels[job.kind]||job.kind}}</h2><p>{{job.target.label}}</p></div>
+          <button class="icon-button" aria-label="Fechar detalhe da tarefa" (click)="closeJob()">×</button>
+        </div>
+        <div class="settings-body">
+          <dl class="job-facts">
+            <div><dt>Estado</dt><dd><span class="badge" [class.warning]="job.state==='WAITING'||job.state==='FAILED'">{{labels[job.state]}}</span></dd></div>
+            <div><dt>Tentativas com erro</dt><dd>{{job.attempts}}</dd></div>
+            <div><dt>Criada em</dt><dd>{{job.createdAt|date:'dd/MM/yyyy HH:mm:ss'}}</dd></div>
+            <div><dt>Última atualização</dt><dd>{{job.updatedAt|date:'dd/MM/yyyy HH:mm:ss'}}</dd></div>
+            @if((job.state==='QUEUED'||job.state==='WAITING')&&job.availableAt){
+            <div><dt>Elegível para a próxima tentativa a partir de</dt><dd>{{job.availableAt|date:'dd/MM/yyyy HH:mm:ss'}}</dd></div>
             }
-          </tbody>
-        </table>
-      </details>
+          </dl>
+          @if(job.state==='WAITING'){<p class="hint">A tarefa retoma automaticamente quando o modelo estiver disponível. As esperas pelo modelo não contam como tentativas com erro.</p>}
+          @if(job.error){<p class="notice job-error">{{job.error}}</p>}
+          @if(!job.target.available){<p class="hint">O registo associado já não está disponível. O histórico desta tarefa mantém-se acessível.</p>}
+          @if(job.target.type==='allocation'&&job.target.available){
+          <div class="allocation-summary">
+            <p>Associação {{job.target.active?'ativa':'anulada'}} · <strong>{{money(job.target.amount)}}</strong></p>
+            @if(job.target.evidence){<p>{{job.target.evidence}}</p>}
+            <div class="row-actions">
+              @if(job.target.invoiceId&&job.target.invoiceAvailable){<button mat-stroked-button (click)="openJobRecord('invoice',job.target.invoiceId)">Consultar fatura</button>}
+              @if(job.target.movementId&&job.target.movementAvailable){<button mat-stroked-button (click)="openJobRecord('movement',job.target.movementId)">Consultar movimento</button>}
+            </div>
+          </div>
+          }
+          <div class="row-actions">
+            @if(job.target.available&&job.target.type!=='allocation'){
+            <button mat-stroked-button (click)="openJobTarget(job)">Consultar registo associado →</button>
+            }
+            @if(job.target.documentId&&job.target.type!=='document'){
+            <button mat-stroked-button (click)="openDocument(job.target.documentId)">Consultar documento original</button>
+            }
+            @if(job.state==='WAITING'||job.state==='FAILED'){
+            <button mat-flat-button [disabled]="working()" (click)="retry(job)">Tentar novamente</button>
+            }
+          </div>
+          <details class="job-identifiers"><summary>Identificação da tarefa</summary><p>{{job.id}} · Versão do registo {{job.targetVersion}}</p></details>
+        </div>
+      </section>
+      }
+      <section class="panel" [attr.aria-busy]="jobsLoading()">
+        <div class="section-heading"><h2>Tarefas <span class="count">{{processing()?.total??0}}</span></h2><span class="hint" role="status">{{jobsLoading()?'A atualizar…':'Atualização automática'}}</span></div>
+        <div class="table-scroll">
+          <table class="processing-table">
+            <thead><tr><th>Tarefa / registo associado</th><th>Estado</th><th>Última atualização</th><th>Espera ou erro</th></tr></thead>
+            <tbody>
+              @for(job of processing()?.items??[];track job.id){
+              <tr [class.selected-job]="selectedJobId()===job.id">
+                <td><button class="text-button job-open" (click)="openJob(job.id)"><strong>{{labels[job.kind]||job.kind}}</strong><span>{{job.target.label}}</span><small>Consultar detalhe →</small></button></td>
+                <td><span class="badge" [class.warning]="job.state==='WAITING'||job.state==='FAILED'">{{labels[job.state]}}</span></td>
+                <td>{{job.updatedAt|date:'dd/MM/yyyy HH:mm:ss'}}</td>
+                <td class="job-error">{{job.error||(job.state==='WAITING'?'A aguardar disponibilidade do modelo.':'—')}}</td>
+              </tr>
+              }@empty{
+              <tr><td colspan="4" class="empty-state">{{jobsLoading()?'A carregar tarefas…':'Não existem tarefas neste estado.'}}</td></tr>
+              }
+            </tbody>
+          </table>
+        </div>
+        <div class="panel-footer">
+          <span class="hint">50 tarefas por página · Mais recentes primeiro</span>
+          <div>
+            <button class="text-button" [disabled]="processingPage===0||jobsLoading()" (click)="processingPage=processingPage-1;loadProcessing()">← Anterior</button>
+            <span>Página {{processingPage+1}}</span>
+            <button class="text-button" [disabled]="(processingPage+1)*50>=(processing()?.total??0)||jobsLoading()" (click)="processingPage=processingPage+1;loadProcessing()">Seguinte →</button>
+          </div>
+        </div>
+      </section>
       } @if(view()==='alerts'){
       <section class="panel">
         <div class="section-heading">
@@ -957,6 +964,7 @@
           </button>
         </div>
         <div class="settings-body">
+          <p class="hint">Endereço do Ollama: {{ai.endpoint}}</p>
           @if(ai.error){
           <p class="notice">
             {{ai.error}}. As tarefas de revisão ficam a aguardar; os dados
@@ -1286,10 +1294,15 @@
       </button>
     </header>
     <div class="dialog-body">
-      <p>
-        <strong>{{data.invoice.number||data.invoice.supplier}}</strong> · Por
-        reconciliar {{money(data.invoice.remaining)}}
-      </p>
+      @if(data.invoice){
+      <p><strong>{{data.invoice.number||data.invoice.supplier}}</strong> · Por reconciliar {{money(data.invoice.remaining)}}</p>
+      }
+      @if(data.fromMovement){
+      <label>Procurar fatura<input #invoiceSearch (keyup.enter)="searchAssignmentInvoices(invoiceSearch.value)" placeholder="Fornecedor ou número; Enter para pesquisar" /></label>
+      <label>Fatura<select [(ngModel)]="data.invoiceId"><option value="">Selecionar</option>
+        @for(i of allInvoices();track i.id){<option [value]="i.id">{{i.issuedOn}} · {{i.number||i.supplier}} · {{money(i.remaining)}}</option>}
+      </select></label>
+      }
       <label
         >Procurar movimento<input
           #movementSearch

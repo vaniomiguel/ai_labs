@@ -159,7 +159,7 @@ public class BookkeepingService {
   }
 
   /**
-   * Creates or edits a bank movement without inferring its financial purpose from its direction.
+   * Creates or edits a bank movement, keeping its classification separate from its signed effect.
    */
   public Map<String, Object> saveMovement(UUID id, Map<String, Object> input) {
     return saveMovement(id, input, "MANUAL", true);
@@ -389,6 +389,69 @@ public class BookkeepingService {
     audit.record("UNALLOCATE", "allocation", id, null, allocationView(allocation));
   }
 
+  /** Changes participation atomically without rejecting any historical matching evidence. */
+  public void exclude(ExclusionRequest request) {
+    store.lockFinancialWrites();
+    var entities = new LinkedHashMap<ExclusionRequest.Item, BaseEntity>();
+    var seen = new HashSet<UUID>();
+    for (var item : request.items()) {
+      if (!seen.add(item.id())) throw DomainException.invalid("Registo repetido na seleção");
+      BaseEntity entity = item.type().equals("invoice")
+          ? store.get(Invoice.class, item.id()) : store.get(BankMovement.class, item.id());
+      store.checkVersion(entity, item.version());
+      if (entity instanceof Invoice i ? i.deleted : ((BankMovement) entity).deleted)
+        throw DomainException.invalid("Um registo eliminado não pode ser incluído ou excluído");
+      entities.put(item, entity);
+    }
+    for (var selected : entities.entrySet()) {
+      var item = selected.getKey();
+      var entity = selected.getValue();
+      boolean previous = entity instanceof Invoice i ? i.excluded : ((BankMovement) entity).excluded;
+      if (previous == request.excluded()) continue;
+      if (entity instanceof Invoice i) i.excluded = request.excluded();
+      else ((BankMovement) entity).excluded = request.excluded();
+      if (!request.excluded()) {
+        var errors = entity instanceof Invoice i ? invoiceErrors(i) : movementErrors((BankMovement) entity);
+        if (!errors.isEmpty()) {
+          UUID doc;
+          if (entity instanceof Invoice i) { i.reviewStatus = ReviewStatus.OPEN; doc = i.documentId; }
+          else { var m = (BankMovement) entity; m.reviewStatus = ReviewStatus.OPEN; doc = m.documentId; }
+          review.open(doc, item.type(), item.id(), "INVALID_REINCLUDED_RECORD", String.join("; ", errors));
+        }
+      }
+      audit.record(request.excluded() ? "EXCLUDE" : "INCLUDE", item.type(), item.id(),
+          map("excluded", previous), map("excluded", request.excluded(), "reason", request.reason()));
+    }
+    // Detach intentionally, including dependent reversals, without creating invalid-data alerts
+    // or permanent rejected-pair settings. Other manual decisions remain protected.
+    var detached = new HashSet<UUID>();
+    boolean changed;
+    do {
+      changed = false;
+      for (var a : store.all(Allocation.class)) {
+        if (a.active && (store.get(Invoice.class, a.invoiceId).excluded
+            || store.get(BankMovement.class, a.movementId).excluded
+            || detached.contains(a.reversesId))) {
+          a.active = false;
+          detached.add(a.id);
+          review.resolveFor("allocation", a.id);
+          audit.record("DETACH_EXCLUDED", "allocation", a.id, null, allocationView(a));
+          changed = true;
+        }
+      }
+    } while (changed);
+    store.flush();
+    synchronize();
+    automatic();
+    for (var selected : entities.entrySet()) {
+      if (!request.excluded()) {
+        var entity = selected.getValue();
+        jobs.enqueue(entity instanceof Invoice ? "REVIEW_INVOICE" : "REVIEW_MOVEMENT",
+            entity.id, entity.version, "{}");
+      }
+    }
+  }
+
   /** Invalidates allocations affected by factual changes and updates append-only ledger effects. */
   public void synchronize() {
     store.lockFinancialWrites();
@@ -460,24 +523,13 @@ public class BookkeepingService {
               BigDecimal::add);
         }
       }
-      BigDecimal effect =
-          allocation.active
-              ? allocation
-                  .amount
-                  .multiply(
-                      invoice.type == InvoiceType.CREDIT_NOTE
-                          ? BigDecimal.ONE
-                          : BigDecimal.ONE.negate())
-                  .multiply(
-                      allocation.reversesId != null ? BigDecimal.ONE.negate() : BigDecimal.ONE)
-              : null;
       ledger.replace(
           "ALLOCATION",
           allocation.id,
           allocation.version,
-          allocation.active ? movement.bookedOn : null,
-          effect,
-          "Pagamento reconciliado");
+          null,
+          null,
+          "O movimento bancário regista o efeito financeiro integral");
     }
     for (var invoice : invoices)
       ledger.replace(
@@ -485,29 +537,17 @@ public class BookkeepingService {
           invoice.id,
           invoice.version,
           eligible(invoice) ? invoice.issuedOn : null,
-          eligible(invoice)
-              ? invoice.total.multiply(
-                  invoice.type == InvoiceType.CREDIT_NOTE
-                      ? BigDecimal.ONE.negate()
-                      : BigDecimal.ONE)
-              : null,
+          invoiceEffect(invoice),
           "Fatura " + Objects.requireNonNullElse(invoice.number, invoice.id.toString()));
     for (var movement : movements) {
-      BigDecimal effect = null;
-      if (eligible(movement))
-        effect =
-            switch (movement.kind) {
-              case REIMBURSEMENT, ADVANCE -> movement.amount.negate();
-              case RETURN -> movement.amount;
-              default -> null;
-            };
+      BigDecimal effect = movementEffect(movement);
       ledger.replace(
           "MOVEMENT",
           movement.id,
           movement.version,
           effect == null ? null : movement.bookedOn,
           effect,
-          "Transferência classificada: " + movement.kind);
+          "Movimento bancário: " + movement.direction);
     }
     store.flush();
   }
@@ -598,19 +638,15 @@ public class BookkeepingService {
             boolean exact =
                 invoiceAvailable.get(invoice.id).compareTo(movementAvailable.get(movement.id)) == 0;
             if (!exact && !ref && !supplier) continue;
-            boolean strong =
-                ref
-                        && movementAvailable
-                                .get(movement.id)
-                                .compareTo(invoiceAvailable.get(invoice.id))
-                            <= 0
-                    || supplier && exact;
+            boolean strong = ref || supplier && exact;
             result.add(
                 map(
                     "invoiceId",
                     invoice.id,
                     "movementId",
                     movement.id,
+                    "movementDescription",
+                    movement.description,
                     "amount",
                     Money.text(
                         movementAvailable.get(movement.id).min(invoiceAvailable.get(invoice.id))),
@@ -724,6 +760,8 @@ public class BookkeepingService {
         i.documentId,
         "reviewStatus",
         i.reviewStatus,
+        "excluded",
+        i.excluded,
         "origin",
         i.origin,
         "author",
@@ -737,9 +775,10 @@ public class BookkeepingService {
         "remaining",
         Money.text(i.total == null ? null : remaining),
         "reconciliationStatus",
-        i.total != null && remaining.signum() == 0
+        i.excluded ? "EXCLUDED" : i.reviewStatus == ReviewStatus.OPEN ? "PENDING_REVIEW"
+            : i.total != null && remaining.signum() == 0
             ? "RECONCILED"
-            : i.total != null && remaining.compareTo(i.total) < 0 ? "PARTIAL" : "PROCESSING",
+            : i.total != null && remaining.compareTo(i.total) < 0 ? "PARTIAL" : "UNMATCHED_INVOICE",
         "aiReview",
         aiReview.describe(i.id, i.version));
   }
@@ -778,6 +817,8 @@ public class BookkeepingService {
         m.kind,
         "reviewStatus",
         m.reviewStatus,
+        "excluded",
+        m.excluded,
         "origin",
         m.origin,
         "author",
@@ -838,6 +879,7 @@ public class BookkeepingService {
   /** Determines ledger eligibility without conflating it with reconciliation completeness. */
   public static boolean eligible(Invoice i) {
     return !i.deleted
+        && !i.excluded
         && i.reviewStatus != ReviewStatus.OPEN
         && i.total != null
         && i.issuedOn != null
@@ -847,10 +889,21 @@ public class BookkeepingService {
   /** Determines whether a bank movement is validated and usable. */
   public static boolean eligible(BankMovement m) {
     return !m.deleted
+        && !m.excluded
         && m.reviewStatus != ReviewStatus.OPEN
         && m.amount != null
+        && m.amount.signum() > 0
+        && m.direction != null
         && m.bookedOn != null
         && "EUR".equals(m.currency);
+  }
+
+  public static BigDecimal invoiceEffect(Invoice i) {
+    return eligible(i) ? (i.type == InvoiceType.CREDIT_NOTE ? i.total.negate() : i.total) : null;
+  }
+
+  public static BigDecimal movementEffect(BankMovement m) {
+    return eligible(m) ? (m.direction == Direction.DEBIT ? m.amount.negate() : m.amount) : null;
   }
 
   /**
@@ -1064,7 +1117,7 @@ public class BookkeepingService {
         || settings.get("rejected:" + invoice.id + ":" + movement.id, "false").equals("true"))
       return 0;
     int tier = referenceTier(invoice, movement);
-    return tier >= 2 && movementBudget.compareTo(invoiceBudget) <= 0
+    return tier >= 2
         ? tier
         : tier == 1 && movementBudget.compareTo(invoiceBudget) == 0 ? 1 : 0;
   }

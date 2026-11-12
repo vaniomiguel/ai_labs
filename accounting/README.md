@@ -113,6 +113,10 @@ Instalar Tesseract no sistema com os idiomas `por` e `eng`. O Docling descarrega
 
 Ollama corre diretamente no sistema, por omissão em `http://localhost:11434`. Instalar inicialmente `qwen3.5:9b` e selecionar os modelos em **Assistente de IA**. Sem Ollama, o processamento por regras continua e as revisões ficam a aguardar. A aplicação não descarrega modelos nem usa aliases cloud automaticamente.
 
+Deixar `OLLAMA_URL` por definir quando se usam os endereços habituais: o Java local escolhe `localhost` e a composição Docker escolhe `host.docker.internal`. Se o IDE carregar o `.env`, não usar aí o endereço Docker para executar Java no computador. Depois de alterar o ambiente, reiniciar o Java. O Assistente mostra o endereço usado e o motivo de uma falha de ligação; as tarefas em espera retomam automaticamente, sem reimportar os documentos.
+
+O contador **tarefas pendentes** abre **Processamento**, também disponível na navegação. Cada tarefa corresponde a uma operação de segundo plano: importar um extrato com dois movimentos pode gerar duas revisões de movimentos e uma revisão do documento. O ecrã mostra a fila global, permite filtrar os estados e consultar o histórico e o detalhe de cada tarefa, incluindo o registo associado e a próxima tentativa. A classificação contabilística de um movimento é independente do estado da sua revisão de IA.
+
 ### Desenvolvimento separado
 
 Com PostgreSQL existente, definir `DATABASE_URL`, `DATABASE_USER` e `DATABASE_PASSWORD` e executar `mvn -f accounting/backend/pom.xml spring-boot:run`. A interface pode correr em `accounting/frontend` com `npm start`, em [http://localhost:4200](http://localhost:4200), usando o proxy local.
@@ -135,15 +139,19 @@ Os volumes PostgreSQL, documentos e modelos são persistentes. O formato de volu
 ## Regras financeiras
 
 - Faturas validadas aumentam o saldo na data de emissão; notas de crédito têm efeito inverso.
-- Pagamentos atribuídos reduzem o saldo na data do movimento; estornos revertem esse efeito.
+- Todos os movimentos validados contam na data bancária: débitos reduzem o saldo e créditos aumentam-no, mesmo sem fatura correspondente. As associações não lançam novamente esses valores.
 - Cada janeiro começa em zero. Os meses seguintes recebem o saldo do anterior dentro do mesmo ano.
 - Fatura de dezembro de 100 € e pagamento em fevereiro de 60 €: +100 € no ano antigo, −60 € no novo, 40 € por reconciliar na fatura.
-- Reembolsos/adiantamentos ao gestor reduzem o saldo; devoluções à empresa aumentam-no. Outros débitos/créditos não têm efeito sem associação ou classificação explícita.
-- As associações aceitam pagamentos parciais e agrupados. Uma secção crítica em PostgreSQL impede atribuir duas vezes o mesmo valor.
+- Uma fatura de 100 € com débito de 60 €, 100 € ou 120 € deixa, respetivamente, +40 €, 0 € ou −20 €. Sem movimento, presume-se que o gestor suportou a fatura; sem fatura, o movimento conta integralmente pelo seu sinal. As classificações não alteram estes sinais.
+- As associações aceitam pagamentos parciais e agrupados. Uma referência inequívoca permite valores diferentes, incluindo excesso de pagamento; igualdade de valores isolada não confirma uma correspondência. Uma secção crítica em PostgreSQL impede atribuir duas vezes o mesmo valor.
 - Dentro do mesmo ano consideram-se todos os meses. Entre anos usa-se a distância de meses de calendário, três por omissão: dezembro–março permitido, dezembro–abril excluído.
 - Categorias são etiquetas, não repartições monetárias. Somar categorias diferentes pode contar a mesma fatura mais de uma vez.
 
-Os efeitos financeiros são lançamentos imutáveis com anulações datadas. A vista **Saldos** discrimina entradas, reduções e os lançamentos de cada mês, com acesso aos originais disponíveis. Eliminar um registo não elimina o documento nem o histórico. O saldo não comprova que uma fatura sem correspondência foi paga pessoalmente.
+Os efeitos financeiros são lançamentos imutáveis com anulações datadas. A vista **Saldos** discrimina entradas, reduções e os lançamentos de cada mês, com acesso aos originais disponíveis. Eliminar um registo não elimina o documento nem o histórico. O saldo aplica as presunções acima aos dados disponíveis; novas importações voltam a procurar correspondências sem duplicar os efeitos financeiros.
+
+A **Reconciliação** mostra faturas e movimentos sem correspondência e uma linha expansível por grupo associado. Datas e valores diferentes têm indicadores próprios. Nos grupos que atravessam períodos, o saldo global e o impacto no período filtrado são apresentados separadamente; os saldos anuais continuam a respeitar as datas de cada registo.
+
+**Excluir do saldo** conserva o registo visível e o seu histórico, mas retira-o dos cálculos e da procura de correspondências. Numa associação, escolhem-se as faturas, os movimentos ou ambos; os restantes registos voltam a reconciliar. **Voltar a incluir** verifica os dados guardados e procura correspondências atuais, sem repetir a extração do original nem aprovar dados por validar. As republicações conservam a identidade dos registos, mesmo que a ordem das linhas mude; se uma extração alterada não conseguir identificar um registo excluído, pede-se revisão em vez de transferir o marcador para outra linha. A migração V2 atualiza automaticamente os lançamentos antigos no arranque, preservando-os com anulações datadas.
 
 ## Extração, revisão e histórico
 
@@ -175,6 +183,15 @@ Um PDF com comprovativos independentes pode ter um rascunho com `invoices`, uma 
 mvn -f accounting/backend/pom.xml test
 cd accounting/frontend && npm ci && npm run build
 cd accounting/document-worker && uv sync --group test && uv run pytest
+```
+
+Os testes de interface usam Chromium, uma base de dados temporária nova e portas próprias (Java 18081 e Angular 14200), sem aceder às instalações de desenvolvimento:
+
+```sh
+cd accounting/frontend
+npm ci
+npx playwright install chromium
+npm run test:e2e
 ```
 
 Os testes de integração arrancam PostgreSQL 18, aplicam as migrações e usam HTTP real para autenticação/CSRF. Não necessitam de Docker. O ambiente tem de permitir processos locais e portas de loopback. Os testes HTTP do serviço Python não descarregam modelos; a conversão com modelos é uma verificação separada.

@@ -5,6 +5,7 @@ import static pt.conta.shared.Inputs.*;
 import java.math.BigDecimal;
 import java.time.*;
 import java.util.*;
+import jakarta.validation.Valid;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.bind.annotation.*;
 import pt.conta.audit.*;
@@ -26,6 +27,7 @@ public class FinanceController {
   private final AuditService audit;
   private final InvoiceRepository invoiceRepository;
   private final MovementRepository movementRepository;
+  private final ReconciliationService reconciliation;
 
   public FinanceController(
       Store store,
@@ -33,13 +35,15 @@ public class FinanceController {
       LedgerService ledger,
       AuditService audit,
       InvoiceRepository invoiceRepository,
-      MovementRepository movementRepository) {
+      MovementRepository movementRepository,
+      ReconciliationService reconciliation) {
     this.store = store;
     this.book = book;
     this.ledger = ledger;
     this.audit = audit;
     this.invoiceRepository = invoiceRepository;
     this.movementRepository = movementRepository;
+    this.reconciliation = reconciliation;
   }
 
   /** Lists invoices in business-date order with combinable filters and stable pagination. */
@@ -160,6 +164,17 @@ public class FinanceController {
         .filter(a -> a.active)
         .map(book::allocationView)
         .toList();
+  }
+
+  @GetMapping("/reconciliation/entries")
+  public ReconciliationService.Page entries(@RequestParam Map<String, String> filters) {
+    return reconciliation.entries(filters);
+  }
+
+  @PostMapping("/reconciliation/exclusions")
+  @Transactional
+  public void exclusions(@Valid @RequestBody ExclusionRequest request) {
+    book.exclude(request);
   }
 
   /** Confirms a user-selected monetary association. */

@@ -6,15 +6,18 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
+import pt.conta.jobs.JobMonitor;
 
 /** Sends small same-origin progress snapshots while background work continues. */
 @RestController
 public class ProgressController {
   private final List<SseEmitter> clients = new CopyOnWriteArrayList<>();
   private final JdbcTemplate jdbc;
+  private final JobMonitor monitor;
 
-  public ProgressController(JdbcTemplate jdbc) {
+  public ProgressController(JdbcTemplate jdbc, JobMonitor monitor) {
     this.jdbc = jdbc;
+    this.monitor = monitor;
   }
 
   /** Opens an authenticated event stream with cleanup on completion or disconnect. */
@@ -25,6 +28,7 @@ public class ProgressController {
     client.onCompletion(() -> clients.remove(client));
     client.onTimeout(() -> clients.remove(client));
     client.onError(e -> clients.remove(client));
+    send(client, snapshot());
     return client;
   }
 
@@ -32,26 +36,43 @@ public class ProgressController {
   @Scheduled(fixedDelay = 3000)
   public void broadcast() {
     if (clients.isEmpty()) return;
-    var state =
-        Map.of(
+    var state = snapshot();
+    for (var client : clients) send(client, state);
+  }
+
+  /** Ends persistent streams before the web server begins its graceful shutdown. */
+  @org.springframework.context.event.EventListener(org.springframework.context.event.ContextClosedEvent.class)
+  public void closeStreams() {
+    for (var client : clients) client.complete();
+    clients.clear();
+  }
+
+  public Map<String, Object> snapshot() {
+    var counts = monitor.counts();
+    return Map.of(
             "jobs",
-            jdbc.queryForObject(
-                "select count(*) from job where state in ('QUEUED','WAITING','RUNNING')",
-                Long.class),
+            counts.get("active"),
+            "jobStates", counts,
             "alerts",
             jdbc.queryForObject("select count(*) from alert where status='OPEN'", Long.class),
             "revision",
             jdbc.queryForObject(
                 "select greatest(coalesce((select max(updated_at) from"
                     + " job),'epoch'::timestamptz),coalesce((select max(updated_at) from"
-                    + " alert),'epoch'::timestamptz))::text",
+                    + " alert),'epoch'::timestamptz),coalesce((select max(updated_at) from"
+                    + " invoice),'epoch'::timestamptz),coalesce((select max(updated_at) from"
+                    + " bank_movement),'epoch'::timestamptz),coalesce((select max(updated_at) from"
+                    + " allocation),'epoch'::timestamptz),coalesce((select max(updated_at) from"
+                    + " ledger_entry),'epoch'::timestamptz))::text",
                 String.class));
-    for (var client : clients)
-      try {
-        client.send(SseEmitter.event().name("progress").data(state));
-      } catch (Exception e) {
-        clients.remove(client);
-        client.complete();
-      }
+  }
+
+  private void send(SseEmitter client, Map<String, Object> state) {
+    try {
+      client.send(SseEmitter.event().name("progress").data(state));
+    } catch (Exception e) {
+      clients.remove(client);
+      client.complete();
+    }
   }
 }

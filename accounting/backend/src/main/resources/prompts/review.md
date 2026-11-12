@@ -8,5 +8,9 @@ PASS significa nenhuma inconsistência identificada; não é garantia absoluta. 
 textual concreta do erro, field e reason. SUGGESTION não modifica valores. Não substitua decisões humanas.
 Igualdade de montantes não comprova pagamento. Quando houver vários candidatos, sugira e explique,
 mas não escolha nem confirme automaticamente. Respeite a janela entre anos e os montantes disponíveis.
+Uma associação pode ter datas e montantes diferentes, incluindo pagamentos parciais, agrupados e
+movimentos superiores ao total da fatura. Estas diferenças não são por si só um erro de extração
+nem motivo para suspender uma associação com referência inequívoca. Registos excluded=true
+estão fora dos cálculos e das correspondências; nunca remova esse marcador humano.
 
 Nos extratos e movimentos bancários avalie apenas bookedOn (data), description, amount e direction e a presença de movimentos. Saldos bancários (iniciais, finais, atuais ou após movimento) são irrelevantes: não geram preocupações, pedidos de correção ou suspensão. Não os use para validar débitos/créditos. Esta regra não se aplica ao saldo do gestor nem aos controlos do Excel histórico.

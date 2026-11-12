@@ -2,9 +2,10 @@ import { Component, signal, inject, computed, OnDestroy } from "@angular/core";
 import { CommonModule } from "@angular/common";
 import { FormsModule } from "@angular/forms";
 import { MatButtonModule } from "@angular/material/button";
-import { Api, euros, errorMessage, labels } from "./api";
+import { Api, euros, errorMessage, labels, JobCounts, JobItem, JobPage } from "./api";
 import { FieldsEditor } from "./fields-editor";
 import { PdfViewer } from "./pdf-viewer";
+import { ReconciliationTable } from "./reconciliation";
 
 /** Owner workspace joining reconciliation, document review and auditable financial records. */
 @Component({
@@ -16,6 +17,7 @@ import { PdfViewer } from "./pdf-viewer";
     MatButtonModule,
     FieldsEditor,
     PdfViewer,
+    ReconciliationTable,
   ],
   templateUrl: "./app.html",
 })
@@ -46,10 +48,27 @@ export class AppComponent implements OnDestroy {
     imports: [],
     summary: {},
     aiSuggestions: [],
+    reconciliation: { items: [], total: 0, page: 0, size: 100 },
   });
   readonly assistant = signal<any>(null);
   readonly executions = signal<any[]>([]);
-  readonly counts = signal({ jobs: 0, alerts: 0 });
+  readonly counts = signal<{jobs: number; alerts: number; jobStates?: JobCounts}>({ jobs: 0, alerts: 0 });
+  readonly processing = signal<JobPage | null>(null);
+  readonly jobDetail = signal<JobItem | null>(null);
+  readonly selectedJobId = signal<string | null>(null);
+  readonly jobsLoading = signal(false);
+  readonly processingFilters = [
+    { value: "active", label: "Pendentes" },
+    { value: "QUEUED", label: "Em fila" },
+    { value: "RUNNING", label: "A processar" },
+    { value: "WAITING", label: "A aguardar modelo" },
+    { value: "DONE", label: "Concluídas" },
+    { value: "FAILED", label: "Falhadas" },
+    { value: "all", label: "Todas" },
+  ];
+  processingState = "active";
+  processingPage = 0;
+  private processingRequest = 0;
   readonly editor = signal<any>(null);
   readonly reviewDocument = signal<any>(null);
   readonly activeAlert = signal<any>(null);
@@ -112,6 +131,7 @@ export class AppComponent implements OnDestroy {
     ["invoices", "▤", "Faturas"],
     ["movements", "↗", "Movimentos"],
     ["documents", "▧", "Extrações"],
+    ["processing", "◌", "Processamento"],
     ["alerts", "◉", "Alertas"],
     ["balances", "▥", "Saldos"],
     ["history", "↥", "Histórico"],
@@ -120,6 +140,7 @@ export class AppComponent implements OnDestroy {
   ];
   private events?: EventSource;
   private progressRevision = "";
+  private financialRequest = 0;
   private refreshTimer?: ReturnType<typeof setTimeout>;
   constructor() {
     void this.restore();
@@ -155,11 +176,20 @@ export class AppComponent implements OnDestroy {
   navigate(view: string) {
     this.view.set(view);
     this.filters.page = 0;
+    if (view === "processing") {
+      this.processingState = "active";
+      this.processingPage = 0;
+      this.closeJob();
+    }
     if (view === "assistant") void this.loadAssistant();
     else void this.refresh();
   }
   /** Reloads server-derived amounts; the browser never calculates financial balances. */
   async refresh() {
+    if (this.view() === "processing") return this.loadProcessing();
+    if (this.view() === "assistant") return this.loadAssistant();
+    const request = ++this.financialRequest;
+    const view = this.view();
     this.loading.set(true);
     try {
       const [
@@ -178,6 +208,7 @@ export class AppComponent implements OnDestroy {
         imports,
         summary,
         aiSuggestions,
+        reconciliation,
       ] = await Promise.all([
         this.api.get("/invoices", this.filters),
         this.api.get("/movements", this.filters),
@@ -197,7 +228,9 @@ export class AppComponent implements OnDestroy {
           month: this.filters.month,
         }),
         this.api.get("/reconciliation/ai-suggestions"),
+        this.view() === "reconciliation" ? this.api.get("/reconciliation/entries", this.filters) : Promise.resolve(this.state().reconciliation),
       ]);
+      if (request !== this.financialRequest || this.view() !== view) return;
       this.state.set({
         invoices: invoices.items,
         invoiceTotal: invoices.total,
@@ -216,9 +249,10 @@ export class AppComponent implements OnDestroy {
         imports,
         summary,
         aiSuggestions,
+        reconciliation,
       });
       this.counts.update((previous) => ({
-        jobs: previous.jobs,
+        ...previous,
         alerts: alerts.filter((a: any) => a.status === "OPEN").length,
       }));
       if (!this.uploadAccount && accounts.length)
@@ -226,8 +260,77 @@ export class AppComponent implements OnDestroy {
     } catch (e) {
       this.error.set(errorMessage(e));
     } finally {
-      this.loading.set(false);
+      if (request === this.financialRequest) this.loading.set(false);
     }
+  }
+  /** Queue filters are global and do not reuse the financial year/month filters. */
+  async loadProcessing() {
+    const request = ++this.processingRequest;
+    const selectedId = this.selectedJobId();
+    this.jobsLoading.set(true);
+    try {
+      const [page, detail] = await Promise.all([
+        this.api.get<JobPage>("/jobs/page", { state: this.processingState, page: this.processingPage, size: 50 }),
+        selectedId ? this.api.get<JobItem>("/jobs/" + selectedId) : Promise.resolve(null),
+      ]);
+      if (request !== this.processingRequest || this.view() !== "processing") return;
+      if (this.processingPage > 0 && this.processingPage * 50 >= page.total) {
+        this.processingPage = Math.max(0, Math.ceil(page.total / 50) - 1);
+        await this.loadProcessing();
+        return;
+      }
+      this.processing.set(page);
+      this.jobDetail.set(detail);
+      this.counts.update((previous) => ({ ...previous, jobs: page.counts.active, jobStates: page.counts }));
+    } catch (error) {
+      if (request === this.processingRequest) this.error.set(errorMessage(error));
+    } finally {
+      if (request === this.processingRequest) this.jobsLoading.set(false);
+    }
+  }
+  filterJobs(state: string) {
+    this.processingState = state;
+    this.processingPage = 0;
+    void this.loadProcessing();
+  }
+  jobCount(state: string): number {
+    const counts = this.counts().jobStates ?? this.processing()?.counts;
+    return counts?.[state === "all" ? "total" : state as keyof JobCounts] ?? 0;
+  }
+  async openJob(id: string) {
+    this.view.set("processing");
+    this.selectedJobId.set(id);
+    this.jobDetail.set(null);
+    await this.loadProcessing();
+    if (this.selectedJobId() === id) {
+      setTimeout(() => document.getElementById("job-detail-heading")?.focus());
+    }
+  }
+  closeJob() {
+    ++this.processingRequest;
+    this.selectedJobId.set(null);
+    this.jobDetail.set(null);
+    this.jobsLoading.set(false);
+  }
+  async openJobTarget(job: JobItem) {
+    const target = job.target;
+    if (!target.available) return;
+    if (target.type === "document") await this.openDocument(target.id);
+    else if (target.type === "invoice" || target.type === "movement") {
+      await this.openJobRecord(target.type, target.id);
+    } else if (target.type === "alert") {
+      await this.run(async () => {
+        const alerts = await this.api.get<any[]>("/alerts");
+        const alert = alerts.find((item) => item.id === target.id);
+        if (alert) await this.openAlert(alert);
+      });
+    }
+  }
+  async openJobRecord(type: "invoice" | "movement", id: string) {
+    await this.run(async () => {
+      await this.editRecord(type === "invoice" ? "INVOICE" : "MOVEMENT",
+        await this.api.get("/" + (type === "invoice" ? "invoices" : "movements") + "/" + id));
+    });
   }
   async loadAssistant() {
     await this.run(async () => {
@@ -444,7 +547,7 @@ export class AppComponent implements OnDestroy {
   async assign(invoice: any, candidate: any = null, reverses: any = null) {
     await this.run(async () => {
       this.assignmentMovements.set(
-        (await this.api.get("/movements", { size: 500 })).items,
+        (await this.api.get("/movements", { size: 500 })).items.filter((m: any) => !m.excluded && m.reviewStatus !== 'OPEN'),
       );
       this.assignment.set({
         invoiceId: invoice.id,
@@ -459,9 +562,21 @@ export class AppComponent implements OnDestroy {
   async searchAssignment(text: string) {
     await this.run(async () =>
       this.assignmentMovements.set(
-        (await this.api.get("/movements", { q: text, size: 500 })).items,
+        (await this.api.get("/movements", { q: text, size: 500 })).items.filter((m: any) => !m.excluded && m.reviewStatus !== 'OPEN'),
       ),
     );
+  }
+  async assignFromMovement(movement: any) {
+    await this.run(async () => {
+      this.allInvoices.set((await this.api.get("/invoices", { size: 500 })).items.filter((i: any) => !i.excluded && i.reviewStatus !== 'OPEN' && i.remaining !== '0.00'));
+      this.assignmentMovements.set([movement]);
+      this.assignment.set({ invoiceId: '', movementId: movement.id, amount: movement.remaining,
+        reversesId: null, evidence: 'Confirmado pelo gestor', invoice: null, fromMovement: true });
+    });
+  }
+  async searchAssignmentInvoices(text: string) {
+    await this.run(async () => this.allInvoices.set((await this.api.get("/invoices", { q: text, size: 500 })).items
+      .filter((i: any) => !i.excluded && i.reviewStatus !== 'OPEN' && i.remaining !== '0.00')));
   }
   async allocate() {
     await this.run(async () => {

@@ -40,4 +40,5 @@ public class BankMovement extends BaseEntity {
   public String author;
   public boolean manuallyConfirmed;
   public boolean deleted;
+  public boolean excluded;
 }

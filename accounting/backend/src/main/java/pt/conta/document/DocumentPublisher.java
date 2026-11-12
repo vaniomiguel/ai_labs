@@ -5,6 +5,7 @@ import static pt.conta.shared.Inputs.*;
 import java.math.BigDecimal;
 import java.time.*;
 import java.util.*;
+import java.util.function.*;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import pt.conta.audit.AuditService;
@@ -12,6 +13,7 @@ import pt.conta.bank.*;
 import pt.conta.history.HistoryService;
 import pt.conta.invoice.Invoice;
 import pt.conta.ledger.BookkeepingService;
+import pt.conta.reconciliation.MatchingRules;
 import pt.conta.review.ReviewService;
 import pt.conta.shared.*;
 import pt.conta.shared.Types.*;
@@ -197,6 +199,7 @@ public class DocumentPublisher {
             .filter(i -> doc.id.equals(i.documentId) && !i.deleted)
             .toList();
     var receipts = rows(draft, "invoices");
+    var identities = identities(existing, receipts, book::invoiceView, i -> i.excluded, "invoice");
     var results = new ArrayList<Map<String, Object>>();
     book.batch(
         () -> {
@@ -204,13 +207,16 @@ public class DocumentPublisher {
             var child = new LinkedHashMap<>(receipts.get(n));
             child.put("documentId", doc.id.toString());
             child.put("validate", human || flag(child, "validate") && flag(draft, "validate"));
-            var old = n < existing.size() ? existing.get(n) : null;
+            var old = identities.get(n);
             if (old != null) child.put("version", old.version);
-            results.add(book.saveInvoice(old == null ? null : old.id, child, origin, human));
+            var result = book.saveInvoice(old == null ? null : old.id, child, origin, human);
+            receipts.get(n).put("id", result.get("id").toString());
+            results.add(result);
           }
-          for (int n = receipts.size(); n < existing.size(); n++)
-            book.delete("invoice", existing.get(n).id, existing.get(n).version);
+          for (var old : existing)
+            if (!identities.contains(old)) book.delete("invoice", old.id, old.version);
         });
+    doc.draft = Json.write(draft);
     doc.status =
         results.stream().anyMatch(r -> r.get("reviewStatus") == ReviewStatus.OPEN)
             ? "OPEN"
@@ -273,6 +279,7 @@ public class DocumentPublisher {
                   .filter(m -> statement.id.equals(m.statementId) && !m.deleted)
                   .toList();
           var seen = new HashSet<UUID>();
+          var identities = identities(old, rows, book::movementView, m -> m.excluded, "movement");
           for (int n = 0; n < rows.size(); n++) {
             var row = new LinkedHashMap<>(rows.get(n));
             row.put("documentId", doc.id.toString());
@@ -280,7 +287,7 @@ public class DocumentPublisher {
             row.put(
                 "accountId", statement.accountId == null ? null : statement.accountId.toString());
             row.put("validate", statement.validated);
-            BankMovement existing = n < old.size() ? old.get(n) : null;
+            BankMovement existing = identities.get(n);
             if (existing != null) {
               row.put("version", existing.version);
               seen.add(existing.id);
@@ -308,7 +315,8 @@ public class DocumentPublisher {
                   "POSSIBLE_DUPLICATE",
                   "Existe um movimento semelhante noutro extrato; confirma a sobreposição");
             }
-            book.saveMovement(existing == null ? null : existing.id, row, origin, human);
+            var result = book.saveMovement(existing == null ? null : existing.id, row, origin, human);
+            rows.get(n).put("id", result.get("id").toString());
           }
           for (var movement : old)
             if (!seen.contains(movement.id)) {
@@ -319,5 +327,61 @@ public class DocumentPublisher {
                 doc.id, "document", doc.id, "STATEMENT_INTEGRITY", String.join("; ", errors));
           doc.status = statement.validated && errors.isEmpty() ? "DONE" : "OPEN";
         });
+    doc.draft = Json.write(draft);
+  }
+
+  /** Carries human participation decisions by identity, never by a changed extraction's position. */
+  private <T extends BaseEntity> List<T> identities(List<T> old, List<Map<String, Object>> rows,
+      Function<T, Map<String, Object>> view, Predicate<T> excluded, String type) {
+    var selected = new ArrayList<T>(Collections.nCopies(rows.size(), null));
+    var used = new HashSet<UUID>();
+    var keys = new HashMap<UUID, String>();
+    old.forEach(item -> keys.put(item.id, identityKey(view.apply(item), type)));
+    for (int n = 0; n < rows.size(); n++) {
+      UUID id = uuid(rows.get(n), "id");
+      if (id == null) continue;
+      var item = old.stream().filter(record -> record.id.equals(id)).findFirst()
+          .orElseThrow(() -> DomainException.invalid("O registo indicado não pertence a este documento"));
+      if (!used.add(id)) throw DomainException.invalid("O mesmo registo aparece duas vezes no documento");
+      selected.set(n, item);
+    }
+    for (int n = 0; n < rows.size(); n++) {
+      if (selected.get(n) != null) continue;
+      String key = identityKey(rows.get(n), type);
+      if (key == null) continue;
+      var item = old.stream().filter(record -> !used.contains(record.id) && key.equals(keys.get(record.id))).findFirst();
+      if (item.isPresent()) { selected.set(n, item.get()); used.add(item.get().id); }
+    }
+    // Bank references can repeat. Prefer the complete facts above, using a reference alone
+    // only when exactly one remaining record carries it.
+    if (type.equals("movement")) for (int n = 0; n < rows.size(); n++) {
+      if (selected.get(n) != null) continue;
+      String reference = text(rows.get(n), "bankReference");
+      if (reference == null) continue;
+      var matches = old.stream().filter(item -> !used.contains(item.id)
+          && reference.equals(text(view.apply(item), "bankReference"))).toList();
+      if (matches.size() == 1) { selected.set(n, matches.getFirst()); used.add(matches.getFirst().id); }
+    }
+    if (selected.contains(null) && old.stream().anyMatch(item -> excluded.test(item) && !used.contains(item.id)))
+      throw DomainException.invalid("A nova extração não identifica um registo excluído. Edita o registo existente ou volta a incluí-lo antes de extrair novamente; a exclusão não foi transferida para outra linha.");
+    // Preserve the former edit behavior for unmatched records without a human exclusion.
+    var remaining = old.stream().filter(item -> !used.contains(item.id)).iterator();
+    for (int n = 0; n < selected.size(); n++)
+      if (selected.get(n) == null && remaining.hasNext()) selected.set(n, remaining.next());
+    return selected;
+  }
+
+  private String identityKey(Map<String, Object> row, String type) {
+    if (type.equals("invoice")) {
+      String supplier = Objects.requireNonNullElse(text(row, "supplierTaxId"), MatchingRules.normalize(text(row, "supplier")));
+      String number = text(row, "number");
+      if (number != null && !supplier.isBlank())
+        return Json.write(List.of(supplier, MatchingRules.normalize(number), Objects.requireNonNullElse(text(row, "type"), "INVOICE")));
+      if (date(row, "issuedOn") == null || row.get("total") == null || supplier.isBlank()) return null;
+      return Json.write(List.of(supplier, date(row, "issuedOn").toString(), Money.optional(row.get("total")), Objects.requireNonNullElse(text(row, "description"), "")));
+    }
+    if (date(row, "bookedOn") == null || text(row, "description") == null || row.get("amount") == null) return null;
+    return Json.write(Arrays.asList(date(row, "bookedOn").toString(), MatchingRules.normalize(text(row, "description")),
+        Money.optional(row.get("amount")), text(row, "direction"), text(row, "occurredAt"), text(row, "bankReference")));
   }
 }

@@ -15,8 +15,10 @@ import pt.conta.shared.*;
 public class OllamaProvider implements AiProvider {
   private final RestClient shortClient;
   private final RestClient modelClient;
+  private final String endpoint;
 
   public OllamaProvider(AccountingProperties properties) {
+    endpoint = endpoint(properties.ollamaUrl());
     shortClient = client(properties.ollamaUrl(), Duration.ofSeconds(3));
     modelClient = client(properties.ollamaUrl(), Duration.ofMinutes(20));
   }
@@ -52,7 +54,7 @@ public class OllamaProvider implements AiProvider {
       }
       return models;
     } catch (Exception e) {
-      throw new AiUnavailable("Ollama indisponível", e);
+      throw unavailable(e);
     }
   }
 
@@ -88,10 +90,40 @@ public class OllamaProvider implements AiProvider {
       String content = response.path("message").path("content").asText();
       if (content.isBlank()) throw new IllegalArgumentException("Resposta vazia do modelo");
       return content;
-    } catch (org.springframework.web.client.ResourceAccessException
-        | org.springframework.web.client.HttpClientErrorException.NotFound e) {
-      throw new AiUnavailable("O modelo não está disponível", e);
+    } catch (org.springframework.web.client.ResourceAccessException e) {
+      throw unavailable(e);
+    } catch (org.springframework.web.client.HttpClientErrorException.NotFound e) {
+      throw new AiUnavailable("O modelo " + request.model() + " não está disponível em " + endpoint, e);
     }
+  }
+
+  /** Omits credentials and query strings from connection diagnostics. */
+  public static String endpoint(String url) {
+    var uri = java.net.URI.create(url);
+    try {
+      return new java.net.URI(uri.getScheme(), null, uri.getHost(), uri.getPort(), uri.getPath(), null, null).toString();
+    } catch (java.net.URISyntaxException e) {
+      throw new IllegalArgumentException("Endereço do Ollama inválido", e);
+    }
+  }
+
+  private AiUnavailable unavailable(Exception error) {
+    String reason = "não foi possível estabelecer a ligação";
+    for (Throwable cause = error; cause != null; cause = cause.getCause()) {
+      if (cause instanceof java.net.UnknownHostException || cause instanceof java.nio.channels.UnresolvedAddressException) {
+        reason = "o endereço não foi encontrado";
+        break;
+      }
+      if (cause instanceof java.net.http.HttpTimeoutException || cause instanceof java.net.SocketTimeoutException) {
+        reason = "o tempo de espera da resposta foi excedido";
+        break;
+      }
+      if (cause instanceof java.net.ConnectException) reason = "a ligação foi recusada";
+      if (cause instanceof org.springframework.web.client.RestClientResponseException response) {
+        reason = "o servidor devolveu HTTP " + response.getStatusCode().value();
+      }
+    }
+    return new AiUnavailable("Ollama indisponível em " + endpoint + ": " + reason, error);
   }
 
   private RestClient client(String url, Duration timeout) {

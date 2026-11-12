@@ -1,0 +1,134 @@
+<section class="panel reconciliation-panel" aria-label="Entradas de reconciliação">
+  <div class="section-heading">
+    <div>
+      <h2>Faturas e movimentos <span class="count">{{data().total}}</span></h2>
+      <p>Positivo: a empresa deve ao gestor. Negativo: o gestor deve à empresa.</p>
+    </div>
+    <button mat-stroked-button [disabled]="working() || saving()" (click)="reconcile.emit()">⇄ Reconciliar</button>
+  </div>
+  <p class="reconciliation-scroll-hint">Desliza a tabela para consultar todas as colunas.</p>
+  @if(error() && !selection()) { <p class="error reconciliation-error" role="alert">{{error()}}</p> }
+  <div class="table-scroll" tabindex="0" aria-label="Tabela de reconciliação">
+    <table class="reconciliation-table">
+      <thead><tr>
+        <th>Documentos</th><th>Datas</th><th class="number">Faturas</th><th class="number">Banco</th>
+        <th class="number">Saldo do grupo</th><th>Estado</th><th><span class="sr-only">Ações</span></th>
+      </tr></thead>
+      <tbody>
+        @for(entry of data().items; track entry.id) {
+          <tr class="reconciliation-entry" [class.excluded-entry]="entry.excluded" [class.pending]="entry.status==='PENDING_REVIEW'" [attr.data-entry-id]="entry.id">
+            <td class="reconciliation-documents">
+              @if(entry.invoices.length === 1) {
+                <button class="row-title" (click)="edit.emit({kind:'INVOICE',record:entry.invoices[0]})">{{entry.invoices[0].supplier || 'Fornecedor por identificar'}}</button>
+                <small>{{entry.invoices[0].number || 'Sem número'}}</small>
+              } @else if(entry.invoices.length > 1) {
+                <strong>{{entry.invoices.length}} faturas</strong>
+              }
+              @if(entry.movements.length === 1) {
+                <button class="row-title bank-description" (click)="edit.emit({kind:'MOVEMENT',record:entry.movements[0]})">{{entry.movements[0].description || 'Descrição por identificar'}}</button>
+              } @else if(entry.movements.length > 1) { <small>{{entry.movements.length}} movimentos</small> }
+              <button class="text-button expand-entry" [attr.aria-expanded]="expanded().has(entry.id)" [attr.aria-controls]="'detail-'+entry.id" (click)="toggle(entry.id)">{{expanded().has(entry.id)?'Fechar detalhes':'Ver detalhes'}}</button>
+            </td>
+            <td class="nowrap">
+              @if(entry.invoices.length === 1) { <span>Fatura <time>{{entry.invoices[0].issuedOn || 'Em falta'}}</time></span> }
+              @if(entry.movements.length === 1) { <small>Banco <time>{{entry.movements[0].bookedOn || 'Em falta'}}</time></small> }
+              @if(entry.invoices.length > 1 || entry.movements.length > 1) {
+                <small>{{entry.firstDate}} — {{entry.lastDate}}</small>
+              }
+              @if(entry.differences.dates) { <span class="difference-indicator">Datas diferentes</span> }
+            </td>
+            <td class="number">{{entry.invoices.length ? money(entry.invoiceTotal) : '—'}}</td>
+            <td class="number">
+              @if(entry.debitTotal !== '0.00') { <span>Débito {{money(entry.debitTotal)}}</span> }
+              @if(entry.creditTotal !== '0.00') { <small>Crédito {{money(entry.creditTotal)}}</small> }
+              @if(!entry.movements.length) { — }
+            </td>
+            <td class="number reconciliation-impact">
+              <strong [class.negative]="entry.balanceImpact?.startsWith('-')">{{money(entry.balanceImpact)}}</strong>
+              @if(entry.spansPeriods) { <small>No período {{money(entry.periodImpact)}}</small> }
+              @if(entry.differences.amounts) { <span class="difference-indicator">Valores diferentes</span> }
+            </td>
+            <td><span class="badge" [class.warning]="entry.status==='PENDING_REVIEW' || entry.status==='MATCHED_DIFFERENCES'">{{labels[entry.status]}}</span></td>
+            <td><button class="text-button participation-action" [disabled]="saving() || working()" (click)="participation(entry)">{{entry.excluded?'Voltar a incluir':'Excluir do saldo'}}</button></td>
+          </tr>
+          @if(expanded().has(entry.id)) {
+            <tr class="reconciliation-detail" [id]="'detail-'+entry.id"><td colspan="7">
+              @if(entry.excluded) { <p>Excluído dos cálculos e da procura de correspondências. O original e o histórico estão preservados.</p> }
+              @if(entry.status==='PENDING_REVIEW') { <p>Fora dos cálculos até os dados serem validados.</p> }
+              @if(entry.spansPeriods) { <p>O saldo do grupo inclui todas as suas datas. Neste período, só contam os registos com data dentro do filtro.</p> }
+              <div class="reconciliation-records">
+                @for(i of entry.invoices; track i.id) {
+                  <article>
+                    <strong>{{labels[i.type]}} · {{i.number || i.supplier}}</strong><span>{{i.issuedOn || 'Data em falta'}} · {{money(i.total)}}</span>
+                    <small>{{i.supplier}} · {{entry.excluded?'Fora dos cálculos':'Por reconciliar '+money(i.remaining)}}</small>
+                    <div class="row-actions">
+                      <button class="text-button" (click)="edit.emit({kind:'INVOICE',record:i})">Editar fatura</button>
+                      <button class="text-button danger" (click)="remove.emit({kind:'INVOICE',record:i})">Eliminar fatura</button>
+                      @if(i.documentId) { <button class="text-button" (click)="original.emit(i.documentId)">Original da fatura</button> }
+                      @if(!entry.excluded && i.reviewStatus !== 'OPEN' && i.remaining !== '0.00') {
+                        <button class="text-button" (click)="assign.emit({invoice:i})">Associar movimento</button>
+                      }
+                    </div>
+                    @if(!entry.excluded) {
+                      <div class="suggestion-row">
+                        @for(c of candidatesFor(i.id); track c.movementId) {
+                          <button class="suggestion" (click)="assign.emit({invoice:i,candidate:c})">{{c.movementDescription || c.movementId.slice(0,8)}} · {{money(c.amount)}}<small>{{c.reason}}</small></button>
+                        }
+                      </div>
+                      @if(aiFor(i.id); as ai) {
+                        <details class="ai-suggestion"><summary>Sugestão da IA · {{ai.model}}</summary><p>{{ai.summary}}</p>
+                          @for(c of ai.rankedCandidates; track c.movementId) {
+                            <button class="text-button" (click)="assign.emit({invoice:i,candidate:c})">Rever associação · {{c.reason}}</button>
+                          }
+                        </details>
+                      }
+                    }
+                  </article>
+                }
+                @for(m of entry.movements; track m.id) {
+                  <article><strong>{{labels[m.direction]}} · {{m.description}}</strong><span>{{m.bookedOn || 'Data em falta'}} · {{money(m.amount)}}</span>
+                    <small>{{labels[m.kind]}} · {{entry.excluded?'Fora dos cálculos':'Por atribuir '+money(m.remaining)}}</small>
+                    <div class="row-actions">
+                      <button class="text-button" (click)="edit.emit({kind:'MOVEMENT',record:m})">Editar movimento</button>
+                      <button class="text-button danger" (click)="remove.emit({kind:'MOVEMENT',record:m})">Eliminar movimento</button>
+                      @if(m.documentId) { <button class="text-button" (click)="original.emit(m.documentId)">Original do movimento</button> }
+                      @if(!entry.excluded && m.reviewStatus !== 'OPEN' && m.remaining !== '0.00') {
+                        <button class="text-button" (click)="assignMovement.emit(m)">Associar fatura</button>
+                      }
+                    </div>
+                  </article>
+                }
+              </div>
+              @for(a of entry.allocations; track a.id) {
+                <div class="payment-link"><span>{{invoiceName(entry,a.invoiceId)}} ↔ {{movementName(entry,a.movementId)}}<small>{{a.evidence}}</small></span>
+                  <strong>{{a.reversesId?'Estorno · ':''}}{{money(a.amount)}}</strong>
+                  @if(!a.reversesId) { <button class="text-button" (click)="reverse.emit(a)">Estornar</button> }
+                  <button class="text-button" (click)="undo.emit(a)">Desfazer associação</button>
+                </div>
+              }
+            </td></tr>
+          }
+        } @empty { <tr><td colspan="7" class="empty-state">Sem faturas ou movimentos neste período.</td></tr> }
+      </tbody>
+    </table>
+  </div>
+  <div class="panel-footer"><span>{{loading()?'A atualizar…':'Os registos excluídos continuam visíveis, com efeito zero.'}}</span><div>
+    <button class="text-button" [disabled]="data().page===0" (click)="pageChange.emit(data().page-1)">← Anterior</button>
+    <span>Página {{data().page+1}}</span>
+    <button class="text-button" [disabled]="(data().page+1)*data().size>=data().total" (click)="pageChange.emit(data().page+1)">Seguinte →</button>
+  </div></div>
+</section>
+@if(selection(); as selection) {
+  <div class="modal-backdrop" (keydown.escape)="!saving() && this.selection.set(null)">
+    <section class="dialog compact" role="dialog" aria-modal="true" aria-labelledby="exclude-title" cdkTrapFocus [cdkTrapFocusAutoCapture]="true">
+      <header class="dialog-heading"><h2 id="exclude-title">Excluir do saldo</h2><button class="icon-button" aria-label="Fechar exclusão" [disabled]="saving()" (click)="this.selection.set(null)">×</button></header>
+      <div class="dialog-body">
+        <p>Escolhe os registos a excluir. Os restantes voltam a procurar correspondências.</p>
+        <div class="row-actions"><button class="text-button" (click)="select('invoice')">Só faturas</button><button class="text-button" (click)="select('movement')">Só movimentos</button><button class="text-button" (click)="select('all')">Ambos / todo o grupo</button></div>
+        @for(item of selection.items; track item.id) { <label class="exclusion-option"><input type="checkbox" [(ngModel)]="item.selected" [disabled]="saving()" />{{item.type==='invoice'?'Fatura':'Movimento'}} · {{item.label}}</label> }
+        @if(error()) { <p class="error" role="alert">{{error()}}</p> }
+      </div>
+      <footer class="dialog-footer"><button mat-stroked-button [disabled]="saving()" (click)="this.selection.set(null)">Cancelar</button><button mat-flat-button [disabled]="saving() || !hasSelection()" (click)="applySelection()">Excluir selecionados</button></footer>
+    </section>
+  </div>
+}

@@ -199,6 +199,11 @@
           "updatedAt": {
             "type": "string",
             "format": "date-time"
+          },
+          "excluded": {
+            "type": "boolean",
+            "readOnly": true,
+            "description": "Marcador humano alterado através de /reconciliation/exclusions."
           }
         }
       },
@@ -313,6 +318,11 @@
           },
           "reviewStatus": {
             "type": "string"
+          },
+          "excluded": {
+            "type": "boolean",
+            "readOnly": true,
+            "description": "Marcador humano alterado através de /reconciliation/exclusions."
           }
         }
       },
@@ -603,6 +613,436 @@
             }
           }
         ]
+      },
+      "JobCounts": {
+        "type": "object",
+        "required": [
+          "QUEUED",
+          "RUNNING",
+          "WAITING",
+          "DONE",
+          "FAILED",
+          "active",
+          "total"
+        ],
+        "properties": {
+          "QUEUED": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "RUNNING": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "WAITING": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "DONE": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "FAILED": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "active": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "total": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          }
+        }
+      },
+      "JobTarget": {
+        "type": "object",
+        "required": [
+          "type",
+          "id",
+          "label",
+          "available",
+          "documentId"
+        ],
+        "properties": {
+          "type": {
+            "type": "string",
+            "enum": [
+              "invoice",
+              "movement",
+              "document",
+              "allocation",
+              "alert",
+              "unknown"
+            ]
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "label": {
+            "type": "string"
+          },
+          "available": {
+            "type": "boolean"
+          },
+          "documentId": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          },
+          "invoiceId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "movementId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "invoiceAvailable": {
+            "type": "boolean"
+          },
+          "movementAvailable": {
+            "type": "boolean"
+          },
+          "amount": {
+            "$ref": "#/components/schemas/Decimal"
+          },
+          "active": {
+            "type": "boolean"
+          },
+          "evidence": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "Job": {
+        "type": "object",
+        "required": [
+          "id",
+          "kind",
+          "targetId",
+          "targetVersion",
+          "state",
+          "attempts",
+          "error",
+          "createdAt",
+          "updatedAt",
+          "availableAt",
+          "target"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "targetId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "targetVersion": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "state": {
+            "type": "string",
+            "enum": [
+              "QUEUED",
+              "RUNNING",
+              "WAITING",
+              "DONE",
+              "FAILED"
+            ]
+          },
+          "attempts": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Tentativas com erro; indisponibilidade do modelo não incrementa este valor."
+          },
+          "error": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "createdAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "updatedAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "availableAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "target": {
+            "$ref": "#/components/schemas/JobTarget"
+          }
+        }
+      },
+      "JobPage": {
+        "type": "object",
+        "required": [
+          "items",
+          "total",
+          "page",
+          "size",
+          "counts"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Job"
+            }
+          },
+          "total": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "page": {
+            "type": "integer"
+          },
+          "size": {
+            "type": "integer"
+          },
+          "counts": {
+            "$ref": "#/components/schemas/JobCounts"
+          }
+        }
+      },
+      "Progress": {
+        "type": "object",
+        "required": [
+          "jobs",
+          "jobStates",
+          "alerts",
+          "revision"
+        ],
+        "properties": {
+          "jobs": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Tarefas em fila, em execução ou em espera."
+          },
+          "jobStates": {
+            "$ref": "#/components/schemas/JobCounts"
+          },
+          "alerts": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "revision": {
+            "type": "string"
+          }
+        }
+      },
+      "ExclusionItem": {
+        "type": "object",
+        "required": [
+          "type",
+          "id",
+          "version"
+        ],
+        "properties": {
+          "type": {
+            "type": "string",
+            "enum": [
+              "invoice",
+              "movement"
+            ]
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "version": {
+            "type": "integer",
+            "minimum": 0
+          }
+        }
+      },
+      "ExclusionRequest": {
+        "type": "object",
+        "required": [
+          "excluded",
+          "items"
+        ],
+        "properties": {
+          "excluded": {
+            "type": "boolean"
+          },
+          "items": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "$ref": "#/components/schemas/ExclusionItem"
+            }
+          },
+          "reason": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "maxLength": 2000
+          }
+        }
+      },
+      "ReconciliationEntry": {
+        "type": "object",
+        "required": [
+          "id",
+          "status",
+          "excluded",
+          "invoices",
+          "movements",
+          "allocations",
+          "differences",
+          "invoiceTotal",
+          "debitTotal",
+          "creditTotal",
+          "balanceImpact",
+          "periodImpact",
+          "spansPeriods"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "EXCLUDED",
+              "PENDING_REVIEW",
+              "UNMATCHED_INVOICE",
+              "UNMATCHED_MOVEMENT",
+              "MATCHED",
+              "MATCHED_DIFFERENCES"
+            ]
+          },
+          "excluded": {
+            "type": "boolean"
+          },
+          "invoices": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Invoice"
+            }
+          },
+          "movements": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Movement"
+            }
+          },
+          "allocations": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Allocation"
+            }
+          },
+          "differences": {
+            "type": "object",
+            "required": [
+              "dates",
+              "amounts"
+            ],
+            "properties": {
+              "dates": {
+                "type": "boolean"
+              },
+              "amounts": {
+                "type": "boolean"
+              }
+            }
+          },
+          "invoiceTotal": {
+            "$ref": "#/components/schemas/Decimal"
+          },
+          "debitTotal": {
+            "$ref": "#/components/schemas/Decimal"
+          },
+          "creditTotal": {
+            "$ref": "#/components/schemas/Decimal"
+          },
+          "balanceImpact": {
+            "$ref": "#/components/schemas/Decimal"
+          },
+          "periodImpact": {
+            "$ref": "#/components/schemas/Decimal"
+          },
+          "spansPeriods": {
+            "type": "boolean"
+          },
+          "firstDate": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date"
+          },
+          "lastDate": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date"
+          }
+        }
+      },
+      "ReconciliationPage": {
+        "type": "object",
+        "required": [
+          "items",
+          "total",
+          "page",
+          "size"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ReconciliationEntry"
+            }
+          },
+          "total": {
+            "type": "integer"
+          },
+          "page": {
+            "type": "integer"
+          },
+          "size": {
+            "type": "integer"
+          }
+        }
       }
     },
     "securitySchemes": {
@@ -2247,7 +2687,8 @@
               }
             }
           }
-        }
+        },
+        "description": "Inclui endpoint (endereço configurado sem credenciais), modelos, seleções, recomendações e error com o motivo de indisponibilidade quando aplicável."
       }
     },
     "/assistant/settings": {
@@ -2387,7 +2828,14 @@
         "summary": "Progresso em SSE",
         "responses": {
           "200": {
-            "description": "Operação concluída"
+            "description": "Fluxo SSE com eventos progress; data contém o objeto Progress.",
+            "content": {
+              "text/event-stream": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
           },
           "401": {
             "description": "Sessão necessária"
@@ -2405,7 +2853,8 @@
               }
             }
           }
-        }
+        },
+        "description": "Envia imediatamente um evento progress com JSON Progress e volta a enviar aproximadamente a cada três segundos. Contagens globais por estado; sem conteúdo documental."
       }
     },
     "/logout": {
@@ -2642,6 +3091,392 @@
           },
           "409": {
             "description": "Versão desatualizada"
+          },
+          "422": {
+            "description": "Regra de negócio não satisfeita",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/jobs/page": {
+      "get": {
+        "summary": "Página global de tarefas, independente dos filtros contabilísticos",
+        "parameters": [
+          {
+            "name": "state",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "default": "active",
+              "enum": [
+                "active",
+                "all",
+                "QUEUED",
+                "RUNNING",
+                "WAITING",
+                "DONE",
+                "FAILED"
+              ]
+            },
+            "description": "active inclui QUEUED, RUNNING e WAITING."
+          },
+          {
+            "name": "page",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "default": 0,
+              "minimum": 0
+            }
+          },
+          {
+            "name": "size",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "default": 50,
+              "minimum": 1,
+              "maximum": 100
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Operação concluída",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JobPage"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Sessão necessária"
+          },
+          "422": {
+            "description": "Parâmetros inválidos",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/jobs/{id}": {
+      "get": {
+        "summary": "Detalhe da tarefa e identificação do registo associado",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Operação concluída",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Job"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Sessão necessária"
+          },
+          "422": {
+            "description": "Parâmetros inválidos",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Tarefa não encontrada"
+          }
+        }
+      }
+    },
+    "/reconciliation/entries": {
+      "get": {
+        "summary": "Grupos completos e registos sem correspondência, incluindo excluídos",
+        "description": "Os grupos são formados antes dos filtros e da paginação. Basta uma data do grupo pertencer ao período; todos os membros são devolvidos. balanceImpact abrange o grupo; periodImpact aplica as datas do filtro. participation pode ser active ou excluded; por omissão inclui ambos. Valores pendentes de validação têm impacto null.",
+        "parameters": [
+          {
+            "name": "year",
+            "in": "query",
+            "schema": {
+              "type": "integer"
+            }
+          },
+          {
+            "name": "month",
+            "in": "query",
+            "schema": {
+              "type": "integer"
+            }
+          },
+          {
+            "name": "day",
+            "in": "query",
+            "schema": {
+              "type": "integer"
+            }
+          },
+          {
+            "name": "from",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "to",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "q",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "category",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "status",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "direction",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "accountId",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "time",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "min",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "max",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "participation",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "page",
+            "in": "query",
+            "schema": {
+              "type": "integer"
+            }
+          },
+          {
+            "name": "size",
+            "in": "query",
+            "schema": {
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Página de reconciliação",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReconciliationPage"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Pedido inválido",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Sessão necessária",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Token CSRF necessário",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Registo não encontrado",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Versão desatualizada",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Regra de negócio não satisfeita",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/reconciliation/exclusions": {
+      "post": {
+        "summary": "Excluir ou voltar a incluir uma seleção de faturas e movimentos",
+        "description": "Operação atómica, auditada e com versões obrigatórias. Desativa associações afetadas e volta a reconciliar com os dados atuais. Não extrai novamente documentos.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ExclusionRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Participação alterada e reconciliação atualizada"
+          },
+          "400": {
+            "description": "Pedido inválido",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Sessão necessária",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Token CSRF necessário",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Registo não encontrado",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Versão desatualizada",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
           },
           "422": {
             "description": "Regra de negócio não satisfeita",
