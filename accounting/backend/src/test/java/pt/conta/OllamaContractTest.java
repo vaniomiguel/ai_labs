@@ -150,6 +150,20 @@ class OllamaContractTest {
       var complete=Json.read(request.get());
       assertThat(complete.path("truncate").asBoolean(true)).isFalse();
       assertThat(complete.path("shift").asBoolean(true)).isFalse();
+      var invoice = new InvoiceExtractionRequests(new PromptCatalog(properties))
+          .automatic("vision:test", "Complete invoice OCR text");
+      provider.complete(invoice);
+      var invoiceBody = Json.read(request.get());
+      var messages = invoiceBody.path("messages");
+      assertThat(messages.size()).isEqualTo(2);
+      assertThat(messages.get(0).path("role").asText()).isEqualTo("system");
+      assertThat(messages.get(0).path("content").asText()).isEqualTo(invoice.instructions());
+      assertThat(messages.get(1).path("role").asText()).isEqualTo("user");
+      assertThat(messages.get(1).path("content").asText()).isEqualTo(invoice.input());
+      assertThat(messages.get(1).has("images")).isFalse();
+      assertThat(invoiceBody.path("format")).isEqualTo(Json.read(Json.write(invoice.schema())));
+      assertThat(invoiceBody.path("truncate").asBoolean(true)).isFalse();
+      assertThat(invoiceBody.path("shift").asBoolean(true)).isFalse();
     } finally {
       server.stop(0);
     }

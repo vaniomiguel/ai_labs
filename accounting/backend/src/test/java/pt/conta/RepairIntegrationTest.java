@@ -67,6 +67,18 @@ class RepairIntegrationTest {
     return new Fixture(doc.id,alert.id);
   }
   private Fixture fixture()throws Exception{return fixture("Fatura 2026-01-01 Fornecedor de teste Total 100,00",1,"{}");}
+  private Fixture statementFixture(String source, int pages, String layout) throws Exception {
+    var fixture = fixture(source, pages, layout);
+    var doc = store.get(SourceDocument.class, fixture.doc);
+    doc.kind = "STATEMENT";
+    doc.draft = Json.write(map("movements", List.of()));
+    store.flush();
+    return fixture;
+  }
+  private Map<String, Object> statementResponse() {
+    return response(map("movements", List.of()), List.of());
+  }
+
   private Map<String,Object> task(Map<String,Object> alert){return Json.object(Json.write(alert.get("repair")));}
   private JobQueue.Claim request(Fixture f){
     var view=repairs.request(f.alert);UUID id=UUID.fromString(task(view).get("jobId").toString());
@@ -98,24 +110,24 @@ class RepairIntegrationTest {
     doc.draft=Json.write(map("supplier","Nome humano","issuedOn",null,"total",null));
     doc.fieldProvenance=Json.write(map("root",map("supplier",map("origin","HUMAN_EDIT","protected",true,"actor","gestor"))));store.flush();
     provider.program=request->{assertThat(Json.read(request.input()).path("fieldProvenance").path("root").path("supplier").path("protected").asBoolean()).isTrue();
-      assertThat(request.instructions()).contains("valores humanos são autoritativos","apenas sugestões");return Json.write(response(valid(),List.of()));};
+      assertThat(request.instructions()).contains("Human-entered values are authoritative","only suggestions");return Json.write(response(valid(),List.of()));};
     process(request(f));assertThat(Json.object(doc.draft)).containsEntry("supplier","Nome humano");assertNoMoney();
   }
 
-  @Test void aVisualModelReceivesEveryRealPdfPageWithoutLayoutMetadata()throws Exception {
-    var f=fixture("Texto de todas as páginas",4,"{}");provider.vision=true;
+  @Test void aStatementVisualModelReceivesEveryRealPdfPageWithoutLayoutMetadata()throws Exception {
+    var f=statementFixture("Texto de todas as páginas",4,"{}");provider.vision=true;
     provider.program=request->{assertThat(request.images()).hasSize(4);
       for(var encoded:request.images())assertThat(Base64.getDecoder().decode(encoded)).startsWith((byte)137,(byte)80,(byte)78,(byte)71);
       assertThat(Json.read(request.input()).path("sourcePages").toString()).isEqualTo("[1,2,3,4]");
-      return Json.write(response(valid(),List.of()));};
+      return Json.write(statementResponse());};
     process(request(f));var context=(Map<?,?>)task(repairs.view(f.alert)).get("context");
     assertThat(context.get("textComplete")).isEqualTo(true);assertThat((List<?>)context.get("pages")).hasSize(4);assertNoMoney();
     assertThat(controller.attempts(f.doc).getFirst().get("engine").toString()).contains("qwen3.5:9b");
   }
 
-  @Test void incompleteLayoutCannotOmitOtherPdfPages()throws Exception {
-    var f=fixture("Texto integral",3,"{\"pages\":[{\"page\":1,\"text\":\"Primeira página\"}]}");provider.vision=true;
-    provider.program=request->{assertThat(request.images()).hasSize(3);return Json.write(response(valid(),List.of()));};
+  @Test void incompleteStatementLayoutCannotOmitOtherPdfPages()throws Exception {
+    var f=statementFixture("Texto integral",3,"{\"pages\":[{\"page\":1,\"text\":\"Primeira página\"}]}");provider.vision=true;
+    provider.program=request->{assertThat(request.images()).hasSize(3);return Json.write(statementResponse());};
     process(request(f));
   }
 
@@ -125,10 +137,61 @@ class RepairIntegrationTest {
     process(request(f));assertThat(((Map<?,?>)task(repairs.view(f.alert)).get("context")).get("vision")).isEqualTo(false);
   }
 
-  @Test void excessivePageCountFailsWithoutSendingAPartialSetOfImages()throws Exception {
-    var f=fixture("Texto completo",17,"{}");provider.vision=true;
+  @Test void excessiveStatementPageCountFailsWithoutSendingAPartialSetOfImages()throws Exception {
+    var f=statementFixture("Texto completo",17,"{}");provider.vision=true;
     assertThatThrownBy(()->worker.process(request(f))).isInstanceOf(AiProvider.ContextExceeded.class).hasMessageContaining("Nenhuma página foi omitida");
     assertThat(provider.calls).isZero();assertNoMoney();
+  }
+
+  @Test void invoiceRepairNeverReadsPdfOrSendsImagesEvenForAVisualModel() throws Exception {
+    String source = "Fatura completa de dezassete páginas";
+    var f = fixture(source, 17, "{}");
+    var doc = store.get(SourceDocument.class, f.doc);
+    doc.storageKey = "unavailable-original.pdf";
+    store.flush();
+    provider.vision = true;
+    provider.program = request -> {
+      var input = Json.read(request.input());
+      assertThat(input.path("sourceText").asText()).isEqualTo(source);
+      assertThat(input.path("fields").asText()).contains("issuedOn", "lines[n].unitPrice", "categories: always []");
+      assertThat(input.path("alert").asText()).contains("Falta a data");
+      assertThat(input.has("data")).isTrue();
+      assertThat(input.has("fieldProvenance")).isTrue();
+      assertThat(input.has("documentVersion")).isTrue();
+      assertThat(input.path("sourcePages").isEmpty()).isTrue();
+      assertThat(request.images()).isEmpty();
+      assertThat(request.requireFullContext()).isTrue();
+      assertThat(request.instructions()).startsWith("You are an experienced accountant");
+      return Json.write(response(valid(), List.of()));
+    };
+    process(request(f));
+    assertThat(provider.calls).isEqualTo(1);
+    var context = (Map<?, ?>) task(repairs.view(f.alert)).get("context");
+    assertThat((List<?>) context.get("imageHashes")).isEmpty();
+    assertThat((List<?>) context.get("pages")).isEmpty();
+    assertNoMoney();
+  }
+
+  @Test void blankInvoiceTextIsRejectedBeforeGeneration() throws Exception {
+    var f = fixture(" \n\t", 1, "{}");
+    assertThatThrownBy(() -> worker.process(request(f))).isInstanceOf(DomainException.class)
+        .hasMessageContaining("texto extraído");
+    assertThat(provider.calls).isZero();
+    assertNoMoney();
+  }
+
+  @Test void providerContextRejectionPermanentlyFailsTheRepair() throws Exception {
+    var f = fixture();
+    request(f);
+    provider.program = request -> { throw new AiProvider.ContextExceeded("Limite de contexto do modelo"); };
+    var enabled = org.mockito.Mockito.mock(AccountingProperties.class);
+    org.mockito.Mockito.when(enabled.jobsEnabled()).thenReturn(true);
+    new BackgroundWorker(enabled, queue, null, null, orchestrator, null,
+        new io.micrometer.core.instrument.simple.SimpleMeterRegistry()).tick();
+    assertThat(task(repairs.view(f.alert))).containsEntry("state", "FAILED");
+    assertThat(queue.claim()).isEmpty();
+    assertThat(store.get(Alert.class, f.alert).proposal).isNull();
+    assertNoMoney();
   }
 
   @Test void readyProposalDoesNotPublishBeforeExplicitConfirmation()throws Exception {

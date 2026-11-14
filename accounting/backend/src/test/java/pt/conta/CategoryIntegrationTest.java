@@ -244,7 +244,8 @@ class CategoryIntegrationTest {
     UUID id=invoice("Compra de cabo USB-A");
     provider.program=request->{
       boolean repair=Json.read(request.input()).has("validationFeedback");
-      if(repair) assertThat(request.input()).contains("GENERALIZE_REQUIRED",original.toString());
+      if(repair) assertThat(request.input()).contains("GENERALIZE_REQUIRED",original.toString(),
+          "covers existing categories", "Correct the indicated error");
       return Json.write(result(List.of(label("new:usb","cabo USB-A")),List.of(
           op(repair?"GENERALIZE":"CREATE",repair?List.of(original):List.of(),"new:usb","Cabos USB",reference("623"),null,"cabo USB-A"))));
     };
@@ -278,7 +279,7 @@ class CategoryIntegrationTest {
     provider.program=request->{
       if(!Json.read(request.input()).has("validationFeedback"))
         return Json.write(result(List.of(label(original.toString(),"cabo USB-A")),List.of()));
-      assertThat(request.input()).contains("VARIANT_MISMATCH","Cabos USB");
+      assertThat(request.input()).contains("VARIANT_MISMATCH","Cabos USB", "Do not assign", "assign categories.id='new:general'");
       return Json.write(result(List.of(label("new:usb","cabo USB-A")),List.of(
           op("GENERALIZE",List.of(original),"new:usb","Cabos USB",reference("623"),null,"cabo USB-A; cabo USB-C"))));
     };
@@ -302,9 +303,13 @@ class CategoryIntegrationTest {
 
   @Test void aGenericServicesFamilyIsNotAnExpenseClassificationByItself() {
     UUID id=movement("Fornecedor não identificado","100.00");
-    provider.program=request->Json.read(request.input()).has("validationFeedback")
-        ?Json.write(map("status","REVIEW","explanation","Não há natureza identificável","categories",List.of(),"operations",List.of()))
-        :Json.write(result(List.of(label(reference("626").toString(),"Fornecedor não identificado")),List.of()));
+    provider.program=request->{
+      if(Json.read(request.input()).has("validationFeedback")) {
+        assertThat(request.input()).contains("GENERIC_FAMILY", "Choose a specific expense type");
+        return Json.write(map("status","REVIEW","explanation","Não há natureza identificável","categories",List.of(),"operations",List.of()));
+      }
+      return Json.write(result(List.of(label(reference("626").toString(),"Fornecedor não identificado")),List.of()));
+    };
     worker.process(new JobQueue.Claim(UUID.randomUUID(),"CLASSIFY_MOVEMENT",id,0,"{}",0));
     assertThat(provider.calls).isEqualTo(2);
     assertThat(names("movement",id)).isEmpty();

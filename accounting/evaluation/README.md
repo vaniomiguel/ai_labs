@@ -28,6 +28,8 @@ Executar `individual` numa instalação isolada com `AI_ENABLED=false`; executar
 
 `review_history.py` faz uma comparação adicional de cada linha mensal com texto e imagens dos originais, sem aplicar alterações. Deve correr apenas depois de a fila de IA da aplicação terminar, usando o Python do serviço documental, que contém PDFium/Pillow. `report_2016.py` combina snapshots com a referência documental revista independentemente. A referência de documentos, os montantes esperados dos movimentos e as observações pertencem aos ficheiros privados de resultados, não ao código nem aos testes de regressão.
 
+As instruções dessa comparação estão em `prompts/history-row-review-instructions.md`, escritas em inglês e carregadas em UTF-8 relativamente ao script. Mantêm o pedido de resposta em português e os campos JSON originais. Este recurso do avaliador é independente de `PROMPT_DIRECTORY`, que configura apenas o backend.
+
 O resultado deve separar importação técnica, cobertura, correção dos valores e qualidade da revisão da IA. Um PASS do modelo ou um resultado JSON válido não comprova que os valores estão corretos. Documentos de atualização de uma reserva, várias despesas no mesmo PDF, datas de viagem e datas de emissão exigem comparação explícita.
 
 ## Avaliador de casos anotados

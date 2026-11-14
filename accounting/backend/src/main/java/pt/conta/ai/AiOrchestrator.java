@@ -26,6 +26,7 @@ import pt.conta.shared.*;
 public class AiOrchestrator {
   private final pt.conta.category.CategoryAiWorker categoryWorker;
   private final RepairAiWorker repairWorker;
+  private final InvoiceExtractionRequests invoiceRequests;
   private final Store store;
   private final AiProvider provider;
   private final PromptCatalog prompts;
@@ -46,7 +47,9 @@ public class AiOrchestrator {
       AiResults results,
       DocumentPublisher publisher,
       DocumentStorage storage,
-      BookkeepingService book, pt.conta.category.CategoryAiWorker categoryWorker, RepairAiWorker repairWorker) {
+      BookkeepingService book, pt.conta.category.CategoryAiWorker categoryWorker, RepairAiWorker repairWorker,
+      InvoiceExtractionRequests invoiceRequests) {
+    this.invoiceRequests = invoiceRequests;
     this.repairWorker = repairWorker;
     this.categoryWorker = categoryWorker;
     this.store = store;
@@ -136,6 +139,12 @@ public class AiOrchestrator {
       subject = historyScope(Json.object(doc.draft));
       source = Json.write(subject);
     }
+    if (extract && doc.kind.equals("INVOICE")) {
+      var request = invoiceRequests.automatic(model.name(), source);
+      var response = execute(job, model, task, doc.sha256, request);
+      publishExtraction(job, doc, List.of(response), source);
+      return;
+    }
     var responses = new ArrayList<Map<String, Object>>();
     var chunks = chunks(doc, source);
     int chunkNumber = 0;
@@ -178,40 +187,8 @@ public class AiOrchestrator {
       if (input.length() > 50000)
         throw DomainException.invalid(
             "O conteúdo excede o contexto seguro; revê este documento manualmente");
-      String hash = hash(input + model.digest() + prompt + (doc == null ? "" : doc.sha256));
-      var cached =
-          store.all(AiExecution.class).stream()
-              .filter(e -> e.inputHash.equals(hash) && "VALID".equals(e.outcome))
-              .findFirst();
-      String raw;
-      long started = System.nanoTime();
-      if (cached.isPresent()) raw = cached.get().response;
-      else {
-        raw =
-            provider.complete(
-                new AiProvider.Request(model.name(), prompt, input, prompts.schema(task), images));
-        var execution = new AiExecution();
-        execution.targetId = job.target();
-        execution.targetVersion = job.revision();
-        execution.task = task;
-        execution.model = model.name();
-        execution.modelDigest = model.digest();
-        execution.promptVersion = "v1:" + hash(prompt);
-        execution.inputHash = hash;
-        execution.durationMs = (System.nanoTime() - started) / 1_000_000;
-        execution.request = input;
-        execution.response = raw;
-        try {
-          StructuredOutput.parse(raw, prompts.schema(task));
-          execution.outcome = "VALID";
-        } catch (Exception e) {
-          execution.outcome = "INVALID";
-          results.record(execution);
-          throw e;
-        }
-        results.record(execution);
-      }
-      var parsed = StructuredOutput.parse(raw, prompts.schema(task));
+      var request = new AiProvider.Request(model.name(), prompt, input, prompts.schema(task), images);
+      var parsed = execute(job, model, task, doc == null ? "" : doc.sha256, request);
       if (suggest) {
         var allowed =
             candidateContext.stream()
@@ -225,39 +202,7 @@ public class AiOrchestrator {
     }
     if (suggest) return;
     if (extract) {
-      var merged = merge(responses, doc.kind);
-      var draft = Json.object(Json.write(merged.get("draft")));
-      draft.put("issues", merged.get("issues"));
-      boolean safe =
-          (doc.kind.equals("INVOICE")
-                  ? AiEvidence.supportsInvoice(draft, rows(merged, "evidence"), source)
-                  : AiEvidence.supportsStatement(draft, rows(merged, "evidence"), source))
-              && ((List<?>) merged.get("issues")).isEmpty();
-      draft.put("validate", safe);
-      if (doc.kind.equals("INVOICE") && !rows(draft, "invoices").isEmpty()) {
-        boolean all = true;
-        int n = 0;
-        for (var child : rows(draft, "invoices")) {
-          String prefix = "invoices[" + (n++) + "].";
-          var proof =
-              rows(merged, "evidence").stream()
-                  .filter(e -> Objects.toString(e.get("field"), "").startsWith(prefix))
-                  .map(
-                      e -> {
-                        var copy = new LinkedHashMap<>(e);
-                        copy.put("field", e.get("field").toString().substring(prefix.length()));
-                        return (Map<String, Object>) copy;
-                      })
-                  .toList();
-          boolean valid =
-              AiEvidence.supportsInvoice(child, proof, source)
-                  && ((List<?>) merged.get("issues")).isEmpty();
-          child.put("validate", valid);
-          all &= valid;
-        }
-        draft.put("validate", ((List<?>) merged.get("issues")).isEmpty());
-      }
-      publisher.aiExtracted(doc.id, job.revision(), draft, Json.write(merged.get("evidence")));
+      publishExtraction(job, doc, responses, source);
     } else {
       var concerns = new ArrayList<Map<String, Object>>();
       var suggestions = new ArrayList<Object>();
@@ -279,6 +224,78 @@ public class AiOrchestrator {
               String.join("; ", summaries));
       results.reviewed(job, combined, source);
     }
+  }
+
+  private Map<String, Object> execute(
+      JobQueue.Claim job, AiProvider.Model model, String task, String documentHash,
+      AiProvider.Request request) {
+    String inputHash = hash(request.input() + model.digest() + request.instructions() + documentHash);
+    var cached = store.all(AiExecution.class).stream()
+        .filter(e -> e.inputHash.equals(inputHash) && "VALID".equals(e.outcome))
+        .findFirst();
+    if (cached.isPresent()) return StructuredOutput.parse(cached.get().response, request.schema());
+
+    long started = System.nanoTime();
+    String raw = provider.complete(request);
+    var execution = new AiExecution();
+    execution.targetId = job.target();
+    execution.targetVersion = job.revision();
+    execution.task = task;
+    execution.model = model.name();
+    execution.modelDigest = model.digest();
+    execution.promptVersion = "v1:" + hash(request.instructions());
+    execution.inputHash = inputHash;
+    execution.durationMs = (System.nanoTime() - started) / 1_000_000;
+    execution.request = request.input();
+    execution.response = raw;
+    Map<String, Object> parsed;
+    try {
+      parsed = StructuredOutput.parse(raw, request.schema());
+      execution.outcome = "VALID";
+    } catch (RuntimeException e) {
+      execution.outcome = "INVALID";
+      results.record(execution);
+      throw e;
+    }
+    results.record(execution);
+    return parsed;
+  }
+
+  private void publishExtraction(
+      JobQueue.Claim job, SourceDocument doc, List<Map<String, Object>> responses, String source) {
+    var merged = merge(responses, doc.kind);
+    var draft = Json.object(Json.write(merged.get("draft")));
+    draft.put("issues", merged.get("issues"));
+    boolean safe =
+        (doc.kind.equals("INVOICE")
+                ? AiEvidence.supportsInvoice(draft, rows(merged, "evidence"), source)
+                : AiEvidence.supportsStatement(draft, rows(merged, "evidence"), source))
+            && ((List<?>) merged.get("issues")).isEmpty();
+    draft.put("validate", safe);
+    if (doc.kind.equals("INVOICE") && !rows(draft, "invoices").isEmpty()) {
+      boolean all = true;
+      int n = 0;
+      for (var child : rows(draft, "invoices")) {
+        String prefix = "invoices[" + (n++) + "].";
+        var proof =
+            rows(merged, "evidence").stream()
+                .filter(e -> Objects.toString(e.get("field"), "").startsWith(prefix))
+                .map(
+                    e -> {
+                      var copy = new LinkedHashMap<>(e);
+                      copy.put("field", e.get("field").toString().substring(prefix.length()));
+                      return (Map<String, Object>) copy;
+                    })
+                .toList();
+        boolean valid =
+            AiEvidence.supportsInvoice(child, proof, source)
+                && ((List<?>) merged.get("issues")).isEmpty();
+        child.put("validate", valid);
+        all &= valid;
+      }
+      draft.put("validate", ((List<?>) merged.get("issues")).isEmpty());
+    }
+    publisher.aiExtracted(doc.id, job.revision(), draft, Json.write(merged.get("evidence")));
   }
 
   /**

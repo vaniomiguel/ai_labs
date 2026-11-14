@@ -10,6 +10,7 @@ import org.springframework.core.io.ClassPathResource;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import pt.conta.ai.PromptCatalog;
 import pt.conta.audit.AuditService;
 import pt.conta.bank.BankMovement;
 import pt.conta.document.SourceDocument;
@@ -28,10 +29,12 @@ public class CategoryService {
   private final AuditService audit;
   private final JobQueue jobs;
   private final JdbcTemplate jdbc;
+  private final PromptCatalog prompts;
   private final Map<String, Object> reference;
 
-  public CategoryService(Store store, AuditService audit, JobQueue jobs, JdbcTemplate jdbc) {
+  public CategoryService(Store store, AuditService audit, JobQueue jobs, JdbcTemplate jdbc, PromptCatalog prompts) {
     this.store = store; this.audit = audit; this.jobs = jobs; this.jdbc = jdbc;
+    this.prompts = prompts;
     try {
       reference = Json.object(new String(new ClassPathResource("category-reference.json")
           .getInputStream().readAllBytes(), StandardCharsets.UTF_8));
@@ -528,10 +531,11 @@ public class CategoryService {
       var suffixes = new HashSet<String>();
       while (actual.find()) suffixes.add(MatchingRules.normalize(actual.group(1)));
       if (!suffixes.isEmpty() && !suffixes.contains(MatchingRules.normalize(variants.group(2))))
-        throw DomainException.invalid("VARIANT_MISMATCH: Não atribua '" + category.name + "' a uma variante diferente. "
-            + (category.protectedCategory ? "Use uma categoria geral adequada sem alterar a categoria protegida."
-                : "Use GENERALIZE sourceIds=[" + category.id + "], name='" + VARIANT.matcher(category.name).replaceAll("$1")
-                    + "', parentId='" + category.parentId + "', key='new:general'; atribua categories.id='new:general'."));
+        throw DomainException.invalid(prompts.prompt(PromptCatalog.CATEGORY_VARIANT_MISMATCH_INSTRUCTIONS).stripTrailing()
+            .formatted(category.name, category.protectedCategory
+                ? prompts.prompt(PromptCatalog.CATEGORY_PROTECTED_VARIANT_INSTRUCTIONS).stripTrailing()
+                : prompts.prompt(PromptCatalog.CATEGORY_GENERALIZE_VARIANT_INSTRUCTIONS).stripTrailing()
+                    .formatted(category.id, VARIANT.matcher(category.name).replaceAll("$1"), category.parentId)));
     }
   }
 
@@ -571,7 +575,8 @@ public class CategoryService {
         UUID id = resolve(text(assignment, "id"), keys);
         var c = canonical(id); if (c.deleted) throw DomainException.invalid("Categoria arquivada");
         checkVariant(c, snapshot);
-        if ("626".equals(c.referenceCode)) throw DomainException.invalid("GENERIC_FAMILY: Serviços diversos é uma família genérica. Escolha uma natureza concreta sustentada pelos dados ou responda REVIEW sem categorias.");
+        if ("626".equals(c.referenceCode)) throw DomainException.invalid(
+            prompts.prompt(PromptCatalog.CATEGORY_GENERIC_FAMILY_INSTRUCTIONS).stripTrailing());
         desired.put(c.id, evidence);
       }
       for (var a : assignments(s).stream().filter(a -> a.origin.equals("AI")).toList()) store.remove(a);
@@ -623,12 +628,13 @@ public class CategoryService {
           && (MatchingRules.normalize(c.name).startsWith(proposed + " ")
               || !MatchingRules.normalize(c.name).equals(proposed) && VARIANT.matcher(c.name).find()
                   && variantBase(c.name).equals(variantBase(text(op, "name"))))).toList();
-      if (!proposed.isBlank() && !narrower.isEmpty()) throw DomainException.invalid("GENERALIZE_REQUIRED: '" + text(op, "name")
-          + "' abrange categorias existentes. Use GENERALIZE com sourceIds=" + narrower.stream().map(c -> c.id.toString()).toList()
-          + ", em vez de CREATE, para atualizar também o histórico.");
+      if (!proposed.isBlank() && !narrower.isEmpty()) throw DomainException.invalid(
+          prompts.prompt(PromptCatalog.CATEGORY_GENERALIZE_REQUIRED_INSTRUCTIONS).stripTrailing()
+              .formatted(text(op, "name"), narrower.stream().map(c -> c.id.toString()).toList()));
     }
     if (kind.equals("MOVE")) {
-      if (sources.size() != 1) throw DomainException.invalid("Move uma categoria de cada vez");
+      if (sources.size() != 1) throw DomainException.invalid(
+          prompts.prompt(PromptCatalog.CATEGORY_SINGLE_MOVE_INSTRUCTIONS).stripTrailing());
       sources.getFirst().parentId = parent; if (execution == null) sources.getFirst().protectedCategory = true;
     } else {
       Category target;
