@@ -3,13 +3,14 @@ import { CommonModule } from "@angular/common";
 import { FormsModule } from "@angular/forms";
 import { MatButtonModule } from "@angular/material/button";
 import { A11yModule } from "@angular/cdk/a11y";
+import { CategoryTags } from "./category-tags";
 import { Api, euros, labels, errorMessage, ReconciliationEntry, ReconciliationPage, ExclusionItem, ExclusionRequest } from "./api";
 
 /** Renders backend-calculated money and complete groups, including excluded single records. */
 @Component({
   selector: "reconciliation-table",
   standalone: true,
-  imports: [CommonModule, FormsModule, MatButtonModule, A11yModule],
+  imports: [CommonModule, FormsModule, MatButtonModule, A11yModule, CategoryTags],
   templateUrl: "./reconciliation.html",
 })
 export class ReconciliationTable {
@@ -22,6 +23,8 @@ export class ReconciliationTable {
   readonly reconcile = output<void>();
   readonly changed = output<void>();
   readonly pageChange = output<number>();
+  readonly categories = output<{type:"invoice"|"movement";record:any}>();
+  readonly categoryFilter = output<string>();
   readonly edit = output<{ kind: string; record: any }>();
   readonly remove = output<{ kind: string; record: any }>();
   readonly original = output<string>();
@@ -36,6 +39,9 @@ export class ReconciliationTable {
   readonly money = euros;
   readonly labels = labels;
 
+  groupCategories(entry: ReconciliationEntry) {
+    return [...new Map([...entry.invoices,...entry.movements].flatMap(r => r.categoryDetails ?? []).map(c => [c.id,c])).values()];
+  }
   toggle(id: string) {
     const expanded = new Set(this.expanded());
     if (expanded.has(id)) expanded.delete(id); else expanded.add(id);

@@ -101,6 +101,11 @@ public class JobQueue {
         id);
   }
 
+  public void failPermanently(Claim job,String error) {
+    jdbc.update("update job set state='FAILED',attempts=?,leased_until=null,error=?,updated_at=now() where id=? and lease_token=?",
+        job.attempts()+1,error,job.id(),job.token());
+  }
+
   public record Claim(
       UUID id, String kind, UUID target, long revision, String payload, int attempts, UUID token) {
     public Claim(UUID id, String kind, UUID target, long revision, String payload, int attempts) {

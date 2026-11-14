@@ -26,8 +26,8 @@ public class JobMonitor {
         original.id as original_id
       from (%s) j
       left join invoice i on i.id=j.target_id
-        and j.kind in ('REVIEW_INVOICE','NORMALIZE_CATEGORIES','SUGGEST_RECONCILIATION')
-      left join bank_movement m on m.id=j.target_id and j.kind='REVIEW_MOVEMENT'
+        and j.kind in ('REVIEW_INVOICE','NORMALIZE_CATEGORIES','CLASSIFY_INVOICE','SUGGEST_RECONCILIATION')
+      left join bank_movement m on m.id=j.target_id and j.kind in ('REVIEW_MOVEMENT','CLASSIFY_MOVEMENT')
       left join source_document d on d.id=j.target_id
         and j.kind in ('EXTRACT','IMPORT_ZIP','REVIEW_DOCUMENT','AI_EXTRACT_DOCUMENT')
       left join alert al on al.id=j.target_id and j.kind='REPAIR_ALERT'
@@ -91,8 +91,8 @@ public class JobMonitor {
   private Map<String, Object> view(ResultSet rs) throws SQLException {
     String kind = rs.getString("kind");
     String type = switch (kind) {
-      case "REVIEW_INVOICE", "NORMALIZE_CATEGORIES", "SUGGEST_RECONCILIATION" -> "invoice";
-      case "REVIEW_MOVEMENT" -> "movement";
+      case "REVIEW_INVOICE", "NORMALIZE_CATEGORIES", "CLASSIFY_INVOICE", "SUGGEST_RECONCILIATION" -> "invoice";
+      case "REVIEW_MOVEMENT", "CLASSIFY_MOVEMENT" -> "movement";
       case "EXTRACT", "IMPORT_ZIP", "REVIEW_DOCUMENT", "AI_EXTRACT_DOCUMENT" -> "document";
       case "REVIEW_ALLOCATION" -> "allocation";
       case "REPAIR_ALERT" -> "alert";
@@ -106,7 +106,7 @@ public class JobMonitor {
       case "document" -> rs.getString("filename");
       case "alert" -> rs.getString("alert_message");
       case "allocation" -> "Associação de pagamento";
-      default -> null;
+      default -> kind.equals("REFINE_CATEGORIES") ? "Revisão do catálogo de categorias" : null;
     };
     var target = map("type", type, "id", rs.getObject("target_id"),
         "label", Objects.requireNonNullElse(label, "Registo indisponível"), "available", available,

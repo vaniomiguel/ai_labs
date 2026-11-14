@@ -49,8 +49,4 @@ public class Invoice extends BaseEntity {
   public boolean deleted;
   public boolean excluded;
 
-  @ElementCollection
-  @CollectionTable(name = "invoice_category", joinColumns = @JoinColumn(name = "invoice_id"))
-  @Column(name = "category_id")
-  public Set<UUID> categoryIds = new LinkedHashSet<>();
 }

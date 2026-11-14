@@ -24,6 +24,8 @@ import pt.conta.shared.*;
  */
 @Service
 public class AiOrchestrator {
+  private final pt.conta.category.CategoryAiWorker categoryWorker;
+  private final RepairAiWorker repairWorker;
   private final Store store;
   private final AiProvider provider;
   private final PromptCatalog prompts;
@@ -44,7 +46,9 @@ public class AiOrchestrator {
       AiResults results,
       DocumentPublisher publisher,
       DocumentStorage storage,
-      BookkeepingService book) {
+      BookkeepingService book, pt.conta.category.CategoryAiWorker categoryWorker, RepairAiWorker repairWorker) {
+    this.repairWorker = repairWorker;
+    this.categoryWorker = categoryWorker;
     this.store = store;
     this.provider = provider;
     this.prompts = prompts;
@@ -57,8 +61,9 @@ public class AiOrchestrator {
 
   /** Executes one extraction, review or explicitly requested repair task. */
   public void process(JobQueue.Claim job) throws Exception {
-    if (job.kind().equals("NORMALIZE_CATEGORIES")) {
-      normalizeCategories(job);
+    if (job.kind().equals("REPAIR_ALERT")) { repairWorker.process(job); return; }
+    if (Set.of("NORMALIZE_CATEGORIES", "CLASSIFY_INVOICE", "CLASSIFY_MOVEMENT", "REFINE_CATEGORIES").contains(job.kind())) {
+      categoryWorker.process(job);
       return;
     }
     SourceDocument doc = null;
@@ -99,12 +104,6 @@ public class AiOrchestrator {
               "movement",
               book.movementView(store.get(BankMovement.class, a.movementId)));
       if (invoice.documentId != null) doc = store.get(SourceDocument.class, invoice.documentId);
-    } else if (job.kind().equals("REPAIR_ALERT")) {
-      var alert = store.get(Alert.class, job.target());
-      target = alert;
-      if (alert.documentId == null || !alert.status.equals("OPEN")) return;
-      doc = store.get(SourceDocument.class, alert.documentId);
-      subject = Json.read(doc.draft);
     } else {
       doc = store.get(SourceDocument.class, job.target());
       target = doc;
@@ -112,9 +111,8 @@ public class AiOrchestrator {
       subject = Json.read(doc.draft);
     }
     if (target.version != job.revision()) return;
-    boolean repair = job.kind().equals("REPAIR_ALERT");
     boolean extract =
-        (job.kind().equals("AI_EXTRACT_DOCUMENT") || repair)
+        job.kind().equals("AI_EXTRACT_DOCUMENT")
             && doc != null
             && Set.of("INVOICE", "STATEMENT").contains(doc.kind);
     String task =
@@ -257,13 +255,7 @@ public class AiOrchestrator {
         }
         draft.put("validate", ((List<?>) merged.get("issues")).isEmpty());
       }
-      if (job.kind().equals("REPAIR_ALERT"))
-        results.repair(
-            job.target(),
-            job.revision(),
-            map("draft", draft, "evidence", merged.get("evidence"), "issues", merged.get("issues")),
-            doc.version);
-      else publisher.aiExtracted(doc.id, job.revision(), draft, Json.write(merged.get("evidence")));
+      publisher.aiExtracted(doc.id, job.revision(), draft, Json.write(merged.get("evidence")));
     } else {
       var concerns = new ArrayList<Map<String, Object>>();
       var suggestions = new ArrayList<Object>();
@@ -283,8 +275,7 @@ public class AiOrchestrator {
               suggestions,
               "summary",
               String.join("; ", summaries));
-      if (repair) results.repair(job.target(), job.revision(), combined, doc.version);
-      else results.reviewed(job, combined, source);
+      results.reviewed(job, combined, source);
     }
   }
 
@@ -295,6 +286,12 @@ public class AiOrchestrator {
   private Object compact(Object subject, boolean headerOnly) {
     var result = Json.object(Json.write(subject));
     result.remove("aiReview");
+    // Category decisions have their own model, revision and evidence. Financial reviews must
+    // not be invalidated by category-only changes or learn a second assignment protocol.
+    result.remove("classification");
+    result.remove("categoryDetails");
+    result.remove("categoryIds");
+    result.remove("categories");
     if (headerOnly)
       for (String key : List.of("movements", "lines", "rows", "sheets")) {
         Object removed = result.remove(key);
@@ -347,58 +344,6 @@ public class AiOrchestrator {
             .toList();
     return map(
         "rows", rows, "sheets", sheets, "reviewMonths", historyMonths, "year", draft.get("year"));
-  }
-
-  /** Uses the separately configured category task and schema without duplicating its prompt. */
-  private void normalizeCategories(JobQueue.Claim job) {
-    var invoice = store.get(Invoice.class, job.target());
-    if (invoice.version != job.revision() || invoice.manuallyConfirmed || invoice.deleted) return;
-    var model =
-        provider.models().stream()
-            .filter(AiProvider.Model::completion)
-            .filter(m -> m.name().equals(settings.get("model:categories", "qwen3.5:9b")))
-            .findFirst()
-            .orElseThrow(
-                () -> new OllamaProvider.AiUnavailable("Modelo de categorias indisponível", null));
-    String prompt = prompts.prompt("categories"),
-        input =
-            Json.write(
-                map(
-                    "invoice",
-                    compact(book.invoiceView(invoice), true),
-                    "catalog",
-                    store.all(Category.class).stream()
-                        .filter(c -> !c.deleted)
-                        .map(c -> map("name", c.name, "aliases", Json.read(c.aliases)))
-                        .toList()));
-    long started = System.nanoTime();
-    String raw =
-        provider.complete(
-            new AiProvider.Request(
-                model.name(), prompt, input, prompts.schema("categories"), List.of()));
-    var execution = new AiExecution();
-    execution.targetId = job.target();
-    execution.targetVersion = job.revision();
-    execution.task = "categories";
-    execution.model = model.name();
-    execution.modelDigest = model.digest();
-    execution.promptVersion = "v1:" + hash(prompt);
-    execution.inputHash = hash(input + prompt + model.digest());
-    execution.request = input;
-    execution.response = raw;
-    execution.durationMs = (System.nanoTime() - started) / 1_000_000;
-    Map<String, Object> parsed;
-    try {
-      parsed = StructuredOutput.parse(raw, prompts.schema("categories"));
-      execution.outcome = "VALID";
-    } catch (Exception e) {
-      execution.outcome = "INVALID";
-      results.record(execution);
-      throw e;
-    }
-    results.record(execution);
-    results.categories(
-        job, ((List<?>) parsed.get("categories")).stream().map(Object::toString).toList());
   }
 
   private record Chunk(String text, List<Integer> pages) {}

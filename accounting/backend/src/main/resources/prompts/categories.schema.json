@@ -1,18 +1,110 @@
 {
   "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "status",
+    "explanation",
+    "categories",
+    "operations"
+  ],
   "properties": {
-    "categories": {
-      "type": "array",
-      "items": {
-        "type": "string"
-      }
+    "status": {
+      "enum": [
+        "CLASSIFIED",
+        "REVIEW"
+      ]
     },
     "explanation": {
       "type": "string"
+    },
+    "categories": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "evidence"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "evidence": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "operations": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "kind",
+          "sourceIds",
+          "key",
+          "name",
+          "parentId",
+          "targetId",
+          "description",
+          "evidence",
+          "reason"
+        ],
+        "properties": {
+          "kind": {
+            "enum": [
+              "CREATE",
+              "GENERALIZE",
+              "MERGE",
+              "MOVE"
+            ]
+          },
+          "sourceIds": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "key": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "parentId": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "targetId": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "description": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "evidence": {
+            "type": "string"
+          },
+          "reason": {
+            "type": "string"
+          }
+        }
+      }
     }
-  },
-  "required": [
-    "categories",
-    "explanation"
-  ]
+  }
 }

@@ -63,7 +63,9 @@ public class ProgressController {
                     + " invoice),'epoch'::timestamptz),coalesce((select max(updated_at) from"
                     + " bank_movement),'epoch'::timestamptz),coalesce((select max(updated_at) from"
                     + " allocation),'epoch'::timestamptz),coalesce((select max(updated_at) from"
-                    + " ledger_entry),'epoch'::timestamptz))::text",
+                    + " ledger_entry),'epoch'::timestamptz),coalesce((select max(updated_at) from category),'epoch'::timestamptz),"
+                    + "coalesce((select max(updated_at) from record_classification),'epoch'::timestamptz),"
+                    + "coalesce((select max(updated_at) from category_catalog),'epoch'::timestamptz))::text",
                 String.class));
   }
 

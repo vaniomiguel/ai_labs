@@ -167,7 +167,8 @@
             "type": "array",
             "items": {
               "type": "string"
-            }
+            },
+            "description": "Nomes atuais para compatibilidade; editar etiquetas pelos endpoints /categories do registo."
           },
           "lines": {
             "type": "array",
@@ -204,6 +205,25 @@
             "type": "boolean",
             "readOnly": true,
             "description": "Marcador humano alterado através de /reconciliation/exclusions."
+          },
+          "categoryIds": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "readOnly": true
+          },
+          "categoryDetails": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CategoryDetail"
+            },
+            "readOnly": true
+          },
+          "classification": {
+            "$ref": "#/components/schemas/Classification",
+            "readOnly": true
           }
         }
       },
@@ -323,6 +343,32 @@
             "type": "boolean",
             "readOnly": true,
             "description": "Marcador humano alterado através de /reconciliation/exclusions."
+          },
+          "categories": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Nomes atuais para compatibilidade; editar etiquetas pelos endpoints /categories do registo."
+          },
+          "categoryIds": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "readOnly": true
+          },
+          "categoryDetails": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CategoryDetail"
+            },
+            "readOnly": true
+          },
+          "classification": {
+            "$ref": "#/components/schemas/Classification",
+            "readOnly": true
           }
         }
       },
@@ -1043,6 +1089,629 @@
             "type": "integer"
           }
         }
+      },
+      "Category": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "version": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "name": {
+            "type": "string"
+          },
+          "aliases": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "description": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "parentId": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          },
+          "mergedIntoId": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          },
+          "origin": {
+            "type": "string",
+            "enum": [
+              "AUTOMATIC",
+              "MANUAL",
+              "LEGACY",
+              "REFERENCE"
+            ]
+          },
+          "protected": {
+            "type": "boolean"
+          },
+          "archived": {
+            "type": "boolean"
+          },
+          "path": {
+            "type": "string"
+          },
+          "usage": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "referenceCode": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "referenceName": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "referenceVersion": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "referenceSource": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "version",
+          "name",
+          "aliases",
+          "protected",
+          "archived",
+          "origin"
+        ]
+      },
+      "CategoryEdit": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "version": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "name": {
+            "type": "string"
+          },
+          "aliases": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "description": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "parentId": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          },
+          "protected": {
+            "type": "boolean"
+          },
+          "archived": {
+            "type": "boolean"
+          }
+        },
+        "description": "Criar sem id; atualizar com id e version. Alterações manuais protegem a categoria por omissão; protected=false desbloqueia categorias fora das famílias de referência."
+      },
+      "CategoryEvidence": {
+        "type": "object",
+        "properties": {
+          "origin": {
+            "type": "string",
+            "enum": [
+              "AI",
+              "MANUAL",
+              "LEGACY",
+              "INHERITED"
+            ]
+          },
+          "reason": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "invoiceId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "documentId": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          },
+          "executionId": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          }
+        },
+        "required": [
+          "origin",
+          "reason"
+        ]
+      },
+      "CategoryDetail": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "name": {
+            "type": "string"
+          },
+          "path": {
+            "type": "string"
+          },
+          "archived": {
+            "type": "boolean"
+          },
+          "origins": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "evidence": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CategoryEvidence"
+            }
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "path",
+          "archived",
+          "origins",
+          "evidence"
+        ]
+      },
+      "Classification": {
+        "type": "object",
+        "properties": {
+          "version": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "state": {
+            "type": "string",
+            "enum": [
+              "PENDING",
+              "WAITING",
+              "REVIEW",
+              "CLASSIFIED",
+              "MANUAL",
+              "INHERITED",
+              "PROVISIONAL"
+            ]
+          },
+          "reason": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "categories": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CategoryDetail"
+            }
+          },
+          "rejectedCategoryIds": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          "catalogRevision": {
+            "type": "integer",
+            "minimum": 0
+          }
+        },
+        "required": [
+          "version",
+          "state",
+          "categories",
+          "rejectedCategoryIds",
+          "catalogRevision"
+        ]
+      },
+      "CategoryAssignmentEdit": {
+        "type": "object",
+        "properties": {
+          "version": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "categoryIds": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          "allowAi": {
+            "type": "boolean",
+            "default": false
+          }
+        },
+        "required": [
+          "version",
+          "categoryIds"
+        ],
+        "description": "Version pertence à classificação, independentemente da versão financeira. categoryIds substitui a seleção efetiva; remoções ficam rejeitadas até allowAi=true."
+      },
+      "CategoryRevision": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "version": {
+            "type": "integer",
+            "minimum": 0
+          }
+        },
+        "required": [
+          "id",
+          "version"
+        ]
+      },
+      "CategoryChange": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "version": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "kind": {
+            "type": "string"
+          },
+          "actor": {
+            "type": "string"
+          },
+          "reason": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "evidence": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "before": {
+            "type": "array",
+            "items": {
+              "type": "object"
+            }
+          },
+          "after": {
+            "type": "array",
+            "items": {
+              "type": "object"
+            }
+          },
+          "undone": {
+            "type": "boolean"
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "id",
+          "version",
+          "kind",
+          "undone"
+        ]
+      },
+      "CategoryMerge": {
+        "type": "object",
+        "properties": {
+          "sourceIds": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          "targetId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CategoryRevision"
+            }
+          },
+          "reason": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "sourceIds",
+          "targetId",
+          "items"
+        ]
+      },
+      "CategoryProtection": {
+        "type": "object",
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CategoryRevision"
+            }
+          },
+          "protected": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "items",
+          "protected"
+        ]
+      },
+      "RepairContext": {
+        "type": "object",
+        "properties": {
+          "model": {
+            "type": "string"
+          },
+          "modelDigest": {
+            "type": "string"
+          },
+          "vision": {
+            "type": "boolean"
+          },
+          "textComplete": {
+            "type": "boolean"
+          },
+          "textCharacters": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "pages": {
+            "type": "array",
+            "items": {
+              "type": "integer",
+              "minimum": 0
+            }
+          },
+          "imageHashes": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "documentSha256": {
+            "type": "string"
+          }
+        }
+      },
+      "RepairTask": {
+        "type": "object",
+        "properties": {
+          "jobId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "state": {
+            "enum": [
+              "QUEUED",
+              "RUNNING",
+              "WAITING",
+              "DONE",
+              "FAILED"
+            ]
+          },
+          "outcome": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "enum": [
+              "READY",
+              "REVIEW_REQUIRED",
+              "NO_CHANGES",
+              "STALE",
+              null
+            ]
+          },
+          "sourceVersion": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "error": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "attempts": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "canApply": {
+            "type": "boolean"
+          },
+          "blockingIssues": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "context": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/RepairContext"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "createdAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "updatedAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "availableAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "jobId",
+          "state",
+          "outcome",
+          "sourceVersion",
+          "error",
+          "canApply",
+          "blockingIssues"
+        ]
+      },
+      "Alert": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "version": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "documentId": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          },
+          "entityId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "entityType": {
+            "type": "string"
+          },
+          "code": {
+            "type": "string"
+          },
+          "message": {
+            "type": "string"
+          },
+          "status": {
+            "enum": [
+              "OPEN",
+              "RESOLVED"
+            ]
+          },
+          "proposal": {
+            "type": [
+              "object",
+              "null"
+            ]
+          },
+          "repair": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/RepairTask"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "resolvedBy": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "resolvedAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "id",
+          "version",
+          "message",
+          "status",
+          "proposal",
+          "repair"
+        ]
       }
     },
     "securitySchemes": {
@@ -1131,7 +1800,8 @@
             "in": "query",
             "schema": {
               "type": "string"
-            }
+            },
+            "description": "Identificador da categoria ou nome compatível; inclui descendentes e devolve cada registo/grupo uma única vez."
           },
           {
             "name": "status",
@@ -1420,7 +2090,8 @@
             "in": "query",
             "schema": {
               "type": "string"
-            }
+            },
+            "description": "Identificador da categoria ou nome compatível; inclui descendentes e devolve cada registo/grupo uma única vez."
           },
           {
             "name": "status",
@@ -1983,10 +2654,20 @@
     },
     "/categories": {
       "get": {
-        "summary": "Categorias e aliases",
+        "summary": "Catálogo hierárquico e proveniência",
         "responses": {
           "200": {
-            "description": "Operação concluída"
+            "description": "Operação concluída",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/Category"
+                  }
+                }
+              }
+            }
           },
           "401": {
             "description": "Sessão necessária"
@@ -2004,13 +2685,30 @@
               }
             }
           }
-        }
+        },
+        "parameters": [
+          {
+            "name": "archived",
+            "in": "query",
+            "schema": {
+              "type": "boolean",
+              "default": false
+            }
+          }
+        ]
       },
       "post": {
-        "summary": "Guardar categoria",
+        "summary": "Criar ou editar categoria protegida",
         "responses": {
           "200": {
-            "description": "Operação concluída"
+            "description": "Operação concluída",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Category"
+                }
+              }
+            }
           },
           "401": {
             "description": "Sessão necessária"
@@ -2025,6 +2723,16 @@
                 "schema": {
                   "$ref": "#/components/schemas/Problem"
                 }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CategoryEdit"
               }
             }
           }
@@ -2032,8 +2740,19 @@
       }
     },
     "/categories/{id}": {
+      "parameters": [
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string",
+            "format": "uuid"
+          }
+        }
+      ],
       "delete": {
-        "summary": "Desativar categoria",
+        "summary": "Arquivar categoria; eliminar definitivamente apenas sem utilizações nem filhas",
         "responses": {
           "200": {
             "description": "Operação concluída"
@@ -2057,11 +2776,20 @@
         },
         "parameters": [
           {
-            "name": "id",
-            "in": "path",
+            "name": "version",
+            "in": "query",
             "required": true,
             "schema": {
-              "type": "string"
+              "type": "integer",
+              "minimum": 0
+            }
+          },
+          {
+            "name": "permanently",
+            "in": "query",
+            "schema": {
+              "type": "boolean",
+              "default": false
             }
           }
         ]
@@ -2409,7 +3137,17 @@
         "summary": "Alertas abertos e resolvidos",
         "responses": {
           "200": {
-            "description": "Operação concluída"
+            "description": "Alertas com a tentativa de correção mais recente",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/Alert"
+                  }
+                }
+              }
+            }
           },
           "401": {
             "description": "Sessão necessária"
@@ -2432,11 +3170,8 @@
     },
     "/alerts/{id}/ai": {
       "post": {
-        "summary": "Autorizar tentativa de correção",
+        "summary": "Pedir análise integral por IA; reutilizar uma tentativa ativa para a mesma versão",
         "responses": {
-          "200": {
-            "description": "Operação concluída"
-          },
           "401": {
             "description": "Sessão necessária"
           },
@@ -2452,6 +3187,16 @@
                 }
               }
             }
+          },
+          "202": {
+            "description": "Tentativa aceite; acompanhar repair.state até à conclusão",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Alert"
+                }
+              }
+            }
           }
         },
         "parameters": [
@@ -2463,7 +3208,8 @@
               "type": "string"
             }
           }
-        ]
+        ],
+        "description": "Uma nova análise após conclusão executa uma nova chamada ao modelo. O pedido não aplica alterações financeiras."
       }
     },
     "/alerts/{id}/apply": {
@@ -3477,6 +4223,348 @@
                 }
               }
             }
+          },
+          "422": {
+            "description": "Regra de negócio não satisfeita",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/invoices/{id}/categories": {
+      "parameters": [
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string",
+            "format": "uuid"
+          }
+        }
+      ],
+      "put": {
+        "summary": "Substituir categorias com decisões manuais e versão independente",
+        "responses": {
+          "200": {
+            "description": "Operação concluída",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Classification"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Sessão necessária"
+          },
+          "409": {
+            "description": "Versão desatualizada"
+          },
+          "422": {
+            "description": "Regra de negócio não satisfeita",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CategoryAssignmentEdit"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/movements/{id}/categories": {
+      "parameters": [
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string",
+            "format": "uuid"
+          }
+        }
+      ],
+      "put": {
+        "summary": "Substituir categorias com decisões manuais e versão independente",
+        "responses": {
+          "200": {
+            "description": "Operação concluída",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Classification"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Sessão necessária"
+          },
+          "409": {
+            "description": "Versão desatualizada"
+          },
+          "422": {
+            "description": "Regra de negócio não satisfeita",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CategoryAssignmentEdit"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/categories/changes": {
+      "get": {
+        "summary": "Histórico auditável de evolução do catálogo",
+        "responses": {
+          "200": {
+            "description": "Operação concluída",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/CategoryChange"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Sessão necessária"
+          },
+          "409": {
+            "description": "Versão desatualizada"
+          },
+          "422": {
+            "description": "Regra de negócio não satisfeita",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/categories/changes/{id}/undo": {
+      "parameters": [
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string",
+            "format": "uuid"
+          }
+        }
+      ],
+      "post": {
+        "summary": "Desfazer evolução preservando utilizações e decisões posteriores",
+        "responses": {
+          "200": {
+            "description": "Operação concluída"
+          },
+          "401": {
+            "description": "Sessão necessária"
+          },
+          "409": {
+            "description": "Versão desatualizada"
+          },
+          "422": {
+            "description": "Regra de negócio não satisfeita",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "version": {
+                    "type": "integer",
+                    "minimum": 0
+                  }
+                },
+                "required": [
+                  "version"
+                ]
+              }
+            }
+          }
+        }
+      }
+    },
+    "/categories/merge": {
+      "post": {
+        "summary": "Fundir categorias com versões de todas as origens e destino",
+        "responses": {
+          "200": {
+            "description": "Operação concluída"
+          },
+          "401": {
+            "description": "Sessão necessária"
+          },
+          "409": {
+            "description": "Versão desatualizada"
+          },
+          "422": {
+            "description": "Regra de negócio não satisfeita",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CategoryMerge"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/categories/review": {
+      "post": {
+        "summary": "Enfileirar revisão por IA do catálogo",
+        "responses": {
+          "200": {
+            "description": "Operação concluída"
+          },
+          "401": {
+            "description": "Sessão necessária"
+          },
+          "409": {
+            "description": "Versão desatualizada"
+          },
+          "422": {
+            "description": "Regra de negócio não satisfeita",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/categories/protection": {
+      "post": {
+        "summary": "Proteger ou desbloquear categorias em lote",
+        "responses": {
+          "200": {
+            "description": "Operação concluída"
+          },
+          "401": {
+            "description": "Sessão necessária"
+          },
+          "409": {
+            "description": "Versão desatualizada"
+          },
+          "422": {
+            "description": "Regra de negócio não satisfeita",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CategoryProtection"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/alerts/{id}": {
+      "parameters": [
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string",
+            "format": "uuid"
+          }
+        }
+      ],
+      "get": {
+        "summary": "Consultar alerta, proposta e estado atual da correção",
+        "responses": {
+          "200": {
+            "description": "Estado atual do alerta",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Alert"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Sessão necessária"
+          },
+          "409": {
+            "description": "Versão desatualizada"
           },
           "422": {
             "description": "Regra de negócio não satisfeita",

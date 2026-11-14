@@ -27,13 +27,15 @@ public class ReconciliationService {
       LocalDate firstDate, LocalDate lastDate) {}
   public record Page(List<Entry> items, int total, int page, int size) {}
 
+  private final pt.conta.category.CategoryService categories;
   private final Store store;
   private final BookkeepingService book;
   private final InvoiceRepository invoices;
   private final MovementRepository movements;
 
   public ReconciliationService(Store store, BookkeepingService book,
-      InvoiceRepository invoices, MovementRepository movements) {
+      InvoiceRepository invoices, MovementRepository movements, pt.conta.category.CategoryService categories) {
+    this.categories = categories;
     this.store = store;
     this.book = book;
     this.invoices = invoices;
@@ -83,7 +85,8 @@ public class ReconciliationService {
       var records = new ArrayList<Map<String, Object>>(iv);
       records.addAll(mv);
       if (filters.containsKey("status") && records.stream().noneMatch(r -> r.get("reviewStatus").toString().equals(filters.get("status")))) continue;
-      if (filters.containsKey("category") && iv.stream().noneMatch(r -> ((List<?>) r.get("categories")).contains(filters.get("category")))) continue;
+      if (filters.containsKey("category") && ii.stream().noneMatch(i -> categories.recordMatches("invoice", i.id, filters.get("category")))
+          && mm.stream().noneMatch(m -> categories.recordMatches("movement", m.id, filters.get("category")))) continue;
       if (filters.containsKey("accountId") && mm.stream().noneMatch(m -> Objects.toString(m.accountId, "").equals(filters.get("accountId")))) continue;
       if (filters.containsKey("direction") && mm.stream().noneMatch(m -> Objects.toString(m.direction, "").equals(filters.get("direction")))) continue;
       if (filters.containsKey("time") && mm.stream().noneMatch(m -> Objects.toString(m.occurredAt, "").startsWith(filters.get("time")))) continue;

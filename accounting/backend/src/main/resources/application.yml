@@ -41,6 +41,9 @@ management:
     health:
       show-details: when-authorized
 accounting:
+  ai-context-tokens: ${AI_CONTEXT_TOKENS:16384}
+  repair-max-input-characters: ${REPAIR_MAX_INPUT_CHARACTERS:50000}
+  repair-max-image-pages: ${REPAIR_MAX_IMAGE_PAGES:16}
   ai-enabled: ${AI_ENABLED:true}
   ai-history-months: ${AI_HISTORY_MONTHS:}
   storage: ${DOCUMENT_STORAGE:./data/documents}

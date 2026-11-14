@@ -16,8 +16,17 @@ public class OllamaProvider implements AiProvider {
   private final RestClient shortClient;
   private final RestClient modelClient;
   private final String endpoint;
+  private final int contextTokens;
 
   public OllamaProvider(AccountingProperties properties) {
+    this(properties,16384);
+  }
+
+  @org.springframework.beans.factory.annotation.Autowired
+  public OllamaProvider(AccountingProperties properties,
+      @org.springframework.beans.factory.annotation.Value("${accounting.ai-context-tokens:16384}") int contextTokens) {
+    if(contextTokens<=0)throw new IllegalArgumentException("A capacidade de contexto deve ser positiva");
+    this.contextTokens=contextTokens;
     endpoint = endpoint(properties.ollamaUrl());
     shortClient = client(properties.ollamaUrl(), Duration.ofSeconds(3));
     modelClient = client(properties.ollamaUrl(), Duration.ofMinutes(20));
@@ -76,7 +85,8 @@ public class OllamaProvider implements AiProvider {
             "format",
             request.schema(),
             "options",
-            map("temperature", 0, "num_ctx", 16384, "num_predict", 8192));
+            map("temperature", 0, "num_ctx", contextTokens, "num_predict", 8192));
+    if(request.requireFullContext()) { body.put("truncate",false); body.put("shift",false); }
     try {
       var response =
           Json.read(
@@ -88,12 +98,18 @@ public class OllamaProvider implements AiProvider {
                   .retrieve()
                   .body(String.class));
       String content = response.path("message").path("content").asText();
+      if(request.requireFullContext()&&"length".equals(response.path("done_reason").asText()))
+        throw new AiProvider.ContextExceeded("O modelo atingiu o limite de contexto ou da resposta antes de concluir a proposta. Seleciona uma configuração com maior capacidade ou revê o documento manualmente.");
       if (content.isBlank()) throw new IllegalArgumentException("Resposta vazia do modelo");
       return content;
     } catch (org.springframework.web.client.ResourceAccessException e) {
       throw unavailable(e);
     } catch (org.springframework.web.client.HttpClientErrorException.NotFound e) {
       throw new AiUnavailable("O modelo " + request.model() + " não está disponível em " + endpoint, e);
+    } catch (org.springframework.web.client.HttpClientErrorException.BadRequest e) {
+      if(e.getResponseBodyAsString().toLowerCase(java.util.Locale.ROOT).matches("(?s).*(context|token limit|too many images|input.{0,20}too long).*$"))
+        throw new AiProvider.ContextExceeded("O modelo recusou o contexto integral por exceder a sua capacidade. Seleciona uma configuração com maior contexto ou revê o documento manualmente.");
+      throw e;
     }
   }
 

@@ -6,6 +6,10 @@ import { Api, euros, errorMessage, labels, JobCounts, JobItem, JobPage } from ".
 import { FieldsEditor } from "./fields-editor";
 import { PdfViewer } from "./pdf-viewer";
 import { ReconciliationTable } from "./reconciliation";
+import { CategoryTags } from "./category-tags";
+import { CategoryEditor } from "./category-editor";
+import { CategoryManager } from "./category-manager";
+import { RepairPanel } from "./repair-panel";
 
 /** Owner workspace joining reconciliation, document review and auditable financial records. */
 @Component({
@@ -17,7 +21,7 @@ import { ReconciliationTable } from "./reconciliation";
     MatButtonModule,
     FieldsEditor,
     PdfViewer,
-    ReconciliationTable,
+    ReconciliationTable, CategoryTags, CategoryEditor, CategoryManager, RepairPanel,
   ],
   templateUrl: "./app.html",
 })
@@ -70,8 +74,11 @@ export class AppComponent implements OnDestroy {
   processingPage = 0;
   private processingRequest = 0;
   readonly editor = signal<any>(null);
+  readonly categoryTarget = signal<{type:"invoice"|"movement";record:any}|null>(null);
   readonly reviewDocument = signal<any>(null);
   readonly activeAlert = signal<any>(null);
+  readonly repairProgress = signal("");
+  private documentRequest=0;
   readonly timeline = signal<any[]>([]);
   readonly assignment = signal<any>(null);
   readonly assignmentMovements = signal<any[]>([]);
@@ -406,6 +413,7 @@ export class AppComponent implements OnDestroy {
   async saveRecord(validate: boolean) {
     await this.run(async () => {
       const data = { ...this.editor(), validate };
+      if (data.id) { delete data.categories; delete data.categoryDetails; delete data.classification; }
       const resource =
         this.recordKind === "INVOICE" ? "/invoices" : "/movements";
       if (data.id) await this.api.put(resource + "/" + data.id, data);
@@ -446,12 +454,18 @@ export class AppComponent implements OnDestroy {
     });
   }
   async openDocument(id: string, alert: any = null) {
+    const request=++this.documentRequest;
     await this.run(async () => {
-      this.activeAlert.set(alert);
-      this.reviewDocument.set(await this.api.get("/documents/" + id));
-      this.timeline.set(await this.api.get("/documents/" + id + "/attempts"));
+      try {
+        const [document,timeline]=await Promise.all([this.api.get("/documents/"+id),this.api.get("/documents/"+id+"/attempts")]);
+        if(request!==this.documentRequest)return;
+        this.activeAlert.set(alert);
+        this.reviewDocument.set(document);
+        this.timeline.set(timeline);
+      } catch(error) { if(request===this.documentRequest)throw error; }
     });
   }
+  closeReview(){++this.documentRequest;this.reviewDocument.set(null);this.activeAlert.set(null);}
   async saveDraft(resolve: boolean) {
     await this.run(async () => {
       const doc = this.reviewDocument();
@@ -499,37 +513,17 @@ export class AppComponent implements OnDestroy {
       this.notice.set(alert.message);
     }
   }
-  async repair() {
-    await this.run(async () => {
-      await this.api.post("/alerts/" + this.activeAlert().id + "/ai");
-      this.notice.set(
-        "Tentativa de correção autorizada. A proposta ficará disponível neste alerta.",
-      );
-    });
-  }
-  async refreshProposal() {
-    await this.run(async () => {
-      const alerts = await this.api.get<any[]>("/alerts");
-      this.activeAlert.set(alerts.find((a) => a.id === this.activeAlert()?.id));
-    });
-  }
   async applyProposal() {
     await this.run(async () => {
-      this.reviewDocument.set(
-        await this.api.post("/alerts/" + this.activeAlert().id + "/apply"),
-      );
-      this.activeAlert.set(null);
+      const request=this.documentRequest;
+      const result=await this.api.post("/alerts/" + this.activeAlert().id + "/apply");
+      if(request===this.documentRequest){this.reviewDocument.set(result);this.activeAlert.set(null);}
       this.notice.set("Proposta aplicada e validada com a tua confirmação.");
       await this.refresh();
     });
   }
-  proposalChanges(): any[] {
-    const proposal = this.activeAlert()?.proposal?.draft;
-    if (!proposal) return [];
-    const draft = this.reviewDocument()?.draft ?? {};
-    return Object.keys(proposal)
-      .filter((k) => JSON.stringify(draft[k]) !== JSON.stringify(proposal[k]))
-      .map((k) => ({ field: k, before: draft[k], after: proposal[k] }));
+  async inspectRepair(id: string) {
+    this.closeReview();await this.openJob(id);
   }
   async retry(job: any) {
     await this.run(async () => {
@@ -730,6 +724,7 @@ export class AppComponent implements OnDestroy {
         next.alerts !== this.counts().alerts
       ) {
         this.progressRevision = next.revision;
+        this.repairProgress.set(next.revision);
         this.counts.set(next);
         clearTimeout(this.refreshTimer);
         this.refreshTimer = setTimeout(() => void this.refresh(), 800);
@@ -748,6 +743,7 @@ export class AppComponent implements OnDestroy {
     }
   }
   ngOnDestroy() {
+    ++this.documentRequest;
     this.events?.close();
     clearTimeout(this.refreshTimer);
   }

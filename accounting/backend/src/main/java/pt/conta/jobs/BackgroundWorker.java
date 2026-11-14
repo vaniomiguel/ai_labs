@@ -62,6 +62,9 @@ public class BackgroundWorker {
       queue.finish(job, null, false);
       review.resolveFor("job", job.id());
       metrics.counter("accounting.jobs.completed", "kind", job.kind()).increment();
+    } catch (AiProvider.ContextExceeded e) {
+      queue.failPermanently(job,e.getMessage());
+      metrics.counter("accounting.jobs.failed", "kind", job.kind()).increment();
     } catch (OllamaProvider.AiUnavailable e) {
       queue.finish(job, e.getMessage(), true);
       metrics.counter("accounting.ai.unavailable").increment();

@@ -21,6 +21,7 @@ import pt.conta.shared.Types.*;
 @RequestMapping("/api/v1")
 @Transactional(readOnly = true)
 public class FinanceController {
+  private final pt.conta.category.CategoryService categories;
   private final Store store;
   private final BookkeepingService book;
   private final LedgerService ledger;
@@ -36,7 +37,8 @@ public class FinanceController {
       AuditService audit,
       InvoiceRepository invoiceRepository,
       MovementRepository movementRepository,
-      ReconciliationService reconciliation) {
+      ReconciliationService reconciliation, pt.conta.category.CategoryService categories) {
+    this.categories = categories;
     this.store = store;
     this.book = book;
     this.ledger = ledger;
@@ -62,7 +64,7 @@ public class FinanceController {
             .filter(
                 i ->
                     !filters.containsKey("category")
-                        || ((List<?>) i.get("categories")).contains(filters.get("category")))
+                        || categories.recordMatches("invoice", (UUID) i.get("id"), filters.get("category")))
             .sorted(Comparator.comparing(i -> Objects.toString(i.get("issuedOn"), "9999")))
             .toList();
     return page(rows, filters);
@@ -123,6 +125,7 @@ public class FinanceController {
                     !filters.containsKey("time")
                         || Objects.toString(m.get("occurredAt"), "")
                             .startsWith(filters.get("time")))
+            .filter(m -> !filters.containsKey("category") || categories.recordMatches("movement", (UUID) m.get("id"), filters.get("category")))
             .filter(m -> amountMatches(m, filters))
             .sorted(Comparator.comparing(m -> Objects.toString(m.get("bookedOn"), "9999")))
             .toList();
@@ -327,54 +330,22 @@ public class FinanceController {
         "id", a.id, "version", a.version, "name", a.name, "iban", a.iban, "currency", a.currency);
   }
 
-  /** Lists canonical category labels and aliases. */
   @GetMapping("/categories")
-  public List<Map<String, Object>> categories() {
-    return store.all(Category.class).stream()
-        .filter(c -> !c.deleted)
-        .map(
-            c ->
-                map(
-                    "id",
-                    c.id,
-                    "version",
-                    c.version,
-                    "name",
-                    c.name,
-                    "aliases",
-                    Json.value(c.aliases)))
-        .toList();
+  public List<Map<String, Object>> categories(@RequestParam(defaultValue = "false") boolean archived) {
+    return categories.catalog(archived);
   }
 
-  /** Adds or edits a category without changing invoice amounts or double-counting totals. */
   @PostMapping("/categories")
   @Transactional
-  public void category(@RequestBody Map<String, Object> body) {
-    store.lockFinancialWrites();
-    UUID id = uuid(body, "id");
-    var c = id == null ? store.add(new Category()) : store.get(Category.class, id);
-    if (id != null) store.checkVersion(c, version(body));
-    c.name = text(body, "name");
-    if (c.name == null) throw DomainException.invalid("Indica o nome da categoria");
-    if (store.all(Category.class).stream()
-        .anyMatch(
-            other ->
-                !other.deleted
-                    && !other.id.equals(c.id)
-                    && MatchingRules.normalize(other.name).equals(MatchingRules.normalize(c.name))))
-      throw DomainException.invalid("A categoria já existe");
-    c.aliases = Json.write(body.getOrDefault("aliases", List.of()));
-    audit.record("SAVE", "category", c.id, null, body);
+  public Map<String, Object> category(@RequestBody Map<String, Object> body) {
+    return categories.save(body);
   }
 
-  /** Removes a tag from use, preserving historical associations and audit records. */
   @DeleteMapping("/categories/{id}")
   @Transactional
-  public void deleteCategory(@PathVariable UUID id, @RequestParam long version) {
-    var c = store.get(Category.class, id);
-    store.checkVersion(c, version);
-    c.deleted = true;
-    audit.record("DELETE", "category", id, null, null);
+  public void deleteCategory(@PathVariable UUID id, @RequestParam long version,
+      @RequestParam(defaultValue = "false") boolean permanently) {
+    categories.archive(id, version, permanently);
   }
 
   private boolean matches(Map<String, Object> row, Map<String, String> filters, String dateKey) {

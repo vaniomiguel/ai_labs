@@ -22,6 +22,7 @@ import pt.conta.shared.Types.*;
 @Transactional
 public class BookkeepingService {
   private final ThreadLocal<Boolean> batching = ThreadLocal.withInitial(() -> false);
+  private final pt.conta.category.CategoryService categories;
   private final Store store;
   private final LedgerService ledger;
   private final AuditService audit;
@@ -39,7 +40,9 @@ public class BookkeepingService {
       Settings settings,
       AccountingProperties properties,
       JobQueue jobs,
-      pt.conta.ai.AiReviewStatus aiReview) {
+      pt.conta.ai.AiReviewStatus aiReview,
+      pt.conta.category.CategoryService categories) {
+    this.categories = categories;
     this.store = store;
     this.ledger = ledger;
     this.audit = audit;
@@ -97,13 +100,6 @@ public class BookkeepingService {
     invoice.origin = origin;
     invoice.author = human ? audit.actor() : origin;
     invoice.manuallyConfirmed = human && flag(input, "validate");
-    invoice.categoryIds.clear();
-    Object tags = input.get("categories");
-    if (tags instanceof List<?> list)
-      for (Object tag : list) {
-        String name = tag.toString().trim();
-        if (!name.isBlank()) invoice.categoryIds.add(category(name).id);
-      }
     store.all(InvoiceLine.class).stream()
         .filter(l -> l.invoiceId.equals(invoice.id))
         .toList()
@@ -144,8 +140,9 @@ public class BookkeepingService {
       automatic();
     }
     jobs.enqueue("REVIEW_INVOICE", invoice.id, invoice.version, "{}");
-    if (!human && !invoice.categoryIds.isEmpty())
-      jobs.enqueue("NORMALIZE_CATEGORIES", invoice.id, invoice.version, "{}");
+    categories.recordChanged("invoice", invoice.id, input, human);
+    categories.refreshInheritance();
+    store.flush();
     if (human && invoice.documentId != null) {
       var doc = store.get(SourceDocument.class, invoice.documentId);
       if (doc.kind.equals("INVOICE")) {
@@ -230,6 +227,8 @@ public class BookkeepingService {
       synchronize();
       automatic();
     }
+    categories.recordChanged("movement", movement.id, input, human);
+    store.flush();
     jobs.enqueue("REVIEW_MOVEMENT", movement.id, movement.version, "{}");
     if (!batching.get() && human && movement.statementId != null) {
       var statement = store.get(BankStatement.class, movement.statementId);
@@ -251,6 +250,11 @@ public class BookkeepingService {
 
   /** Reports invoice inconsistencies, including incomplete or inconsistent article totals. */
   public List<String> invoiceErrors(Invoice invoice) {
+    return invoiceErrors(invoice, store.all(InvoiceLine.class).stream().filter(l -> l.invoiceId.equals(invoice.id)).toList());
+  }
+
+  /** Uses the same financial checks for an unpersisted proposal and for publication. */
+  public List<String> invoiceErrors(Invoice invoice, List<InvoiceLine> lines) {
     var errors = new ArrayList<String>();
     if (invoice.issuedOn == null) errors.add("Falta a data da fatura");
     if (invoice.supplier == null) errors.add("Falta o fornecedor");
@@ -262,8 +266,6 @@ public class BookkeepingService {
         && invoice.total != null
         && invoice.net.add(invoice.tax).compareTo(invoice.total) != 0)
       errors.add("Base e IVA não coincidem com o total");
-    var lines =
-        store.all(InvoiceLine.class).stream().filter(l -> l.invoiceId.equals(invoice.id)).toList();
     if (lines.stream().anyMatch(l -> l.total == null)) errors.add("Existem artigos sem total");
     if (lines.stream()
         .anyMatch(
@@ -549,6 +551,7 @@ public class BookkeepingService {
           effect,
           "Movimento bancário: " + movement.direction);
     }
+    categories.refreshInheritance();
     store.flush();
   }
 
@@ -697,11 +700,6 @@ public class BookkeepingService {
   @Transactional(readOnly = true)
   public Map<String, Object> invoiceView(Invoice supplied) {
     var i = store.get(Invoice.class, supplied.id);
-    var categories =
-        store.all(Category.class).stream()
-            .filter(c -> i.categoryIds.contains(c.id))
-            .map(c -> c.name)
-            .toList();
     var lines =
         store.all(InvoiceLine.class).stream()
             .filter(l -> l.invoiceId.equals(i.id))
@@ -769,7 +767,13 @@ public class BookkeepingService {
         "updatedAt",
         i.updatedAt,
         "categories",
-        categories,
+        categories.details("invoice", i.id).stream().map(c -> c.get("name")).toList(),
+        "categoryDetails",
+        categories.details("invoice", i.id),
+        "categoryIds",
+        categories.details("invoice", i.id).stream().map(c -> c.get("id")).toList(),
+        "classification",
+        categories.view("invoice", i.id),
         "lines",
         lines,
         "remaining",
@@ -815,6 +819,14 @@ public class BookkeepingService {
         m.direction,
         "kind",
         m.kind,
+        "categories",
+        categories.details("movement", m.id).stream().map(c -> c.get("name")).toList(),
+        "categoryDetails",
+        categories.details("movement", m.id),
+        "categoryIds",
+        categories.details("movement", m.id).stream().map(c -> c.get("id")).toList(),
+        "classification",
+        categories.view("movement", m.id),
         "reviewStatus",
         m.reviewStatus,
         "excluded",
@@ -1138,30 +1150,6 @@ public class BookkeepingService {
   private int window() {
     return Integer.parseInt(
         settings.get("crossYearMonths", Integer.toString(properties.crossYearMonths())));
-  }
-
-  /** Resolves canonical names and aliases before creating a new invoice tag. */
-  private Category category(String name) {
-    return store.all(Category.class).stream()
-        .filter(
-            c ->
-                !c.deleted
-                    && (MatchingRules.normalize(c.name).equals(MatchingRules.normalize(name))
-                        || containsAlias(c.aliases, name)))
-        .findFirst()
-        .orElseGet(
-            () -> {
-              var c = new Category();
-              c.name = name;
-              return store.add(c);
-            });
-  }
-
-  /** Compares aliases with the same accent/case normalization as canonical tags. */
-  private boolean containsAlias(String aliases, String name) {
-    for (var a : Json.read(aliases))
-      if (MatchingRules.normalize(a.asText()).equals(MatchingRules.normalize(name))) return true;
-    return false;
   }
 
   /** Retains six decimal places for quantities and unit prices without silently rounding. */

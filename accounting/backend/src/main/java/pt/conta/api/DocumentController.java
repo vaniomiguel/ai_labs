@@ -28,6 +28,7 @@ public class DocumentController {
   private final DocumentStorage storage;
   private final DocumentPublisher publisher;
   private final JobQueue jobs;
+  private final RepairService repairs;
   private final HistoryService history;
   private final pt.conta.ledger.BookkeepingService book;
 
@@ -38,7 +39,8 @@ public class DocumentController {
       DocumentPublisher publisher,
       JobQueue jobs,
       HistoryService history,
-      pt.conta.ledger.BookkeepingService book) {
+      pt.conta.ledger.BookkeepingService book, RepairService repairs) {
+    this.repairs = repairs;
     this.store = store;
     this.documents = documents;
     this.storage = storage;
@@ -178,59 +180,23 @@ public class DocumentController {
   @GetMapping("/alerts")
   @Transactional(readOnly = true)
   public List<Map<String, Object>> alerts() {
-    return store.all(Alert.class).stream()
-        .sorted(
-            Comparator.comparing((Alert a) -> a.status.equals("OPEN"))
-                .reversed()
-                .thenComparing(a -> a.createdAt, Comparator.reverseOrder()))
-        .map(
-            a ->
-                map(
-                    "id",
-                    a.id,
-                    "version",
-                    a.version,
-                    "documentId",
-                    a.documentId,
-                    "entityType",
-                    a.entityType,
-                    "entityId",
-                    a.entityId,
-                    "code",
-                    a.code,
-                    "message",
-                    a.message,
-                    "status",
-                    a.status,
-                    "proposal",
-                    a.proposal == null ? null : Json.value(a.proposal),
-                    "resolvedBy",
-                    a.resolvedBy,
-                    "resolvedAt",
-                    a.resolvedAt))
-        .toList();
+    return repairs.list();
   }
 
-  /**
-   * Explicitly authorizes an AI repair attempt, which produces a proposal rather than applying
-   * edits.
-   */
+  @GetMapping("/alerts/{id}")
+  public Map<String,Object> alert(@PathVariable UUID id) { return repairs.view(id); }
+
+  /** An accepted repair is asynchronous; repeated clicks reuse the current active request. */
   @PostMapping("/alerts/{id}/ai")
-  @Transactional
-  public void repair(@PathVariable UUID id) {
-    var alert = store.get(Alert.class, id);
-    if (alert.documentId == null)
-      throw DomainException.invalid("Este alerta não tem um documento para análise");
-    if (!alert.status.equals("OPEN")) throw DomainException.invalid("O alerta já está resolvido");
-    alert.proposal = null;
-    alert.updatedAt = java.time.Instant.now();
-    store.flush();
-    jobs.enqueue("REPAIR_ALERT", id, alert.version, "{}");
+  public ResponseEntity<Map<String,Object>> repair(@PathVariable UUID id) {
+    return ResponseEntity.accepted().body(repairs.request(id));
   }
 
   /** Applies a reviewed AI proposal only if its source draft has not changed in the meantime. */
   @PostMapping("/alerts/{id}/apply")
+  @Transactional
   public Map<String, Object> apply(@PathVariable UUID id) {
+    repairs.assertApplicable(id);
     var alert = store.get(Alert.class, id);
     if (alert.proposal == null || alert.documentId == null)
       throw DomainException.invalid("Não existe uma proposta aplicável");

@@ -1,0 +1,169 @@
+{
+  "version": "OCC-SNC-2019-02",
+  "source": "https://portal.occ.pt/fotos/editor2/taxonomiasplanocontas_fev2019.pdf",
+  "hierarchySource": "https://manual.toconline.pt/support/solutions/articles/3000110987-categorias-de-despesas",
+  "hierarchySourceVersion": "2025-09-29",
+  "purpose": "Referência de organização de despesas; sem enquadramento fiscal ou lançamentos contabilísticos.",
+  "categories": [
+    {
+      "code": "622",
+      "name": "Serviços especializados",
+      "parentCode": null
+    },
+    {
+      "code": "6221",
+      "name": "Trabalhos especializados",
+      "parentCode": "622"
+    },
+    {
+      "code": "6222",
+      "name": "Publicidade e propaganda",
+      "parentCode": "622"
+    },
+    {
+      "code": "6223",
+      "name": "Vigilância e segurança",
+      "parentCode": "622"
+    },
+    {
+      "code": "6224",
+      "name": "Honorários",
+      "parentCode": "622"
+    },
+    {
+      "code": "6225",
+      "name": "Comissões",
+      "parentCode": "622"
+    },
+    {
+      "code": "6226",
+      "name": "Conservação e reparação",
+      "parentCode": "622"
+    },
+    {
+      "code": "623",
+      "name": "Materiais",
+      "parentCode": null
+    },
+    {
+      "code": "6231",
+      "name": "Ferramentas e utensílios de desgaste rápido",
+      "parentCode": "623"
+    },
+    {
+      "code": "6232",
+      "name": "Livros e documentação técnica",
+      "parentCode": "623"
+    },
+    {
+      "code": "6233",
+      "name": "Material de escritório",
+      "parentCode": "623"
+    },
+    {
+      "code": "624",
+      "name": "Energia e fluidos",
+      "parentCode": null
+    },
+    {
+      "code": "6241",
+      "name": "Eletricidade",
+      "parentCode": "624"
+    },
+    {
+      "code": "6242",
+      "name": "Combustíveis",
+      "parentCode": "624"
+    },
+    {
+      "code": "6243",
+      "name": "Água",
+      "parentCode": "624"
+    },
+    {
+      "code": "625",
+      "name": "Deslocações, estadas e transportes",
+      "parentCode": null
+    },
+    {
+      "code": "6251",
+      "name": "Deslocações e estadas",
+      "parentCode": "625"
+    },
+    {
+      "code": "6252",
+      "name": "Transportes de pessoal",
+      "parentCode": "625"
+    },
+    {
+      "code": "6253",
+      "name": "Transportes de mercadorias",
+      "parentCode": "625"
+    },
+    {
+      "code": "626",
+      "name": "Serviços diversos",
+      "parentCode": null
+    },
+    {
+      "code": "6261",
+      "name": "Rendas e alugueres",
+      "parentCode": "626"
+    },
+    {
+      "code": "6262",
+      "name": "Comunicação",
+      "parentCode": "626"
+    },
+    {
+      "code": "6263",
+      "name": "Seguros",
+      "parentCode": "626"
+    },
+    {
+      "code": "6264",
+      "name": "Royalties",
+      "parentCode": "626"
+    },
+    {
+      "code": "6265",
+      "name": "Contencioso e notariado",
+      "parentCode": "626"
+    },
+    {
+      "code": "6266",
+      "name": "Despesas de representação",
+      "parentCode": "626"
+    },
+    {
+      "code": "6267",
+      "name": "Limpeza, higiene e conforto",
+      "parentCode": "626"
+    },
+    {
+      "code": "63",
+      "name": "Gastos com o pessoal",
+      "parentCode": null
+    },
+    {
+      "code": "681",
+      "name": "Impostos",
+      "parentCode": null
+    },
+    {
+      "code": "6813",
+      "name": "Taxas",
+      "parentCode": "681"
+    },
+    {
+      "code": "69",
+      "name": "Gastos de financiamento",
+      "parentCode": null
+    },
+    {
+      "code": "691",
+      "name": "Juros suportados",
+      "parentCode": "69"
+    }
+  ]
+}

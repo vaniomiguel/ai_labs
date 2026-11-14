@@ -1,0 +1,92 @@
+{
+  "date": "2026-11-12",
+  "scope": "Synthetic reviewed cases; disposable PostgreSQL; real local Ollama adapter and production category worker",
+  "passed": true,
+  "model": "qwen3.5:9b",
+  "modelDigest": "d63f830f28d515fefea546f213fca7a75e9dd5176ef51a6deabc952d1c99a911",
+  "promptVersion": "v2:9f69e35672615bdfa20db259e8e620686ed2cd75c88c35d3bc25a46006c8f933",
+  "cases": [
+    {
+      "case": "usb-a-generalizes-usb-c-history",
+      "passed": true,
+      "durationMs": 15153,
+      "state": "CLASSIFIED",
+      "categories": [
+        "Cabos USB"
+      ]
+    },
+    {
+      "case": "hdmi-and-mouse-preserve-useful-subcategories",
+      "passed": true,
+      "durationMs": 11775,
+      "state": "CLASSIFIED",
+      "categories": [
+        "Cabo HDMI",
+        "Periféricos informáticos"
+      ]
+    },
+    {
+      "case": "bank-insurance",
+      "passed": true,
+      "durationMs": 5973,
+      "state": "PROVISIONAL",
+      "categories": [
+        "Seguros"
+      ]
+    },
+    {
+      "case": "brand-only-bank-description-does-not-invent-details",
+      "passed": true,
+      "durationMs": 5944,
+      "state": "PROVISIONAL",
+      "categories": [
+        "Seguros"
+      ]
+    },
+    {
+      "case": "bank-accounting",
+      "passed": true,
+      "durationMs": 6119,
+      "state": "PROVISIONAL",
+      "categories": [
+        "Trabalhos especializados"
+      ]
+    },
+    {
+      "case": "mixed-paper-and-insurance",
+      "passed": true,
+      "durationMs": 7046,
+      "state": "CLASSIFIED",
+      "categories": [
+        "Material de escritório",
+        "Seguros"
+      ]
+    },
+    {
+      "case": "ambiguous-bank-description-abstains",
+      "passed": true,
+      "durationMs": 5669,
+      "state": "REVIEW",
+      "categories": []
+    },
+    {
+      "case": "catalog-review-preserves-reference-families",
+      "passed": true,
+      "durationMs": 10419,
+      "state": null,
+      "categories": []
+    }
+  ],
+  "executionOutcomes": [
+    "INVALID_DOMAIN",
+    "VALID",
+    "VALID",
+    "VALID",
+    "VALID",
+    "VALID",
+    "VALID",
+    "GUARDED_REVIEW",
+    "VALID"
+  ],
+  "limitations": "A single local run is not a measure of general accuracy. Earlier development runs exposed variable model behavior, including a wrong USB variant and invalid evidence; domain safeguards and regression tests were added. USB-C is a seeded automatic category; subsequent fixtures use the real model. The ambiguous bank case uses the production generic-description safeguard. Raw inputs and outputs are generated in backend/target/category-model-evaluation.json."
+}

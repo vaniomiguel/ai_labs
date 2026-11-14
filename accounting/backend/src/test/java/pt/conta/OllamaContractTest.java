@@ -15,6 +15,25 @@ import pt.conta.shared.*;
 /** Verifies the native Ollama transport against an HTTP stub, without downloading model weights. */
 class OllamaContractTest {
   @Test
+  void reportsAContextRejectionAsPermanentRatherThanAModelOutage() throws Exception {
+    var server=HttpServer.create(new InetSocketAddress("127.0.0.1",0),0);
+    var reject=new java.util.concurrent.atomic.AtomicBoolean(true);
+    server.createContext("/api/chat",exchange->{
+      exchange.getRequestBody().readAllBytes();byte[] body=(reject.get()?"{\"error\":\"input exceeds context window\"}":"{\"done_reason\":\"length\",\"message\":{\"content\":\"{}\"}}").getBytes();
+      exchange.sendResponseHeaders(reject.get()?400:200,body.length);exchange.getResponseBody().write(body);exchange.close();
+    });server.start();
+    try {
+      var provider=new OllamaProvider(new AccountingProperties(Path.of("/tmp"),"owner","unused",
+          "http://127.0.0.1:"+server.getAddress().getPort(),"http://localhost:8090","",3,false,100,1000000,1000000));
+      assertThatThrownBy(()->provider.complete(new AiProvider.Request("test","Instructions","Full input",map("type","object"),List.of())))
+          .isInstanceOf(AiProvider.ContextExceeded.class).hasMessageContaining("contexto integral");
+      reject.set(false);
+      assertThatThrownBy(()->provider.complete(new AiProvider.Request("test","Instructions","Full input",map("type","object"),List.of(),true)))
+          .isInstanceOf(AiProvider.ContextExceeded.class).hasMessageContaining("antes de concluir");
+    }finally{server.stop(0);}
+  }
+
+  @Test
   void explainsAnOutageAndRecoversWithoutReplacingTheProvider() throws Exception {
     var server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
     var unavailable = new java.util.concurrent.atomic.AtomicBoolean(true);
@@ -126,6 +145,11 @@ class OllamaContractTest {
       assertThat(sent.path("format").path("type").asText()).isEqualTo("object");
       assertThat(sent.path("messages").get(1).path("images").get(0).asText()).isEqualTo("aW1hZ2U=");
       assertThat(sent.path("options").path("num_ctx").asInt()).isEqualTo(16384);
+      assertThat(sent.has("truncate")).isFalse();
+      provider.complete(new AiProvider.Request("vision:test","Instructions","Full document",schema,List.of("aW1hZ2U="),true));
+      var complete=Json.read(request.get());
+      assertThat(complete.path("truncate").asBoolean(true)).isFalse();
+      assertThat(complete.path("shift").asBoolean(true)).isFalse();
     } finally {
       server.stop(0);
     }

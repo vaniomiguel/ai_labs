@@ -165,6 +165,32 @@ O mapeamento de Excel pode ser guardado em **Histórico**; reprocessar depois o 
 
 ## IA e auditoria
 
+### Correção por IA no diálogo de revisão
+
+**Pedir tentativa de correção à IA** mostra imediatamente um indicador dentro do diálogo. Acompanha os estados **Em fila**, **A analisar**, **A aguardar modelo** e **Falhou**, e apresenta automaticamente a proposta concluída. É possível fechar e reabrir o documento para recuperar a tentativa. Os eventos de progresso atualizam o estado; consultas de segurança continuam a cada dois segundos durante processamento e dez segundos enquanto aguarda o modelo.
+
+A comparação mostra os valores atuais e propostos por comprovativo e campo, incluindo as observações e os dados em falta. Os campos em edição conservam-se enquanto chega o resultado. A proposta só é publicada através de **Aplicar proposta e validar**, sujeito às regras financeiras e à versão do documento. Resultados incompletos, sem alterações e desatualizados têm mensagens próprias. Pedidos repetidos reutilizam a tentativa ativa; uma nova análise depois de terminar faz uma nova chamada ao modelo.
+
+Cada correção recebe o texto integral extraído, o rascunho e o motivo do alerta. Modelos com capacidade visual recebem também imagens de todas as páginas do PDF, obtidas diretamente do original mesmo que a extração não tenha metadados de páginas. O histórico guarda modelo, versão documental, páginas e evidências; as imagens continuam a ser recuperáveis através do original arquivado.
+
+O limite inicial da aplicação é de 50 000 caracteres para o pedido completo, incluindo prompt e esquema, e 16 páginas visuais. `REPAIR_MAX_INPUT_CHARACTERS`, `REPAIR_MAX_IMAGE_PAGES` e `AI_CONTEXT_TOKENS` permitem ajustar a capacidade, sendo 16 384 tokens o contexto pedido por omissão ao Ollama. Uma entrada demasiado grande falha com explicação, sem enviar um subconjunto do texto ou das páginas nem repetir automaticamente o pedido inviável. Nas correções, o transporte envia `truncate=false` e `shift=false`, opções do [contrato oficial do Ollama](https://github.com/ollama/ollama/blob/main/api/types.go), para recusar a perda de contexto.
+
+### Categorias de despesas
+
+Faturas e movimentos aceitam várias etiquetas, organizadas em famílias. A IA usa descrições, artigos, fornecedores, sinónimos e exemplos anteriores; os movimentos associados herdam a união das etiquetas das suas faturas. Sem etiquetas nas faturas, a classificação bancária permanece provisória. Desassociar ou alterar as faturas atualiza a herança. Registos excluídos do saldo também são classificados.
+
+O catálogo usa a referência local `backend/src/main/resources/category-reference.json`, com códigos, designações e versão OCC/SNC de fevereiro de 2019, e a hierarquia documentada pelo TOConline em setembro de 2025. São etiquetas de organização, sem repartir valores nem produzir enquadramento fiscal. A **Natureza do movimento** (pagamento, reembolso, adiantamento…) é um campo separado.
+
+As listagens mostram duas etiquetas e permitem expandir as restantes. **Editar categorias** permite selecionar várias, criar uma categoria e consultar a origem e a justificação. Retirar uma etiqueta guarda uma rejeição: a IA e a herança não a repõem até **Permitir IA nas removidas**. Estas decisões têm uma versão independente das edições financeiras.
+
+Em **Categorias e contas**, é possível renomear, mudar de família, editar sinónimos, fundir, arquivar e proteger categorias. As alterações manuais ficam protegidas por omissão; podem ser desbloqueadas individualmente ou através de **Permitir evolução automática**. As famílias de referência permanecem protegidas perante a IA. Arquivar impede novas atribuições e conserva as etiquetas históricas; só categorias sem utilizações nem filhas podem ser eliminadas definitivamente.
+
+A evolução automática generaliza variantes e funde duplicados através de identidades preservadas e encaminhamentos: por exemplo, «Cabos USB-C» passa a mostrar «Cabos USB» no histórico quando surge USB-A. O histórico explica as alterações e permite desfazê-las. O desfazer preserva utilizações da categoria geral e decisões manuais posteriores, protegendo os conceitos restaurados contra repetição automática. Alterações estruturais posteriores incompatíveis devolvem conflito de versão.
+
+A classificação corre na fila persistente depois de criações, importações e alterações relevantes. Indisponibilidade do modelo mostra **A aguardar IA**; informação insuficiente ou falhas esgotadas mostram **Rever categorias**. Referências bancárias genéricas, como «TRANSFERENCIA 001», exigem revisão. Respostas inválidas não alteram o catálogo; uma rejeição de domínio permite até duas tentativas adicionais de correção antes das tentativas normais da fila. **Rever categorias** enfileira uma revisão do catálogo; os lotes também pedem uma revisão depois de classificarem os registos, sem ciclos de reclassificação provocados por etiquetas.
+
+A migração V3 conserva identificadores, nomes, sinónimos e associações existentes, marcando as categorias antigas como protegidas por terem origem indeterminada. Introduz a referência sem duplicar nomes ou sinónimos, encaminha a normalização antiga e enfileira registos antigos sem categorias. Aplica-se no próximo arranque do backend. Não altera lançamentos, saldos, exclusões ou regras de reconciliação.
+
 As interfaces `AiProvider` e `DocumentConverter` isolam o domínio dos fornecedores. O adaptador implementado usa a API nativa Ollama, incluindo imagens e esquemas. Outro fornecedor implementa essas interfaces sem alterar os cálculos.
 
 As prompts e os esquemas estão centralizados em `backend/src/main/resources/prompts/`. `PROMPT_DIRECTORY` permite substituir os ficheiros Markdown sem recompilar. Cada execução guarda o hash da prompt, digest do modelo, entrada, resposta, duração e validação do esquema. Mudar a configuração aplica-se às próximas tarefas; não reprocessa silenciosamente o histórico.

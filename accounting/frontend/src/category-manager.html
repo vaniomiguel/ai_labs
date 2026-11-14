@@ -1,0 +1,41 @@
+<section class="panel category-manager" aria-label="Catálogo de categorias">
+  <div class="section-heading"><div><h2>Categorias e famílias</h2><p>Referência OCC/SNC · etiquetas de organização de despesas.</p></div><div class="row-actions">
+    <button mat-stroked-button [disabled]="saving()" (click)="review()">Rever categorias</button><button mat-flat-button (click)="begin()">Nova categoria</button>
+  </div></div>
+  <div class="settings-body">
+    @if(error()){<p class="error" role="alert">{{error()}}</p>}@if(notice()){<p class="notice" role="status">{{notice()}}</p>}
+    <div class="category-toolbar"><label>Pesquisar catálogo<input [(ngModel)]="query" /></label><label class="category-choice"><input type="checkbox" [(ngModel)]="showArchived" />Mostrar arquivadas</label></div>
+    @if(selected().size){<div class="category-bulk"><strong>{{selected().size}} selecionadas</strong>
+      <button mat-stroked-button [disabled]="saving()" (click)="protect(false)">Permitir evolução automática</button><button class="text-button" [disabled]="saving()" (click)="protect(true)">Proteger</button>
+      <label>Destino da fusão<select aria-label="Destino da fusão" [(ngModel)]="mergeTarget"><option value="">Selecionar categoria</option>@for(c of catalog();track c.id){@if(!c.archived){<option [value]="c.id">{{c.path}}</option>}}</select></label>
+      <button mat-stroked-button [disabled]="saving()||!mergeTarget" (click)="merge()">Fundir selecionadas no destino</button>
+    </div>}
+    <div class="category-catalog-list">
+      @for(c of visible();track c.id){<article class="category-catalog-row" [class.excluded-entry]="c.archived">
+        <input type="checkbox" [checked]="selected().has(c.id)" [disabled]="c.archived||c.origin==='REFERENCE'" [attr.aria-label]="'Selecionar '+c.name" (change)="toggle(c.id)" />
+        <div><strong>{{c.path}}</strong><small>{{c.origin==='REFERENCE'?'Referência SNC':c.protected?'Protegida · utilizador':'Evolução automática'}} · {{c.usage}} atribuições{{c.archived?' · Arquivada':''}}</small>
+          @if(c.description){<small>{{c.description}}</small>}@if(c.referenceCode){<small>SNC {{c.referenceCode}} · {{c.referenceVersion}} · <a [href]="c.referenceSource" target="_blank" rel="noopener">Fonte</a></small>}
+          @if(c.mergedIntoId){<small>Encaminhada para {{categoryName(c.mergedIntoId)}}</small>}
+        </div>
+        <div class="row-actions">@if(!c.mergedIntoId){<button class="text-button" (click)="begin(c)">Editar categoria</button>
+          @if(c.archived){<button class="text-button" [disabled]="saving()" (click)="restore(c)">Restaurar</button>}@else{<button class="text-button" [disabled]="saving()" (click)="archive(c)">Arquivar</button>}
+          @if(c.usage===0){<button class="text-button danger" [disabled]="saving()" (click)="archive(c,true)">Eliminar sem usos</button>}
+        }</div>
+      </article>}
+    </div>
+    @if(edit();as e){<section class="category-form" aria-label="Editar categoria">
+      <h3>{{e.id?'Editar categoria':'Criar categoria'}}</h3>
+      <div class="form-grid"><label>Nome da categoria<input [(ngModel)]="e.name" (ngModelChange)="e.protected=true" /></label><label>Família<select [(ngModel)]="e.parentId" (ngModelChange)="e.protected=true"><option [ngValue]="null">Sem família</option>@for(c of catalog();track c.id){@if(!c.archived&&c.id!==e.id){<option [value]="c.id">{{c.path}}</option>}}</select></label>
+        <label>Nomes alternativos<input [(ngModel)]="e.aliasesText" placeholder="Separar por ;" /></label><label>Descrição do conceito<textarea [(ngModel)]="e.description" rows="2"></textarea></label>
+      </div>
+      <label class="category-choice"><input type="checkbox" [(ngModel)]="e.protected" [disabled]="e.origin==='REFERENCE'" />Proteger de alterações automáticas</label>
+      <div class="row-actions"><button mat-flat-button [disabled]="saving()||!e.name?.trim()" (click)="save()">Guardar categoria</button><button class="text-button" (click)="edit.set(null)">Cancelar</button></div>
+    </section>}
+    <details class="details-panel"><summary>Histórico de evolução · {{changes().length}} alterações</summary>
+      @for(change of changes();track change.id){<article class="category-change"><strong>{{changeLabel(change.kind)}} · {{change.actor==='AI'?'IA':change.actor}} · {{change.createdAt|date:'dd/MM/yyyy HH:mm'}}</strong><p>{{changeNames(change.before)}} → {{changeNames(change.after)}}</p><p>{{change.reason}}</p>
+        @if(change.evidence){<small>{{change.evidence}}</small>}<small>{{change.undone?'Desfeita':'Revisão registada'}}</small>
+        @if(!change.undone&&change.kind!=='DELETE_UNUSED'){<button class="text-button" [disabled]="saving()" (click)="undo(change)">Desfazer alteração</button>}
+      </article>}
+    </details>
+  </div>
+</section>

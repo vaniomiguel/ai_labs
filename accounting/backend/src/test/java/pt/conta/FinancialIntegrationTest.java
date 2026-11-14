@@ -362,19 +362,19 @@ class FinancialIntegrationTest {
     queue.enqueue("REVIEW_DOCUMENT", doc.id, doc.version, "{}");
     jdbc.update("update job set state='WAITING',error='Ollama indisponível'");
     var page = jobMonitor.page("active", 0, 50);
-    assertThat(page.get("total")).isEqualTo(3L);
-    assertThat((Map<String, Object>) page.get("counts")).containsEntry("WAITING", 3L);
+    assertThat(page.get("total")).isEqualTo(5L);
+    assertThat((Map<String, Object>) page.get("counts")).containsEntry("WAITING", 5L);
     var items = (List<?>) page.get("items");
-    assertThat(items).hasSize(3);
+    assertThat(items).hasSize(5);
     assertThat(items.stream().map(item -> ((Map<?, ?>) item).get("kind").toString()).toList())
-        .containsExactlyInAnyOrder("REVIEW_MOVEMENT", "REVIEW_MOVEMENT", "REVIEW_DOCUMENT");
-    var jobId = jdbc.queryForObject("select id from job where target_id=?", UUID.class, first.get("id"));
+        .containsExactlyInAnyOrder("REVIEW_MOVEMENT", "REVIEW_MOVEMENT", "REVIEW_DOCUMENT", "CLASSIFY_MOVEMENT", "CLASSIFY_MOVEMENT");
+    var jobId = jdbc.queryForObject("select id from job where target_id=? and kind='REVIEW_MOVEMENT'", UUID.class, first.get("id"));
     var detail = jobMonitor.detail(jobId);
     assertThat((Map<String, Object>) detail.get("target")).containsEntry("label", "FIDELIDADE COMPANHI");
     assertThat(detail.get("attempts")).isEqualTo(0);
-    assertThat(progress.snapshot().get("jobs")).isEqualTo(3L);
+    assertThat(progress.snapshot().get("jobs")).isEqualTo(5L);
     jdbc.update("update job set state='DONE',error=null,updated_at=now() where id=?", jobId);
-    assertThat(jobMonitor.page("active", 0, 50).get("total")).isEqualTo(2L);
+    assertThat(jobMonitor.page("active", 0, 50).get("total")).isEqualTo(4L);
     assertThat(jobMonitor.detail(jobId).get("state")).isEqualTo("DONE");
     assertThat(book.movementView(store.get(pt.conta.bank.BankMovement.class, (UUID) first.get("id"))).get("kind"))
         .hasToString("UNCLASSIFIED");
@@ -407,7 +407,7 @@ class FinancialIntegrationTest {
     var m = movement("10.00", "2016-01-01", "Eliminado", "UNCLASSIFIED", "DEBIT");
     store.get(pt.conta.bank.BankMovement.class, (UUID) m.get("id")).deleted = true;
     store.flush();
-    UUID deleted = jdbc.queryForObject("select id from job where target_id=?", UUID.class, m.get("id"));
+    UUID deleted = jdbc.queryForObject("select id from job where target_id=? and kind='REVIEW_MOVEMENT'", UUID.class, m.get("id"));
     assertThat((Map<String, Object>) jobMonitor.detail(deleted).get("target"))
         .containsEntry("available", false).containsEntry("label", "Eliminado");
     assertThatThrownBy(() -> jobMonitor.page("unexpected", 0, 50)).isInstanceOf(DomainException.class);

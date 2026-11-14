@@ -1,5 +1,19 @@
 # Avaliação com documentos reais
 
+## Categorias evolutivas com o modelo local
+
+Executar na raiz do repositório, com Ollama disponível no endereço configurado e o modelo de categorias instalado (por omissão `qwen3.5:9b`):
+
+```sh
+bash accounting/scripts/evaluate-categories.sh
+```
+
+O ensaio usa uma base PostgreSQL temporária e casos sintéticos com critérios revistos no código de `CategoryModelEvaluation`: uma categoria automática USB-C é preparada como ponto de partida; o modelo recebe depois USB-A, HDMI/rato, seguros, contabilidade, uma fatura mista e uma descrição bancária ambígua. A revisão global confirma a conservação das famílias de referência. Cada caso verifica que a classificação não altera os lançamentos financeiros. A execução termina com código diferente de zero se um critério falhar.
+
+O relatório completo, com entradas, respostas, operações, digest do modelo e resultados das validações, fica em `backend/target/category-model-evaluation.json`. Pode indicar outro destino como primeiro argumento do script; caminhos relativos são resolvidos a partir de `backend/`. O resumo da execução de 12/11/2026 está em [category-model-result.json](category-model-result.json): oito casos aprovados com `qwen3.5:9b`, incluindo uma resposta corrigida após rejeição de domínio e uma classificação ambígua impedida pela proteção de descrições bancárias genéricas. A avaliação mede o fluxo completo com estas proteções, não apenas a resposta inicial do modelo.
+
+Uma execução local com temperatura zero não demonstra precisão geral nem substitui uma avaliação independente dos documentos da empresa. Para comparar modelos, repetir os mesmos casos e conservar os relatórios de cada digest.
+
 ## Ensaios anuais e comparação documental
 
 `real_2016.py` prepara uma referência independente a partir das células, fórmulas e valores guardados do Excel e seleciona os PDF de **Despesas** e os extratos de janeiro–março do ZIP. Não importa outros documentos mensais como se fossem despesas. O diretório de resultados deve ser novo e privado, dentro de `accounting/data/` ou noutro local fora do Git.

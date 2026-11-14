@@ -2,6 +2,35 @@ import { Injectable, inject } from "@angular/core";
 import { HttpClient, HttpErrorResponse } from "@angular/common/http";
 import { firstValueFrom } from "rxjs";
 
+export interface RepairTask {
+  jobId: string; state: "QUEUED" | "RUNNING" | "WAITING" | "DONE" | "FAILED";
+  outcome: "READY" | "REVIEW_REQUIRED" | "NO_CHANGES" | "STALE" | null;
+  sourceVersion: number; error: string | null; attempts: number;
+  canApply: boolean; blockingIssues: string[];
+  context: { model: string; vision: boolean; textComplete: boolean; textCharacters: number; pages: number[] } | null;
+}
+export interface AlertView {
+  id: string; version: number; documentId: string | null; status: string;
+  message: string; code: string; entityType: string; entityId: string;
+  proposal: any; repair: RepairTask | null;
+}
+
+export interface ExpenseCategory {
+  id: string; version: number; name: string; path: string; aliases: string[];
+  parentId: string | null; mergedIntoId: string | null; description: string | null;
+  origin: string; protected: boolean; archived: boolean; usage: number;
+  referenceCode: string | null; referenceName: string | null;
+  referenceVersion: string | null; referenceSource: string | null;
+}
+export interface CategoryDetail {
+  id: string; name: string; path: string; archived: boolean; origins: string[];
+  evidence: { origin: string; reason: string | null; invoiceId?: string; documentId?: string | null; executionId?: string | null }[];
+}
+export interface Classification {
+  version: number; state: string; reason: string | null;
+  categories: CategoryDetail[]; rejectedCategoryIds: string[]; catalogRevision: number;
+}
+
 export interface ReconciliationEntry {
   id: string;
   status: string;
@@ -161,6 +190,9 @@ export const labels: Record<string, string> = {
   AI_EXTRACT_DOCUMENT: "Extração com IA",
   REPAIR_ALERT: "Proposta de correção",
   NORMALIZE_CATEGORIES: "Normalização de categorias",
+  CLASSIFY_INVOICE: "Categorias da fatura",
+  CLASSIFY_MOVEMENT: "Categorias do movimento",
+  REFINE_CATEGORIES: "Evolução do catálogo de categorias",
   SUGGEST_RECONCILIATION: "Sugestões de reconciliação",
   OPEN: "Em aberto",
   AUTOMATIC: "Automático",
@@ -186,7 +218,7 @@ export const labels: Record<string, string> = {
   AI: "IA",
   DEBIT: "Débito",
   CREDIT: "Crédito",
-  UNCLASSIFIED: "Por classificar",
+  UNCLASSIFIED: "Natureza não definida",
   INVOICE_PAYMENT: "Pagamento de fatura",
   REFUND: "Reembolso de fornecedor",
   REIMBURSEMENT: "Reembolso ao gestor",

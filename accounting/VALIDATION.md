@@ -1,5 +1,27 @@
 # Verificação da entrega — 11 de novembro de 2026
 
+## Progresso e resultado das correções por IA — 13 de novembro de 2026
+
+O diálogo acompanha agora cada tentativa, com confirmação imediata, spinner durante processamento e atualização automática da proposta. Pedidos concorrentes reutilizam a tarefa ativa; novas análises explícitas fazem nova chamada ao modelo. A proposta compara campos por comprovativo, apresenta observações e bloqueia a aplicação de dados incompletos ou desatualizados. Atualizações preservam as edições locais; respostas antigas não substituem outro documento nem reabrem um diálogo fechado.
+
+As correções usam o texto integral guardado e, em modelos visuais, todas as páginas do PDF original, independentemente do layout extraído. O transporte desativa truncagem e deslocamento de contexto no Ollama. Limites de entrada, páginas e contexto são configuráveis; excesso de capacidade é uma falha permanente visível. Modelo, versão documental, páginas e evidências ficam no histórico. A funcionalidade usa os campos de metadados e a fila existentes, sem nova migração de base de dados.
+
+Verificação: **113 testes Java aprovados**, incluindo 18 novos cenários de integração de correções e o contrato de recusa de contexto do Ollama; **18 testes Playwright aprovados**, oito dedicados a correções e dez às categorias/reconciliação. Os ensaios verificam pedidos concorrentes, indisponibilidade, falhas estruturadas, idempotência, versões antigas, propostas incompletas, ausência de alterações, texto superior ao antigo limite de fragmentação, páginas sem metadados e preservação dos efeitos financeiros até à confirmação. No navegador verificaram-se o spinner, atualização automática, fecho/reabertura, edições locais, respostas atrasadas e apresentação a 390 px. Compilação Angular de produção e referências internas OpenAPI verificadas.
+
+Os novos testes usam respostas de IA controladas e bases temporárias; não medem a precisão da correção em documentos reais nem aplicam propostas aos documentos da instalação em utilização.
+
+## Categorias evolutivas — 12 de novembro de 2026
+
+Implementado um catálogo partilhado por faturas e movimentos, com várias etiquetas, famílias, sinónimos, proveniência e decisões manuais. A migração V3 conserva as categorias antigas como protegidas e introduz a referência OCC/SNC de fevereiro de 2019 sem duplicar nomes ou sinónimos equivalentes. A classificação tem versões próprias, tarefas persistentes e herança dinâmica das faturas associadas; os saldos e as regras de reconciliação mantêm-se independentes.
+
+**94 testes Java aprovados**, sem falhas ou testes ignorados, através de Maven `verify`. Incluem migrações V1–V3 e V2–V3 com dados existentes, generalização USB-C/USB-A, categorias mistas, filtros por descendentes sem duplicações, herança agrupada, desassociação, rejeições manuais, respostas inválidas, estados de indisponibilidade/falha por geração da tarefa, resultados concorrentes desatualizados e proteção de referências. O desfazer conserva novas utilizações gerais, remoções e escolhas manuais posteriores. As verificações financeiras confirmam versões e lançamentos inalterados pelas decisões de categorias; alertas exclusivamente sobre etiquetas não suspendem dados financeiros.
+
+**Dez testes Playwright aprovados**, cinco dedicados às categorias e cinco à reconciliação, com Chromium, API e PostgreSQL reais numa instalação temporária. Cobrem seleção múltipla, origem/justificação acessível, remoção manual, herança após edição da fatura, renomeação histórica, desbloqueio em lote, fusão/desfazer e editor a 390 px com teclado. As capturas do catálogo e da vista móvel foram inspecionadas. A compilação Angular de produção e as referências internas do OpenAPI passaram.
+
+**Oito casos da avaliação com Ollama aprovados**, usando `qwen3.5:9b` e o adaptador/serviço de classificação reais. O resumo versionado está em `evaluation/category-model-result.json`; o procedimento reproduzível e os limites estão em `evaluation/README.md`. Uma resposta inicial de criação foi rejeitada por não generalizar o histórico e corrigida numa segunda chamada. Uma atribuição numa transferência genérica foi impedida pela proteção do serviço e ficou em revisão. Estes resultados validam o fluxo com as proteções, não apenas o JSON inicial do modelo, nem a precisão geral em documentos reais.
+
+Os ensaios usam dados sintéticos e bases descartáveis. A instalação com dados do utilizador recebe a migração V3 no próximo arranque do backend; não foi alterada por estes testes.
+
 ## Reconciliação completa — 12 de novembro de 2026
 
 Implementadas as entradas sem correspondência, o efeito integral dos débitos/créditos e a exclusão reversível de faturas e movimentos. As associações organizam os registos numa linha por grupo, sem duplicar efeitos financeiros. As diferenças de data e valor ficam visíveis; grupos entre períodos mostram o saldo global e o impacto do período em separado.

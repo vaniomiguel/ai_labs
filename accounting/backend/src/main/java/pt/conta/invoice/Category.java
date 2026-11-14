@@ -16,4 +16,13 @@ public class Category extends BaseEntity {
   public String aliases = "[]";
 
   public boolean deleted;
+  public UUID parentId;
+  public UUID mergedIntoId;
+  public String origin = "MANUAL";
+  public boolean protectedCategory = true;
+  @Column(columnDefinition = "text") public String description;
+  public String referenceCode;
+  public String referenceName;
+  public String referenceVersion;
+  @Column(columnDefinition = "text") public String referenceSource;
 }

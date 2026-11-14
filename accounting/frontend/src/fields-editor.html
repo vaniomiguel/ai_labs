@@ -46,11 +46,11 @@
     >Desconto<input inputmode="decimal" [(ngModel)]="data.discount"
   /></label>
   <label>Moeda<input [(ngModel)]="data.currency" placeholder="EUR" /></label>
-  <label
+  @if(!data.id){<label
     >Categorias · separar por ;<input
       [(ngModel)]="categories"
       placeholder="Combustível; Deslocações"
-  /></label>
+  /></label>}
 </div>
 @if(data.type==='CREDIT_NOTE'){
 <label
@@ -151,7 +151,7 @@
     </select></label
   >
   <label
-    >Classificação<select [(ngModel)]="data.kind">
+    >Natureza do movimento<select [(ngModel)]="data.kind">
       @for(k of
       ['UNCLASSIFIED','INVOICE_PAYMENT','REFUND','REIMBURSEMENT','ADVANCE','RETURN','INTERNAL_TRANSFER','OTHER'];track
       k){
@@ -161,6 +161,7 @@
   >
   <label>Referência bancária<input [(ngModel)]="data.bankReference" /></label>
 </div>
+@if(!data.id){<label>Categorias · separar por ;<input [(ngModel)]="categories" placeholder="Seguros; Serviços" /></label>}
 <label
   >Descrição original<textarea
     [(ngModel)]="data.description"

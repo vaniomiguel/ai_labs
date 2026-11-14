@@ -170,7 +170,7 @@
               >Categoria<select [(ngModel)]="filters.category">
                 <option value="">Todas</option>
                 @for(c of state().categories;track c.id){
-                <option [value]="c.name">{{c.name}}</option>
+                <option [value]="c.id">{{c.path || c.name}}</option>
                 }
               </select></label
             ><label
@@ -241,6 +241,7 @@
         (reconcile)="reconcile()" (changed)="refresh()" (pageChange)="filters.page=$event;refresh()"
         (edit)="editRecord($event.kind,$event.record)" (original)="openDocument($event)"
         (remove)="requestRemoval($event.kind,$event.record)"
+        (categories)="categoryTarget.set($event)" (categoryFilter)="filters.category=$event;refresh()"
         (assign)="assign($event.invoice,$event.candidate)" (assignMovement)="assignFromMovement($event)"
         (undo)="undo($event)" (reverse)="reverse($event)" />
       } @if(view()==='invoices'){
@@ -285,14 +286,8 @@
                   >}
                 </td>
                 <td>
-                  <div class="tags">
-                    @for(c of i.categories;track c){<button
-                      class="tag"
-                      (click)="filters.category=c;refresh()"
-                    >
-                      {{c}}</button
-                    >}
-                  </div>
+                  <category-tags [categories]="i.categoryDetails || []" [classification]="i.classification" [editable]="true"
+                    (manage)="categoryTarget.set({type:'invoice',record:i})" (filter)="filters.category=$event;refresh()" />
                 </td>
                 <td class="number">{{money(i.total)}}</td>
                 <td class="number">{{i.excluded?'—':money(i.remaining)}}</td>
@@ -389,7 +384,7 @@
                 <th>Data / hora</th>
                 <th>Descrição</th>
                 <th>Direção</th>
-                <th>Classificação</th>
+                <th>Categorias</th>
                 <th class="number">Montante</th>
                 <th>Revisão</th>
                 <th></th>
@@ -417,7 +412,9 @@
                     {{labels[m.direction]}}</span
                   >
                 </td>
-                <td>{{labels[m.kind]}}</td>
+                <td><category-tags [categories]="m.categoryDetails || []" [classification]="m.classification" [editable]="true"
+                  (manage)="categoryTarget.set({type:'movement',record:m})" (filter)="filters.category=$event;refresh()" />
+                  <small>Natureza: {{labels[m.kind]}}</small></td>
                 <td class="number">
                   {{money(m.amount)}}<small
                     >{{m.excluded?'Fora dos cálculos':'Disponível '+money(m.remaining)}}</small
@@ -909,45 +906,7 @@
             </button>
           </div>
         </section>
-        <section class="panel">
-          <div class="section-heading">
-            <div>
-              <h2>Categorias e nomes alternativos</h2>
-              <p>
-                As categorias são etiquetas; os respetivos totais podem
-                sobrepor-se.
-              </p>
-            </div>
-          </div>
-          <div class="settings-body">
-            @for(c of state().categories;track c.id){
-            <div class="settings-row">
-              <label>Nome<input [(ngModel)]="c.name" /></label
-              ><label
-                >Nomes alternativos · separar por ;<input
-                  [ngModel]="c.aliasesText??c.aliases.join('; ')"
-                  (ngModelChange)="c.aliasesText=$event" /></label
-              ><button mat-stroked-button (click)="saveCategory(c)">
-                Guardar</button
-              ><button
-                class="icon-button danger"
-                aria-label="Remover categoria"
-                (click)="deleteCategory(c)"
-              >
-                ×
-              </button>
-            </div>
-            }
-            <h3>Nova categoria</h3>
-            <label>Nome<input [(ngModel)]="newCategory.name" /></label
-            ><label
-              >Nomes alternativos<input
-                [(ngModel)]="newCategory.aliasesText" /></label
-            ><button mat-flat-button (click)="saveCategory(newCategory)">
-              Adicionar categoria
-            </button>
-          </div>
-        </section>
+        <category-manager [catalogUpdates]="state().categories" (changed)="refresh()" />
       </div>
       } @if(view()==='assistant'){ @if(assistant();as ai){
       <section class="panel">
@@ -1096,7 +1055,12 @@
           [kind]="recordKind"
           [data]="data"
           [accounts]="state().accounts"
-        /><label
+        />
+        @if(data.id){<section class="record-categories"><h3>Categorias</h3>
+          <category-tags [categories]="data.categoryDetails || []" [classification]="data.classification" [editable]="true"
+            (manage)="categoryTarget.set({type:recordKind==='INVOICE'?'invoice':'movement',record:data})" />
+        </section>}
+        <label
           >Documento de suporte · opcional<input
             type="file"
             accept=".pdf,.xls,.xlsx"
@@ -1152,7 +1116,7 @@
       <button
         class="icon-button"
         aria-label="Fechar revisão"
-        (click)="reviewDocument.set(null);activeAlert.set(null)"
+        (click)="closeReview()"
       >
         ×
       </button>
@@ -1190,40 +1154,9 @@
       </div>
       <div class="editable-fields">
         @if(activeAlert();as alert){
-        <div class="notice">
-          <strong>{{alert.message}}</strong>
-          <div class="row-actions">
-            <button mat-stroked-button (click)="repair()">
-              ✧ Pedir tentativa de correção à IA</button
-            ><button class="text-button" (click)="refreshProposal()">
-              Atualizar proposta
-            </button>
-          </div>
-        </div>
-        @if(alert.proposal){
-        <details class="proposal" open>
-          <summary>Proposta da IA · requer a tua confirmação</summary>
-          @if(alert.proposal.draft){@for(change of proposalChanges();track
-          change.field){
-          <div class="proposal-change">
-            <strong>{{change.field}}</strong>
-            <div>
-              <pre>{{change.before|json}}</pre>
-              <span>→</span>
-              <pre>{{change.after|json}}</pre>
-            </div>
-          </div>
-          }<button
-            mat-flat-button
-            [disabled]="working()"
-            (click)="applyProposal()"
-          >
-            Aplicar proposta e validar</button
-          >}@else{
-          <pre>{{alert.proposal|json}}</pre>
-          }
-        </details>
-        }} @if(doc.draft?.issues?.length){
+        <repair-panel [alert]="alert" [document]="doc" [progress]="repairProgress()"
+          (updated)="activeAlert.set($event)" (apply)="applyProposal()" (inspect)="inspectRepair($event)" />
+        } @if(doc.draft?.issues?.length){
         <details class="notice" open>
           <summary>Verificações da extração</summary>
           <ul>
@@ -1365,4 +1298,8 @@
     </footer>
   </section>
 </div>
+}
+
+@if(categoryTarget();as target){
+  <category-editor [type]="target.type" [record]="target.record" (closed)="categoryTarget.set(null)" (changed)="refresh()" />
 }
