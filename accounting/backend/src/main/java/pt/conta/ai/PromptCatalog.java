@@ -10,13 +10,17 @@ import pt.conta.shared.*;
 /** Central, versioned prompt and schema catalog with optional external prompt overrides. */
 @Component
 public class PromptCatalog {
+  public static final String REPAIR_ANALYSIS_INSTRUCTIONS = "repair-analysis-instructions";
+  public static final String HUMAN_FIELD_AUTHORITY_INSTRUCTIONS = "human-field-authority-instructions";
+  public static final String CATEGORY_VALIDATION_RETRY_INSTRUCTIONS = "category-validation-retry-instructions";
+
   private final AccountingProperties properties;
 
   public PromptCatalog(AccountingProperties properties) {
     this.properties = properties;
   }
 
-  /** Loads a task prompt and its immutable hash for execution provenance. */
+  /** Loads a task prompt or instruction fragment, preferring an optional external override. */
   public String prompt(String task) {
     try {
       if (properties.promptDirectory() != null && !properties.promptDirectory().isBlank()) {

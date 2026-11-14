@@ -10,6 +10,9 @@ import pt.conta.shared.Types.*;
 @Entity
 @Table(name = "source_document")
 public class SourceDocument extends BaseEntity {
+  @Column(columnDefinition = "text")
+  public String fieldProvenance = "{}";
+
   public String filename;
   public String mediaType;
   public String sha256;

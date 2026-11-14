@@ -11,6 +11,9 @@ import pt.conta.shared.Types.*;
 @Entity
 @Table(name = "invoice")
 public class Invoice extends BaseEntity {
+  @Column(columnDefinition = "text")
+  public String fieldProvenance = "{}";
+
   public LocalDate issuedOn;
   public LocalDate dueOn;
   public String number;

@@ -20,14 +20,16 @@ import pt.conta.shared.Types.InvoiceType;
 public class RepairService {
   public record Snapshot(UUID alertId, UUID documentId, long sourceVersion, String kind,
       String mediaType, String storageKey, String sha256, String text, Map<String,Object> draft,
-      String message) {}
+      String message, Map<String,Object> fieldProvenance) {}
   private final Store store;
   private final JdbcTemplate jdbc;
   private final JobQueue jobs;
   private final BookkeepingService book;
+  private final FieldProtection protection;
+  private final DocumentPublisher publisher;
 
-  public RepairService(Store store, JdbcTemplate jdbc, JobQueue jobs, BookkeepingService book) {
-    this.store=store; this.jdbc=jdbc; this.jobs=jobs; this.book=book;
+  public RepairService(Store store, JdbcTemplate jdbc, JobQueue jobs, BookkeepingService book, FieldProtection protection, DocumentPublisher publisher) {
+    this.store=store; this.jdbc=jdbc; this.jobs=jobs; this.book=book;this.protection=protection;this.publisher=publisher;
   }
 
   public Map<String,Object> request(UUID id) {
@@ -75,16 +77,23 @@ public class RepairService {
       long source=sourceVersion(job,proposal!=null&&proposal.get("documentVersion") instanceof Number n?n.longValue():doc==null?-1:doc.version);
       boolean stale=doc==null||doc.deleted||!alert.status.equals("OPEN")||source!=doc.version
           ||active(job)&&metadata(job).get("outcome")==null&&((Number)job.get("target_version")).longValue()!=alert.version;
-      var errors=proposal==null||doc==null?List.<String>of():blocking(doc,proposal);
+      var errors=proposal==null||doc==null?List.<String>of():previewErrors(doc,proposal);
+      if(proposal!=null&&doc!=null)enrich(doc,proposal);
       String outcome=stale?"STALE":Objects.toString(metadata(job).get("outcome"),null);
       if(outcome==null&&"DONE".equals(job.get("state"))) outcome=proposal==null?"REVIEW_REQUIRED":outcome(doc,proposal,errors);
+      Map<String,Object> eligibility=Map.of();
+      if(!stale&&"DONE".equals(job.get("state"))&&!"STALE".equals(outcome)&&proposal!=null&&proposal.containsKey("draft")) {
+        try{eligibility=prepare(alert.id,Map.of());}catch(DomainException ignored){}
+      }
       repair=map("jobId",job.get("id"),"state",job.get("state"),"outcome",outcome,
           "sourceVersion",source,"error",job.get("error"),"attempts",job.get("attempts"),
           "createdAt",instant(job.get("created_at")),"updatedAt",instant(job.get("updated_at")),
           "availableAt",instant(job.get("available_at")),"blockingIssues",errors,
-          "canApply",!stale&&"DONE".equals(job.get("state"))&&proposal!=null&&proposal.containsKey("draft")&&errors.isEmpty()
-              &&!"NO_CHANGES".equals(outcome)&&!"STALE".equals(outcome),"context",metadata(job).get("context"));
+          "canApplyDraft",Boolean.TRUE.equals(eligibility.get("canApplyDraft")),
+          "canValidate",Boolean.TRUE.equals(eligibility.get("canValidate")),
+          "canApply",Boolean.TRUE.equals(eligibility.get("canValidate")),"context",metadata(job).get("context"));
     }
+    if(proposal!=null&&job==null&&alert.documentId!=null)enrich(store.get(SourceDocument.class,alert.documentId),proposal);
     return map("id",alert.id,"version",alert.version,"documentId",alert.documentId,"entityType",alert.entityType,
         "entityId",alert.entityId,"code",alert.code,"message",alert.message,"status",alert.status,
         "proposal",proposal,"resolvedBy",alert.resolvedBy,"resolvedAt",alert.resolvedAt,"repair",repair);
@@ -106,7 +115,7 @@ public class RepairService {
     var data=metadata(job);data.put("sourceVersion",doc.version);
     jdbc.update("update job set payload=? where id=?",Json.write(data),claim.id());
     return new Snapshot(alert.id,doc.id,doc.version,doc.kind,doc.mediaType,doc.storageKey,doc.sha256,
-        Objects.requireNonNullElse(doc.text,""),Json.object(doc.draft),alert.message);
+        Objects.requireNonNullElse(doc.text,""),Json.object(doc.draft),alert.message,Json.object(doc.fieldProvenance));
   }
 
   /** Atomically links a result to the exact live request; stale results never replace proposals. */
@@ -128,7 +137,7 @@ public class RepairService {
       draft.put("issues",new ArrayList<>(issues));proposal.put("draft",draft);proposal.put("issues",new ArrayList<>(issues));
     }
     proposal.put("documentVersion",snapshot.sourceVersion());proposal.put("jobId",claim.id().toString());
-    var errors=blocking(doc,proposal);String outcome=outcome(doc,proposal,errors);
+    var errors=previewErrors(doc,proposal);String outcome=outcome(doc,proposal,errors);
     alert.proposal=Json.write(proposal);mark(claim,outcome,context);attempt(snapshot,proposal,context,outcome);return true;
   }
 
@@ -161,26 +170,109 @@ public class RepairService {
 
   private String outcome(SourceDocument doc,Map<String,Object> proposal,List<String> errors) {
     if(!proposal.containsKey("draft")||!errors.isEmpty()||proposal.get("issues") instanceof List<?> list&&!list.isEmpty())return "REVIEW_REQUIRED";
-    return business(proposal.get("draft")).equals(business(Json.value(doc.draft)))?"NO_CHANGES":"READY";
+    try{return protection.changes(doc.kind,Json.object(doc.draft),protection.copy(proposal.get("draft")),Json.object(doc.fieldProvenance)).isEmpty()?"NO_CHANGES":"READY";}
+    catch(DomainException e){return "REVIEW_REQUIRED";}
   }
-  private Object business(Object value) {
-    if(value instanceof Map<?,?> input) {
-      var result=new TreeMap<String,Object>();input.forEach((k,v)->{if(!Set.of("validate","issues","id","version","documentId").contains(k.toString())&&v!=null&&!(v instanceof List<?> l&&l.isEmpty()))result.put(k.toString(),business(v));});return result;
+
+  private void enrich(SourceDocument doc,Map<String,Object> proposal) {
+    if(!(proposal.get("draft") instanceof Map<?,?> raw))return;
+    try {proposal.put("changes",protection.changes(doc.kind,Json.object(doc.draft),protection.copy(raw),Json.object(doc.fieldProvenance)));}
+    catch(DomainException e){proposal.put("changes",List.of());proposal.put("structureIssue",e.getMessage());}
+  }
+  private List<String> previewErrors(SourceDocument doc,Map<String,Object> proposal) {
+    if(!(proposal.get("draft") instanceof Map<?,?> raw))return List.of("A análise não contém uma correção de dados aplicável");
+    try {return blocking(doc,map("draft",protection.automaticDocument(doc.kind,Json.object(doc.draft),protection.copy(raw),Json.object(doc.fieldProvenance))));}
+    catch(DomainException e){return List.of(e.getMessage());}
+  }
+
+  /** A preview has no writes; acceptance is evaluated again under the financial write lock. */
+  @Transactional(readOnly=true)
+  public Map<String,Object> preview(UUID id,Map<String,Object> body) {return prepare(id,body);}
+
+  private Map<String,Object> prepare(UUID id,Map<String,Object> body) {
+    var alert=store.get(Alert.class,id);
+    if(!alert.status.equals("OPEN")||alert.documentId==null||alert.proposal==null)throw DomainException.invalid("Não existe uma proposta aplicável");
+    var doc=store.get(SourceDocument.class,alert.documentId);var proposal=Json.object(alert.proposal);
+    if(!body.isEmpty()&&(!body.containsKey("documentVersion")||!body.containsKey("proposalId")))
+      throw new DomainException(428,"A versão documental e a identidade da proposta são obrigatórias");
+    if(doc.deleted||!(proposal.get("documentVersion") instanceof Number n)||n.longValue()!=doc.version)
+      throw new DomainException(409,"O documento foi alterado; guarda as tuas edições e pede uma nova análise.");
+    if(body.containsKey("documentVersion"))store.checkVersion(doc,version(map("version",body.get("documentVersion"))));
+    if(body.containsKey("proposalId")&&!Objects.equals(Objects.toString(proposal.get("jobId"),alert.id.toString()),body.get("proposalId")))
+      throw new DomainException(409,"Esta proposta foi substituída. Atualiza a análise antes de aplicar.");
+    var job=latest(id);
+    if(job!=null&&"STALE".equals(metadata(job).get("outcome")))throw new DomainException(409,"Esta proposta está desatualizada; pede uma nova análise.");
+    if(job!=null&&!"DONE".equals(job.get("state")))throw DomainException.invalid("A análise ainda não terminou com sucesso");
+    if(!(proposal.get("draft") instanceof Map<?,?> raw))throw DomainException.invalid("A análise não contém uma correção de dados aplicável");
+    var before=Json.object(doc.draft);var local=body.get("draft") instanceof Map<?,?> edits?protection.align(doc.kind,before,protection.copy(edits)):protection.copy(before);
+    // Only editable fields may cross from a browser draft; identifiers/control metadata remain server-owned.
+    var current=protection.copy(before);var oldRows=protection.entries(doc.kind,current);var localRows=protection.entries(doc.kind,local);
+    var allowedItems=new LinkedHashSet<String>();
+    if(body.get("selectedItems") instanceof List<?> items) {
+      for(Object item:items) {
+        if(!(item instanceof String key)||oldRows.stream().noneMatch(r->protection.rowKey(r,protection.root(doc.kind,current)).equals(key)))throw DomainException.invalid("O item indicado não pertence a este documento");
+        allowedItems.add(key);
+      }
+    }else if(body.containsKey("selectedItems"))throw DomainException.invalid("A seleção de itens é inválida");
+    else for(var row:oldRows)if(alert.entityType.equals("document")||Objects.equals(text(row,"id"),alert.entityId.toString()))allowedItems.add(protection.rowKey(row,protection.root(doc.kind,current)));
+    if(allowedItems.isEmpty()&&!body.containsKey("selectedItems")&&oldRows.size()==1)allowedItems.add(protection.rowKey(oldRows.getFirst(),protection.root(doc.kind,current)));
+    for(int i=0;i<oldRows.size();i++)if(allowedItems.contains(protection.rowKey(oldRows.get(i),protection.root(doc.kind,current))))
+      for(String field:protection.fields(doc.kind))if(localRows.get(i).containsKey(field))oldRows.get(i).put(field,localRows.get(i).get(field));
+    var metadata=protection.humanDocument(doc.kind,before,current,Json.object(doc.fieldProvenance),false);
+    var changes=protection.changes(doc.kind,current,protection.copy(raw),metadata);
+    var selected=new LinkedHashSet<String>();
+    if(body.get("acceptedFields") instanceof List<?> requested)for(Object key:requested){if(!(key instanceof String value)||!selected.add(value))throw DomainException.invalid("A seleção de campos é inválida");}
+    else if(body.containsKey("acceptedFields"))throw DomainException.invalid("A seleção de campos é inválida");
+    var available=changes.stream().map(c->c.get("key").toString()).collect(java.util.stream.Collectors.toSet());
+    if(!available.containsAll(selected)||changes.stream().anyMatch(c->selected.contains(c.get("key").toString())&&!allowedItems.contains(c.get("itemId").toString())))throw DomainException.invalid("A seleção contém um campo que não pertence a esta proposta");
+    var touched=new LinkedHashSet<String>();var accepted=new ArrayList<Map<String,Object>>();
+    for(int i=0;i<oldRows.size();i++)for(String field:protection.fields(doc.kind))if(!protection.same(field,protection.entries(doc.kind,before).get(i).get(field),oldRows.get(i).get(field)))touched.add(protection.rowKey(oldRows.get(i),protection.root(doc.kind,current)));
+    String proposalId=Objects.toString(proposal.get("jobId"),alert.id.toString());
+    for(var change:changes)if(allowedItems.contains(change.get("itemId").toString())&&(change.get("kind").equals("COMPLEMENT")||selected.contains(change.get("key").toString()))) {
+      String item=change.get("itemId").toString(),field=change.get("field").toString();
+      var row=oldRows.stream().filter(r->protection.rowKey(r,protection.root(doc.kind,current)).equals(item)).findFirst().orElseThrow(protection::ambiguous);
+      row.put(field,change.get("proposed"));var ownership=protection.rowMetadata(metadata,item);
+      ownership.put(field,protection.decision("HUMAN_ACCEPTED_AI",proposalId));metadata.put(item,ownership);touched.add(item);accepted.add(change);
     }
-    if(value instanceof List<?> list)return list.stream().map(this::business).toList();
-    return value;
+    var errors=blocking(doc,map("draft",current),touched);
+    return map("draft",current,"changes",changes,"fieldProvenance",metadata,"selectedItems",touched,"accepted",accepted,
+        "blockingIssues",errors,"canApplyDraft",!touched.isEmpty(),"canValidate",!touched.isEmpty()&&errors.isEmpty());
+  }
+
+  public Map<String,Object> apply(UUID id,Map<String,Object> body,DocumentService documents) {
+    store.lockFinancialWrites();var prepared=prepare(id,body);
+    if(!Boolean.TRUE.equals(prepared.get("canApplyDraft")))throw DomainException.invalid("Não existem complementos ou escolhas para aplicar");
+    boolean validate=body.isEmpty()||flag(body,"validate");
+    if(validate&&!Boolean.TRUE.equals(prepared.get("canValidate")))throw DomainException.invalid(String.join("; ",(List<String>)prepared.get("blockingIssues")));
+    var alert=store.get(Alert.class,id);var selected=new LinkedHashSet<String>((Set<String>)prepared.get("selectedItems"));
+    return publisher.applySelected(alert.documentId,protection.copy(prepared.get("draft")),protection.copy(prepared.get("fieldProvenance")),selected,validate,documents);
   }
 
   /** Publication remains authoritative; this preview reuses its invoice arithmetic rules. */
   private List<String> blocking(SourceDocument doc,Map<String,Object> proposal) {
     if(!(proposal.get("draft") instanceof Map<?,?> raw))return List.of("A análise não contém uma correção de dados aplicável");
+    return blocking(doc,proposal,null);
+  }
+  private List<String> blocking(SourceDocument doc,Map<String,Object> proposal,Set<String> selected) {
+    if(!(proposal.get("draft") instanceof Map<?,?> raw))return List.of("A análise não contém uma correção de dados aplicável");
     var draft=Json.object(Json.write(raw));var errors=new ArrayList<String>();
+    if(doc.kind.equals("STATEMENT")) {
+      for(var row:rows(draft,"movements")) {
+        if(selected!=null&&!selected.contains(protection.rowKey(row,false)))continue;
+        try {var m=new pt.conta.bank.BankMovement();m.accountId=row.get("accountId")==null?doc.accountId:uuid(row,"accountId");
+          m.bookedOn=date(row,"bookedOn");m.description=text(row,"description");m.amount=Money.optional(row.get("amount"));
+          m.currency=Objects.requireNonNullElse(text(row,"currency"),"EUR");m.direction=enumeration(row,"direction",pt.conta.shared.Types.Direction.class,null);
+          errors.addAll(book.movementErrors(m));
+        }catch(RuntimeException e){errors.add("Movimento com formato inválido");}
+      }return errors;
+    }
     if(!doc.kind.equals("INVOICE"))return errors;
     var receipts=rows(draft,"invoices");if(receipts.isEmpty())receipts=List.of(draft);
     var existing=store.all(Invoice.class).stream().filter(i->doc.id.equals(i.documentId)&&!i.deleted).toList();
     for(int n=0;n<receipts.size();n++) {
       try {
-        var row=receipts.get(n);var i=new Invoice();if(n<existing.size())i.id=existing.get(n).id;
+        var row=receipts.get(n);if(selected!=null&&!selected.contains(protection.rowKey(row,protection.root(doc.kind,draft))))continue;
+        var i=new Invoice();if(n<existing.size())i.id=existing.get(n).id;
         i.documentId=doc.id;i.issuedOn=date(row,"issuedOn");i.supplier=text(row,"supplier");i.number=text(row,"number");
         i.supplierTaxId=text(row,"supplierTaxId");i.total=Money.optional(row.get("total"));i.net=Money.optional(row.get("net"));
         i.tax=Money.optional(row.get("tax"));i.discount=Money.optional(row.get("discount"));i.currency=Objects.requireNonNullElse(text(row,"currency"),"EUR");
@@ -192,13 +284,4 @@ public class RepairService {
     return errors;
   }
 
-  public void assertApplicable(UUID id) {
-    store.lockFinancialWrites();var alert=store.get(Alert.class,id);
-    if(!alert.status.equals("OPEN"))throw DomainException.invalid("O alerta já está resolvido");
-    var view=view(id);var repair=(Map<?,?>)view.get("repair");
-    if(repair!=null&&!Boolean.TRUE.equals(repair.get("canApply"))) {
-      if("STALE".equals(repair.get("outcome")))throw new DomainException(409,"O documento foi alterado; pede uma nova análise");
-      throw DomainException.invalid("A proposta ainda não pode ser aplicada. Consulta os dados em falta e o estado da análise.");
-    }
-  }
 }

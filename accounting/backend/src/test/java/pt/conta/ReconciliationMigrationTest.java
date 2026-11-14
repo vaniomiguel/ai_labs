@@ -30,7 +30,7 @@ class ReconciliationMigrationTest {
       posting(jdbc, allocationPosting, "ALLOCATION", allocation, "2026-02-12", "-100.00");
       posting(jdbc, transferPosting, "MOVEMENT", transfer, "2026-02-14", "-10.00");
       Flyway flyway = Flyway.configure().dataSource(source).load();
-      assertThat(flyway.migrate().migrationsExecuted).isEqualTo(2);
+      assertThat(flyway.migrate().migrationsExecuted).isEqualTo(3);
       assertThat(jdbc.queryForObject("select count(*) from ledger_entry where id in (?,?,?)", Integer.class, invoicePosting, allocationPosting, transferPosting)).isEqualTo(3);
       assertThat(jdbc.queryForObject("select count(*) from ledger_entry where reverses_id in (?,?)", Integer.class, allocationPosting, transferPosting)).isEqualTo(2);
       assertThat(jdbc.queryForObject("select active from allocation where id=?", Boolean.class, allocation)).isTrue();

@@ -93,6 +93,15 @@ class RepairIntegrationTest {
     process(request(f));assertThat(provider.calls).isEqualTo(1);assertNoMoney();
   }
 
+  @Test void humanFieldProvenanceAndComplementOnlyInstructionsReachTheModel()throws Exception {
+    var f=fixture();var doc=store.get(SourceDocument.class,f.doc);
+    doc.draft=Json.write(map("supplier","Nome humano","issuedOn",null,"total",null));
+    doc.fieldProvenance=Json.write(map("root",map("supplier",map("origin","HUMAN_EDIT","protected",true,"actor","gestor"))));store.flush();
+    provider.program=request->{assertThat(Json.read(request.input()).path("fieldProvenance").path("root").path("supplier").path("protected").asBoolean()).isTrue();
+      assertThat(request.instructions()).contains("valores humanos são autoritativos","apenas sugestões");return Json.write(response(valid(),List.of()));};
+    process(request(f));assertThat(Json.object(doc.draft)).containsEntry("supplier","Nome humano");assertNoMoney();
+  }
+
   @Test void aVisualModelReceivesEveryRealPdfPageWithoutLayoutMetadata()throws Exception {
     var f=fixture("Texto de todas as páginas",4,"{}");provider.vision=true;
     provider.program=request->{assertThat(request.images()).hasSize(4);
@@ -141,6 +150,12 @@ class RepairIntegrationTest {
   @Test void unchangedBusinessDataIsReportedWithoutAnotherApplication()throws Exception {
     var f=fixture();store.get(SourceDocument.class,f.doc).draft=Json.write(valid());store.flush();
     process(request(f));assertThat(task(repairs.view(f.alert))).containsEntry("outcome","NO_CHANGES").containsEntry("canApply",false);assertNoMoney();
+  }
+
+  @Test void missingModelValuesAreNotPresentedAsApplicableDeletions()throws Exception {
+    var f=fixture();store.get(SourceDocument.class,f.doc).draft=Json.write(valid());store.flush();
+    provider.program=request->{var draft=valid();draft.put("supplier",null);draft.put("total",null);return Json.write(response(draft,List.of()));};
+    process(request(f));assertThat(task(repairs.view(f.alert))).containsEntry("outcome","NO_CHANGES").containsEntry("canApply",false).containsEntry("canApplyDraft",false);assertNoMoney();
   }
 
   @Test void editingTheSourceWhileTheModelRunsMakesTheResultStale()throws Exception {

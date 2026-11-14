@@ -11,6 +11,9 @@ import pt.conta.shared.Types.*;
 @Entity
 @Table(name = "bank_movement")
 public class BankMovement extends BaseEntity {
+  @Column(columnDefinition = "text")
+  public String fieldProvenance = "{}";
+
   public UUID documentId;
   public UUID statementId;
   public UUID accountId;

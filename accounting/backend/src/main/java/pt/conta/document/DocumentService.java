@@ -121,6 +121,8 @@ public class DocumentService {
         d.text,
         "layout",
         Json.value(d.layout),
+        "fieldProvenance",
+        Json.value(d.fieldProvenance),
         "draft",
         Json.value(d.draft));
   }

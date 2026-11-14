@@ -3,6 +3,7 @@ import {
   Input,
   Output,
   EventEmitter,
+  HostListener,
   inject,
   signal,
 } from "@angular/core";
@@ -24,6 +25,7 @@ export class FieldsEditor {
   @Input({ required: true }) data: any = {};
   @Input() accounts: any[] = [];
   @Output() changed = new EventEmitter<void>();
+  @HostListener("input") @HostListener("change") edited(){this.changed.emit();}
   readonly labels = labels;
   readonly money = euros;
   private api = inject(Api);
@@ -47,6 +49,7 @@ export class FieldsEditor {
     return this.data.rows ?? (this.data.rows = []);
   }
   addLine() {
+    this.changed.emit();
     this.lines.push({
       description: null,
       quantity: null,
@@ -57,6 +60,7 @@ export class FieldsEditor {
     });
   }
   addMovement() {
+    this.changed.emit();
     this.movements.push({
       bookedOn: null,
       valueOn: null,

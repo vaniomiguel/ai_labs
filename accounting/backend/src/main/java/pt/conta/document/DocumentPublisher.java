@@ -22,6 +22,7 @@ import pt.conta.shared.Types.*;
 @Service
 public class DocumentPublisher {
   private final Store store;
+  private final FieldProtection protection;
   private final BookkeepingService book;
   private final ReviewService review;
   private final HistoryService history;
@@ -34,7 +35,8 @@ public class DocumentPublisher {
       ReviewService review,
       HistoryService history,
       AuditService audit,
-      pt.conta.jobs.JobQueue jobs) {
+      pt.conta.jobs.JobQueue jobs, FieldProtection protection) {
+    this.protection=protection;
     this.store = store;
     this.book = book;
     this.review = review;
@@ -54,15 +56,19 @@ public class DocumentPublisher {
     doc.text = converted.text();
     doc.pages = converted.pages();
     doc.layout = Json.write(converted.layout());
+    String rawDraft=Json.write(draft);
+    draft=automaticDraft(doc,draft);
     doc.draft = Json.write(draft);
     var attempt = new ExtractionAttempt();
     attempt.documentId = id;
     attempt.engine = converted.engine();
     attempt.outcome = "COMPLETE";
-    attempt.result = doc.draft;
+    attempt.result = rawDraft;
     attempt.evidence = doc.layout;
     store.add(attempt);
     publish(doc, draft, converted.engine(), false);
+    store.flush();
+    proposeDifferences(doc,Json.object(rawDraft),doc.layout);
     return true;
   }
 
@@ -74,7 +80,9 @@ public class DocumentPublisher {
     store.checkVersion(doc, version(body));
     String before = doc.draft;
     Object raw = body.get("draft");
-    var draft = Json.object(Json.write(raw));
+    var draft = protection.initialize(doc.kind,Json.object(Json.write(raw)));
+    if(Set.of("INVOICE","STATEMENT").contains(doc.kind))
+      doc.fieldProvenance=Json.write(protection.humanDocument(doc.kind,Json.object(before),draft,Json.object(doc.fieldProvenance),flag(body,"resolve")));
     doc.draft = Json.write(draft);
     if (flag(body, "resolve")) {
       draft.put("validate", true);
@@ -100,38 +108,91 @@ public class DocumentPublisher {
     store.lockFinancialWrites();
     var doc = store.get(SourceDocument.class, id);
     if (doc.version != version || doc.deleted) return;
-    var previous = Json.object(doc.draft);
-    for (String field :
-        List.of(
-            "number",
-            "supplier",
-            "supplierTaxId",
-            "issuedOn",
-            "dueOn",
-            "total",
-            "net",
-            "tax",
-            "discount",
-            "description",
-            "currency",
-            "type",
-            "relatedInvoiceId"))
-      if ((draft.get(field) == null || Objects.toString(draft.get(field), "").isBlank())
-          && previous.get(field) != null) draft.put(field, previous.get(field));
-    if (rows(draft, "lines").isEmpty() && !rows(previous, "lines").isEmpty())
-      draft.put("lines", previous.get("lines"));
     draft = DraftSanitizer.sanitize(doc.kind, draft);
+    String rawDraft=Json.write(draft);
+    draft=automaticDraft(doc,draft);
     doc.draft = Json.write(draft);
     var attempt = new ExtractionAttempt();
     attempt.documentId = id;
     attempt.engine = "AI";
     attempt.outcome = "COMPLETE";
-    attempt.result = doc.draft;
+    attempt.result = rawDraft;
     attempt.evidence = evidence;
     store.add(attempt);
     publish(doc, draft, "AI", false);
     store.flush();
+    proposeDifferences(doc,Json.object(rawDraft),evidence);
     jobs.enqueue("REVIEW_DOCUMENT", doc.id, doc.version, "{}");
+  }
+
+  private Map<String,Object> automaticDraft(SourceDocument doc,Map<String,Object> incoming) {
+    if(!Set.of("INVOICE","STATEMENT").contains(doc.kind))return incoming;
+    if(doc.kind.equals("STATEMENT")) {
+      var existing=store.all(BankMovement.class).stream().filter(m->doc.id.equals(m.documentId)&&!m.deleted).toList();
+      if(existing.stream().anyMatch(m->m.excluded))identities(existing,rows(incoming,"movements"),book::movementView,m->m.excluded,"movement");
+    }else if(!rows(incoming,"invoices").isEmpty()) {
+      var existing=store.all(Invoice.class).stream().filter(i->doc.id.equals(i.documentId)&&!i.deleted).toList();
+      if(existing.stream().anyMatch(i->i.excluded))identities(existing,rows(incoming,"invoices"),book::invoiceView,i->i.excluded,"invoice");
+    }
+    try{return protection.automaticDocument(doc.kind,Json.object(doc.draft),incoming,Json.object(doc.fieldProvenance));}
+    catch(DomainException e){
+      review.open(doc.id,"document",doc.id,"AI_STRUCTURE_REVIEW",e.getMessage());
+      return Json.object(doc.draft);
+    }
+  }
+
+  private void proposeDifferences(SourceDocument doc,Map<String,Object> incoming,String evidence) {
+    if(!Set.of("INVOICE","STATEMENT").contains(doc.kind))return;
+    try {
+      var current=Json.object(doc.draft);var aligned=protection.align(doc.kind,current,incoming);
+      if(protection.changes(doc.kind,current,aligned,Json.object(doc.fieldProvenance)).isEmpty())return;
+      var alert=review.open(doc.id,"document",doc.id,"AI_FIELD_SUGGESTIONS","A IA sugeriu valores diferentes. Os teus dados foram preservados.");
+      alert.proposal=Json.write(map("draft",aligned,"documentVersion",doc.version,"issues",incoming.get("issues"),"evidence",Json.value(evidence)));
+    }catch(DomainException e){review.open(doc.id,"document",doc.id,"AI_STRUCTURE_REVIEW",e.getMessage());}
+  }
+
+  /** Saves only selected children; draft changes never withdraw a validated sibling or record. */
+  @Transactional
+  public Map<String,Object> applySelected(UUID id,Map<String,Object> draft,Map<String,Object> provenance,Set<String> selected,boolean validate,DocumentService documents) {
+    var doc=store.get(SourceDocument.class,id);String before=doc.draft;
+    doc.draft=Json.write(draft);doc.fieldProvenance=Json.write(provenance);
+    var saved=new HashSet<String>();
+    for(var row:protection.entries(doc.kind,draft)) {
+      String key=protection.rowKey(row,protection.root(doc.kind,draft));if(!selected.contains(key))continue;
+      var input=new LinkedHashMap<>(row);input.put("documentId",doc.id.toString());input.put("validate",validate);
+      for(String derived:List.of("categories","categoryDetails","categoryIds","classification","excluded","fieldProvenance"))input.remove(derived);
+      var decisions=protection.rowMetadata(provenance,key);UUID record=uuid(row,"id");
+      if(doc.kind.equals("INVOICE")) {
+        Invoice existing=record==null?store.all(Invoice.class).stream().filter(i->doc.id.equals(i.documentId)&&!i.deleted).filter(i->protection.root(doc.kind,draft)).findFirst().orElse(null):store.get(Invoice.class,record);
+        if(existing!=null){if(!doc.id.equals(existing.documentId))throw protection.ambiguous();input.put("version",existing.version);}
+        if(validate||existing==null||existing.reviewStatus==ReviewStatus.OPEN) {
+          var result=book.saveReviewedInvoice(existing==null?null:existing.id,input,decisions);
+          row.put("id",result.get("id").toString());saved.add(result.get("id").toString());
+          provenance.put(key,result.get("fieldProvenance"));
+        }
+      }else {
+        var existing=record==null?null:store.get(BankMovement.class,record);
+        if(existing!=null){if(!doc.id.equals(existing.documentId))throw protection.ambiguous();input.put("version",existing.version);input.put("statementId",existing.statementId);}
+        if(validate||existing==null||existing.reviewStatus==ReviewStatus.OPEN) {
+          if(!input.containsKey("accountId"))input.put("accountId",doc.accountId==null?null:doc.accountId.toString());
+          var result=book.saveReviewedMovement(record,input,decisions);row.put("id",result.get("id").toString());saved.add(result.get("id").toString());
+          provenance.put(key,result.get("fieldProvenance"));
+        }
+      }
+      row.put("validate",validate);
+    }
+    // SourceRecordSync may have copied normalized fields while each selected item was saved.
+    var normalized=Json.object(doc.draft);
+    for(var row:protection.entries(doc.kind,draft)) {
+      var actual=protection.entries(doc.kind,normalized).stream().filter(r->Objects.equals(text(r,"id"),text(row,"id"))).findFirst().orElse(null);
+      if(actual!=null&&row.get("id")!=null&&saved.contains(row.get("id").toString()))row.putAll(actual);
+      if(selected.contains(protection.rowKey(row,protection.root(doc.kind,draft)))||saved.contains(Objects.toString(row.get("id"),"")))row.put("validate",validate);
+    }
+    doc.draft=Json.write(draft);
+    var mergedMetadata=Json.object(doc.fieldProvenance);mergedMetadata.putAll(provenance);doc.fieldProvenance=Json.write(mergedMetadata);
+    if(!validate)doc.status="OPEN";
+    store.flush();audit.record("APPLY_AI_FIELDS","document",id,Json.read(before),map("draft",draft,"fieldProvenance",mergedMetadata));
+    return documents.view(doc);
   }
 
   /** Flags grounded AI concerns on automatic data, without overriding owner-confirmed decisions. */
@@ -165,7 +226,10 @@ public class DocumentPublisher {
                 .filter(i -> Objects.equals(i.documentId, doc.id) && !i.deleted)
                 .findFirst();
         existing.ifPresent(i -> draft.put("version", i.version));
-        var result = book.saveInvoice(existing.map(i -> i.id).orElse(null), draft, origin, human);
+        var published = new ArrayList<Map<String,Object>>();
+        book.batch(() -> published.add(book.saveInvoice(existing.map(i -> i.id).orElse(null), draft, origin, human)));
+        var result = published.getFirst();
+        draft.put("id",result.get("id").toString());doc.draft=Json.write(draft);
         doc.status = result.get("reviewStatus") == ReviewStatus.OPEN ? "OPEN" : "DONE";
       }
     } else if (doc.kind.equals("STATEMENT")) {
@@ -179,6 +243,7 @@ public class DocumentPublisher {
           "EXTRACTION_REVIEW",
           String.join(
               "; ", ((List<?>) draft.get("issues")).stream().map(Object::toString).toList()));
+    if(!human&&Set.of("INVOICE","STATEMENT").contains(doc.kind)&&protection.entries(doc.kind,draft).stream().anyMatch(row->Boolean.FALSE.equals(row.get("validate"))))doc.status="OPEN";
     if (doc.status.equals("DONE")) {
       review.resolveFor("document", doc.id);
       if (human) {
@@ -187,6 +252,17 @@ public class DocumentPublisher {
           rows(draft, key).forEach(row -> row.remove("issues"));
         doc.draft = Json.write(draft);
       }
+    }
+    if(Set.of("INVOICE","STATEMENT").contains(doc.kind)) {
+      var source=Json.object(doc.draft);var metadata=Json.object(doc.fieldProvenance);
+      for(var row:protection.entries(doc.kind,source)) {
+        String key=protection.rowKey(row,protection.root(doc.kind,source));
+        var rowMeta=protection.rowMetadata(metadata,key);
+        // New publications replace temporary identities with the persisted record identity.
+        if(row.get("_itemId")!=null&&metadata.containsKey(row.get("_itemId").toString()))rowMeta.putAll(protection.copy(metadata.remove(row.get("_itemId").toString())));
+        metadata.put(key,protection.automaticOrigins(doc.kind,row,rowMeta));
+      }
+      doc.fieldProvenance=Json.write(metadata);
     }
     history.refresh();
   }
@@ -211,6 +287,8 @@ public class DocumentPublisher {
             if (old != null) child.put("version", old.version);
             var result = book.saveInvoice(old == null ? null : old.id, child, origin, human);
             receipts.get(n).put("id", result.get("id").toString());
+            if(human||old==null||!old.manuallyConfirmed||!Boolean.FALSE.equals(receipts.get(n).get("validate")))
+              receipts.get(n).put("validate",result.get("reviewStatus")!=ReviewStatus.OPEN);
             results.add(result);
           }
           for (var old : existing)
@@ -317,6 +395,8 @@ public class DocumentPublisher {
             }
             var result = book.saveMovement(existing == null ? null : existing.id, row, origin, human);
             rows.get(n).put("id", result.get("id").toString());
+            if(human||existing==null||!existing.manuallyConfirmed||!Boolean.FALSE.equals(rows.get(n).get("validate")))
+              rows.get(n).put("validate",result.get("reviewStatus")!=ReviewStatus.OPEN);
           }
           for (var movement : old)
             if (!seen.contains(movement.id)) {
@@ -372,16 +452,6 @@ public class DocumentPublisher {
   }
 
   private String identityKey(Map<String, Object> row, String type) {
-    if (type.equals("invoice")) {
-      String supplier = Objects.requireNonNullElse(text(row, "supplierTaxId"), MatchingRules.normalize(text(row, "supplier")));
-      String number = text(row, "number");
-      if (number != null && !supplier.isBlank())
-        return Json.write(List.of(supplier, MatchingRules.normalize(number), Objects.requireNonNullElse(text(row, "type"), "INVOICE")));
-      if (date(row, "issuedOn") == null || row.get("total") == null || supplier.isBlank()) return null;
-      return Json.write(List.of(supplier, date(row, "issuedOn").toString(), Money.optional(row.get("total")), Objects.requireNonNullElse(text(row, "description"), "")));
-    }
-    if (date(row, "bookedOn") == null || text(row, "description") == null || row.get("amount") == null) return null;
-    return Json.write(Arrays.asList(date(row, "bookedOn").toString(), MatchingRules.normalize(text(row, "description")),
-        Money.optional(row.get("amount")), text(row, "direction"), text(row, "occurredAt"), text(row, "bankReference")));
+    return SourceIdentity.key(row, type);
   }
 }

@@ -192,28 +192,15 @@ public class DocumentController {
     return ResponseEntity.accepted().body(repairs.request(id));
   }
 
-  /** Applies a reviewed AI proposal only if its source draft has not changed in the meantime. */
+  @PostMapping("/alerts/{id}/preview")
+  public Map<String,Object> preview(@PathVariable UUID id,@RequestBody Map<String,Object> body) {return repairs.preview(id,body);}
+
+  /** Applies only safe complements and explicitly accepted server-stored suggestions. */
   @PostMapping("/alerts/{id}/apply")
-  @Transactional
-  public Map<String, Object> apply(@PathVariable UUID id) {
-    repairs.assertApplicable(id);
-    var alert = store.get(Alert.class, id);
-    if (alert.proposal == null || alert.documentId == null)
-      throw DomainException.invalid("Não existe uma proposta aplicável");
-    var proposal = Json.object(alert.proposal);
-    if (!proposal.containsKey("draft") || !proposal.containsKey("documentVersion"))
-      throw DomainException.invalid("A resposta contém sugestões, não uma correção de dados");
-    return publisher.edit(
-        alert.documentId,
-        map(
-            "version",
-            proposal.get("documentVersion"),
-            "draft",
-            proposal.get("draft"),
-            "resolve",
-            true),
-        documents);
+  public Map<String,Object> apply(@PathVariable UUID id,@RequestBody(required=false) Map<String,Object> body) {
+    return repairs.apply(id,body==null?Map.of():body,documents);
   }
+  public Map<String,Object> apply(UUID id){return apply(id,null);}
 
   /** Lists queue attempts and transient model outages without exposing request credentials. */
   @GetMapping("/jobs")

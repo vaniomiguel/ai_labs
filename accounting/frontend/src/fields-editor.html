@@ -106,7 +106,7 @@
             type="button"
             class="icon-button"
             aria-label="Remover artigo"
-            (click)="lines.splice($index,1)"
+            (click)="lines.splice($index,1);changed.emit()"
           >
             ×
           </button>
@@ -144,7 +144,7 @@
       placeholder="0.00"
   /></label>
   <label
-    >Direção<select [(ngModel)]="data.direction">
+    >Direção<select aria-label="Direção" [(ngModel)]="data.direction">
       <option [ngValue]="null">Selecionar</option>
       <option value="DEBIT">Débito · saída</option>
       <option value="CREDIT">Crédito · entrada</option>
@@ -201,7 +201,7 @@
           <button
             class="icon-button"
             aria-label="Remover movimento"
-            (click)="movements.splice($index,1)"
+            (click)="movements.splice($index,1);changed.emit()"
           >
             ×
           </button>

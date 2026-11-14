@@ -2,6 +2,7 @@ import { Component, signal, inject, computed, OnDestroy } from "@angular/core";
 import { CommonModule } from "@angular/common";
 import { FormsModule } from "@angular/forms";
 import { MatButtonModule } from "@angular/material/button";
+import { A11yModule } from "@angular/cdk/a11y";
 import { Api, euros, errorMessage, labels, JobCounts, JobItem, JobPage } from "./api";
 import { FieldsEditor } from "./fields-editor";
 import { PdfViewer } from "./pdf-viewer";
@@ -19,6 +20,7 @@ import { RepairPanel } from "./repair-panel";
     CommonModule,
     FormsModule,
     MatButtonModule,
+    A11yModule,
     FieldsEditor,
     PdfViewer,
     ReconciliationTable, CategoryTags, CategoryEditor, CategoryManager, RepairPanel,
@@ -74,6 +76,7 @@ export class AppComponent implements OnDestroy {
   processingPage = 0;
   private processingRequest = 0;
   readonly editor = signal<any>(null);
+  private editorRequest=0;
   readonly categoryTarget = signal<{type:"invoice"|"movement";record:any}|null>(null);
   readonly reviewDocument = signal<any>(null);
   readonly activeAlert = signal<any>(null);
@@ -382,6 +385,7 @@ export class AppComponent implements OnDestroy {
     this.uploading.set(false);
   }
   newRecord(kind: string) {
+    ++this.editorRequest;
     this.recordKind = kind;
     this.timeline.set([]);
     this.editor.set(
@@ -395,22 +399,26 @@ export class AppComponent implements OnDestroy {
           },
     );
   }
+  recordTitle(kind:string,row:any) {
+    return (kind==='INVOICE'?row.supplier:row.description) || (row.documentId?this.sourceName(row.documentId):kind==='INVOICE'?'Fornecedor por identificar':'Descrição por identificar');
+  }
+  closeEditor(){++this.editorRequest;this.editor.set(null);}
   async editRecord(kind: string, row: any) {
-    this.recordKind = kind;
-    this.timeline.set([]);
-    this.editor.set(structuredClone(row));
-    await this.run(async () =>
-      this.timeline.set(
-        await this.api.get(
-          "/audit/" +
-            (kind === "INVOICE" ? "invoice" : "movement") +
-            "/" +
-            row.id,
-        ),
-      ),
-    );
+    const request=++this.editorRequest;
+    await this.run(async()=>{
+      const record=row.id?await this.api.get((kind==='INVOICE'?'/invoices/':'/movements/')+row.id):row;
+      if(request!==this.editorRequest)return;
+      this.recordKind=kind;this.timeline.set([]);this.editor.set(structuredClone(record));
+      if(row.id){const history=await this.api.get('/audit/'+(kind==='INVOICE'?'invoice':'movement')+'/'+row.id);if(request===this.editorRequest)this.timeline.set(history);}
+    });
+  }
+  private inCurrentPeriod(date:string|null) {
+    if(!date)return false;const [year,month,day]=date.split('-').map(Number);
+    return (!this.filters.year||year===Number(this.filters.year))&&(!this.filters.month||month===Number(this.filters.month))
+      &&(!this.filters.day||day===Number(this.filters.day))&&(!this.filters.from||date>=this.filters.from)&&(!this.filters.to||date<=this.filters.to);
   }
   async saveRecord(validate: boolean) {
+    const request=this.editorRequest;
     await this.run(async () => {
       const data = { ...this.editor(), validate };
       if (data.id) { delete data.categories; delete data.categoryDetails; delete data.classification; }
@@ -418,10 +426,11 @@ export class AppComponent implements OnDestroy {
         this.recordKind === "INVOICE" ? "/invoices" : "/movements";
       if (data.id) await this.api.put(resource + "/" + data.id, data);
       else await this.api.post(resource, data);
-      this.editor.set(null);
+      if(request!==this.editorRequest){await this.refresh();return;}
+      this.closeEditor();
       this.notice.set(
         validate
-          ? "Registo validado e saldos atualizados."
+          ? this.inCurrentPeriod(data.issuedOn || data.bookedOn) ? "Registo validado e saldos atualizados." : "Registo validado. Pertence a outro período e fica fora dos filtros atuais."
           : "Rascunho guardado; fica fora dos saldos.",
       );
       await this.refresh();
@@ -430,12 +439,13 @@ export class AppComponent implements OnDestroy {
   async attach(event: Event) {
     const input = event.target as HTMLInputElement;
     if (!input.files?.length) return;
+    const request=this.editorRequest;
     await this.run(async () => {
       const form = new FormData();
       form.append("files", input.files![0]);
       form.append("kind", "SUPPORT");
       const docs = await this.api.post("/documents", form);
-      this.editor.set({ ...this.editor(), documentId: docs[0].id });
+      if(request===this.editorRequest)this.editor.set({ ...this.editor(), documentId: docs[0].id, documentVersion:docs[0].version });
     });
   }
   requestRemoval(kind: string, row: any) {
@@ -513,12 +523,27 @@ export class AppComponent implements OnDestroy {
       this.notice.set(alert.message);
     }
   }
-  async applyProposal() {
+  reviewEdits=signal(0);
+  draftEdited(){this.reviewEdits.update(n=>n+1);}
+  async applyProposal(choices:any) {
     await this.run(async () => {
       const request=this.documentRequest;
-      const result=await this.api.post("/alerts/" + this.activeAlert().id + "/apply");
-      if(request===this.documentRequest){this.reviewDocument.set(result);this.activeAlert.set(null);}
-      this.notice.set("Proposta aplicada e validada com a tua confirmação.");
+      const result=await this.api.post("/alerts/" + this.activeAlert().id + "/apply",choices);
+      if(request===this.documentRequest){
+        const key=(row:any,root:boolean)=>root?'root':String(row.id||row._itemId||'');
+        const collection=result.kind==='INVOICE'?'invoices':'movements';
+        const before=choices.draft?.[collection]||[choices.draft];
+        const after=result.draft?.[collection]||[result.draft];
+        for(let n=0;n<after.length;n++) {
+          const id=key(after[n],!result.draft?.[collection]);
+          const local=before.find((row:any)=>key(row,!choices.draft?.[collection])===id);
+          if(local&&!choices.selectedItems.includes(id))Object.assign(after[n],local);
+        }
+        this.reviewDocument.set(result);
+        if(choices.validate)this.activeAlert.set(null);
+        else this.activeAlert.set(await this.api.get('/alerts/'+this.activeAlert().id));
+      }
+      this.notice.set(choices.validate?"Escolhas aplicadas e itens selecionados validados.":"Complementos e escolhas guardados no rascunho. Falta validar os itens alterados.");
       await this.refresh();
     });
   }
@@ -744,6 +769,7 @@ export class AppComponent implements OnDestroy {
   }
   ngOnDestroy() {
     ++this.documentRequest;
+    ++this.editorRequest;
     this.events?.close();
     clearTimeout(this.refreshTimer);
   }

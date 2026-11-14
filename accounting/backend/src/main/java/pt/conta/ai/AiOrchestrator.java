@@ -172,7 +172,9 @@ public class AiOrchestrator {
               candidateContext,
               "candidateFingerprint",
               suggest ? Json.read(job.payload()).path("fingerprint").asText() : null);
-      String input = Json.write(payload), prompt = prompts.prompt(task);
+      String input = Json.write(payload);
+      String prompt = prompts.prompt(task) + "\n"
+          + prompts.prompt(PromptCatalog.HUMAN_FIELD_AUTHORITY_INSTRUCTIONS).stripTrailing();
       if (input.length() > 50000)
         throw DomainException.invalid(
             "O conteúdo excede o contexto seguro; revê este documento manualmente");
@@ -291,6 +293,9 @@ public class AiOrchestrator {
     result.remove("classification");
     result.remove("categoryDetails");
     result.remove("categoryIds");
+    result.remove("documentVersion");
+    result.remove("fieldProvenance");
+    result.remove("reviewIssues");
     result.remove("categories");
     if (headerOnly)
       for (String key : List.of("movements", "lines", "rows", "sheets")) {

@@ -61,11 +61,12 @@ public class FinanceController {
             .filter(i -> !i.deleted && (searched == null || searched.contains(i.id)))
             .map(book::invoiceView)
             .filter(i -> matches(i, criteria, "issuedOn"))
+            .filter(i -> amountMatches(i, filters))
             .filter(
                 i ->
                     !filters.containsKey("category")
                         || categories.recordMatches("invoice", (UUID) i.get("id"), filters.get("category")))
-            .sorted(Comparator.comparing(i -> Objects.toString(i.get("issuedOn"), "9999")))
+            .sorted(recordOrder("issuedOn"))
             .toList();
     return page(rows, filters);
   }
@@ -127,7 +128,7 @@ public class FinanceController {
                             .startsWith(filters.get("time")))
             .filter(m -> !filters.containsKey("category") || categories.recordMatches("movement", (UUID) m.get("id"), filters.get("category")))
             .filter(m -> amountMatches(m, filters))
-            .sorted(Comparator.comparing(m -> Objects.toString(m.get("bookedOn"), "9999")))
+            .sorted(recordOrder("bookedOn"))
             .toList();
     return page(rows, filters);
   }
@@ -348,19 +349,30 @@ public class FinanceController {
     categories.archive(id, version, permanently);
   }
 
+  private boolean undatedPending(Map<String,Object> row,String dateKey) {
+    return row.get(dateKey)==null && "OPEN".equals(Objects.toString(row.get("reviewStatus"),""));
+  }
+
+  private Comparator<Map<String,Object>> recordOrder(String dateKey) {
+    return Comparator.<Map<String,Object>,Boolean>comparing(row -> !undatedPending(row,dateKey))
+        .thenComparing(row -> Objects.toString(row.get(dateKey),"9999"))
+        .thenComparing(row -> row.get("id").toString());
+  }
+
   private boolean matches(Map<String, Object> row, Map<String, String> filters, String dateKey) {
     var date = row.get(dateKey) == null ? null : LocalDate.parse(row.get(dateKey).toString());
-    if (filters.containsKey("year")
+    boolean undatedPending = undatedPending(row, dateKey);
+    if (!undatedPending && filters.containsKey("year")
         && (date == null || date.getYear() != Integer.parseInt(filters.get("year")))) return false;
-    if (filters.containsKey("month")
+    if (!undatedPending && filters.containsKey("month")
         && (date == null || date.getMonthValue() != Integer.parseInt(filters.get("month"))))
       return false;
-    if (filters.containsKey("day")
+    if (!undatedPending && filters.containsKey("day")
         && (date == null || date.getDayOfMonth() != Integer.parseInt(filters.get("day"))))
       return false;
-    if (filters.containsKey("from")
+    if (!undatedPending && filters.containsKey("from")
         && (date == null || date.isBefore(LocalDate.parse(filters.get("from"))))) return false;
-    if (filters.containsKey("to")
+    if (!undatedPending && filters.containsKey("to")
         && (date == null || date.isAfter(LocalDate.parse(filters.get("to"))))) return false;
     if (filters.containsKey("status")
         && !row.get("reviewStatus").toString().equals(filters.get("status"))) return false;
@@ -378,9 +390,10 @@ public class FinanceController {
   }
 
   private boolean amountMatches(Map<String, Object> row, Map<String, String> filters) {
-    if (row.get("amount") == null)
+    Object value=row.get(row.containsKey("total")?"total":"amount");
+    if (value == null)
       return !filters.containsKey("min") && !filters.containsKey("max");
-    var amount = new BigDecimal(row.get("amount").toString());
+    var amount = new BigDecimal(value.toString());
     return (!filters.containsKey("min")
             || amount.compareTo(new BigDecimal(filters.get("min"))) >= 0)
         && (!filters.containsKey("max")

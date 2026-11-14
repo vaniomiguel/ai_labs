@@ -69,7 +69,7 @@ public class CategoryAiWorker {
             evidenceExamples.add(description);
         inputData.put("validationFeedback", Inputs.map("error", e.getMessage(), "rejectedResponse", parsed,
             "literalEvidenceExamples", evidenceExamples.stream().distinct().limit(10).toList(),
-            "instruction", "Corrija o erro indicado. Nenhuma alteração foi aplicada. evidence deve copiar UM trecho literal contíguo de data.description ou de literalEvidenceExamples, sem juntar frases, explicar ou resumir. Para categorias atribuídas use apenas data/hints. GENERALIZE deve usar o nome geral conciso indicado no erro, sem acrescentar listas de variantes entre parênteses. Se faltam dados, REVIEW sem categorias."));
+            "instruction", prompts.prompt(PromptCatalog.CATEGORY_VALIDATION_RETRY_INSTRUCTIONS).stripTrailing()));
       } catch (RuntimeException e) { results.categoryOutcome(execution.id, "INVALID_DOMAIN"); throw e; }
     }
   }

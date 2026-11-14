@@ -6,9 +6,25 @@ export interface RepairTask {
   jobId: string; state: "QUEUED" | "RUNNING" | "WAITING" | "DONE" | "FAILED";
   outcome: "READY" | "REVIEW_REQUIRED" | "NO_CHANGES" | "STALE" | null;
   sourceVersion: number; error: string | null; attempts: number;
-  canApply: boolean; blockingIssues: string[];
+  canApply: boolean; canApplyDraft: boolean; canValidate: boolean; blockingIssues: string[];
   context: { model: string; vision: boolean; textComplete: boolean; textCharacters: number; pages: number[] } | null;
 }
+export interface FieldDecision {
+  origin: "AUTOMATIC" | "HUMAN_EDIT" | "HUMAN_CONFIRMED" | "HUMAN_ACCEPTED_AI" | "HUMAN_LEGACY";
+  protected: boolean; actor: string; at: string; proposalId: string | null;
+}
+export interface FieldSuggestion {
+  key: string; itemId: string; itemIndex: number; proposalIndex?: number; field: string;
+  current: any; proposed: any; protected: boolean; kind: "COMPLEMENT" | "CONFLICT";
+}
+export interface RepairApplyRequest {
+  documentVersion: number; proposalId: string; draft: any;
+  acceptedFields: string[]; selectedItems: string[]; validate: boolean;
+}
+export interface RepairPreview {
+  changes: FieldSuggestion[]; blockingIssues: string[]; canApplyDraft: boolean; canValidate: boolean;
+}
+
 export interface AlertView {
   id: string; version: number; documentId: string | null; status: string;
   message: string; code: string; entityType: string; entityId: string;
@@ -31,12 +47,20 @@ export interface Classification {
   categories: CategoryDetail[]; rejectedCategoryIds: string[]; catalogRevision: number;
 }
 
+export interface ReviewableRecord {
+  id: string; version: number; documentId: string | null;
+  documentVersion: number | null; fieldProvenance: Record<string, FieldDecision>; reviewStatus: string; reviewIssues: string[];
+  remaining: string | null;
+  [field: string]: any;
+}
+
 export interface ReconciliationEntry {
   id: string;
   status: string;
   excluded: boolean;
-  invoices: any[];
-  movements: any[];
+  pendingReview: boolean;
+  invoices: ReviewableRecord[];
+  movements: ReviewableRecord[];
   allocations: any[];
   differences: { dates: boolean; amounts: boolean };
   invoiceTotal: string;

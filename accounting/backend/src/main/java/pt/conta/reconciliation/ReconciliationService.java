@@ -19,7 +19,7 @@ import pt.conta.shared.Types.*;
 public class ReconciliationService {
   public record Differences(boolean dates, boolean amounts) {}
   public record Entry(
-      String id, String status, boolean excluded,
+      String id, String status, boolean excluded, boolean pendingReview,
       List<Map<String, Object>> invoices, List<Map<String, Object>> movements,
       List<Map<String, Object>> allocations, Differences differences,
       String invoiceTotal, String debitTotal, String creditTotal,
@@ -75,10 +75,12 @@ public class ReconciliationService {
       var ii = ids.stream().filter(invoiceMap::containsKey).map(invoiceMap::get).toList();
       var mm = ids.stream().filter(movementMap::containsKey).map(movementMap::get).toList();
       var aa = groupLinks.getOrDefault(root(parent, ids.getFirst()), List.of());
+      boolean pendingReview = ii.stream().anyMatch(i -> i.reviewStatus == ReviewStatus.OPEN)
+          || mm.stream().anyMatch(m -> m.reviewStatus == ReviewStatus.OPEN);
       var dates = new ArrayList<LocalDate>();
       ii.stream().map(i -> i.issuedOn).filter(Objects::nonNull).forEach(dates::add);
       mm.stream().map(m -> m.bookedOn).filter(Objects::nonNull).forEach(dates::add);
-      if (dates.isEmpty() ? hasPeriod(filters) : dates.stream().noneMatch(period)) continue;
+      if (dates.isEmpty() ? hasPeriod(filters) && !pendingReview : dates.stream().noneMatch(period)) continue;
       if (!query.isBlank() && ids.stream().noneMatch(search::contains)) continue;
       var iv = ii.stream().map(book::invoiceView).toList();
       var mv = mm.stream().map(book::movementView).toList();
@@ -113,19 +115,20 @@ public class ReconciliationService {
       }
       boolean differentDates = aa.stream().anyMatch(a -> !Objects.equals(invoiceMap.get(a.invoiceId).issuedOn, movementMap.get(a.movementId).bookedOn));
       boolean differentAmounts = !aa.isEmpty() && balance.signum() != 0;
-      String status = excluded ? "EXCLUDED" : pending ? "PENDING_REVIEW"
+      String status = excluded ? "EXCLUDED" : pending || pendingReview ? "PENDING_REVIEW"
           : aa.isEmpty() ? ii.isEmpty() ? "UNMATCHED_MOVEMENT" : "UNMATCHED_INVOICE"
           : differentDates || differentAmounts ? "MATCHED_DIFFERENCES" : "MATCHED";
       var identity = ids.stream().map(UUID::toString).sorted().reduce("", (a, b) -> a + ":" + b);
       dates.sort(Comparator.naturalOrder());
-      rows.add(new Entry(UUID.nameUUIDFromBytes(identity.getBytes(StandardCharsets.UTF_8)).toString(), status, excluded,
+      rows.add(new Entry(UUID.nameUUIDFromBytes(identity.getBytes(StandardCharsets.UTF_8)).toString(), status, excluded, pendingReview,
           iv, mv, aa.stream().map(book::allocationView).toList(), new Differences(differentDates, differentAmounts),
           Money.text(invoiceTotal), Money.text(debitTotal), Money.text(creditTotal),
-          pending ? null : Money.text(balance), pending ? null : Money.text(periodEffect),
+          pending || pendingReview ? null : Money.text(balance), pending || pendingReview ? null : Money.text(periodEffect),
           hasPeriod(filters) && dates.stream().anyMatch(period.negate()),
           dates.isEmpty() ? null : dates.getFirst(), dates.isEmpty() ? null : dates.getLast()));
     }
-    rows.sort(Comparator.comparing(Entry::firstDate, Comparator.nullsLast(Comparator.naturalOrder())).thenComparing(Entry::id));
+    rows.sort(Comparator.comparing((Entry e) -> !(e.pendingReview() && e.firstDate()==null))
+        .thenComparing(Entry::firstDate, Comparator.nullsLast(Comparator.naturalOrder())).thenComparing(Entry::id));
     int page = Math.max(0, integer(filters, "page", 0)), size = Math.clamp(integer(filters, "size", 100), 1, 500);
     return new Page(rows.stream().skip((long) page * size).limit(size).toList(), rows.size(), page, size);
   }

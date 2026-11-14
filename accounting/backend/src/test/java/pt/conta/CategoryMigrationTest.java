@@ -23,7 +23,7 @@ class CategoryMigrationTest {
       jdbc.update("insert into bank_movement(id,created_at,updated_at,booked_on,amount,currency,direction,review_status) values(?,now(),now(),'2026-01-02',50,'EUR','DEBIT','AUTOMATIC')",movement);
       jdbc.update("insert into ledger_entry(id,created_at,updated_at,source_type,source_id,effective_on,amount) values(?,now(),now(),'INVOICE',?,'2026-01-01',100)",posting,invoice);
       jdbc.update("insert into job(id,created_at,updated_at,kind,target_id,target_version,dedupe_key,state,attempts,payload) values(?,now(),now(),'NORMALIZE_CATEGORIES',?,0,'legacy-category-job','WAITING',0,'{}')",legacyJob,invoice);
-      var flyway=Flyway.configure().dataSource(source).load();assertThat(flyway.migrate().migrationsExecuted).isEqualTo(1);
+      var flyway=Flyway.configure().dataSource(source).target("3").load();assertThat(flyway.migrate().migrationsExecuted).isEqualTo(1);
       var row=jdbc.queryForMap("select * from category where id=?",category);
       assertThat(row).containsEntry("name","Economato").containsEntry("aliases","[\"Material de escritorio\"]")
           .containsEntry("origin","LEGACY").containsEntry("protected_category",true).containsEntry("reference_code","6233");

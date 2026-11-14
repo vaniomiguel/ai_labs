@@ -2,7 +2,7 @@
   <div class="section-heading">
     <div>
       <h2>Faturas e movimentos <span class="count">{{data().total}}</span></h2>
-      <p>Positivo: a empresa deve ao gestor. Negativo: o gestor deve à empresa.</p>
+      <p>Positivo: a empresa deve ao gestor. Negativo: o gestor deve à empresa. Pendentes sem data aparecem em qualquer período e ficam fora dos cálculos.</p>
     </div>
     <button mat-stroked-button [disabled]="working() || saving()" (click)="reconcile.emit()">⇄ Reconciliar</button>
   </div>
@@ -16,16 +16,16 @@
       </tr></thead>
       <tbody>
         @for(entry of data().items; track entry.id) {
-          <tr class="reconciliation-entry" [class.excluded-entry]="entry.excluded" [class.pending]="entry.status==='PENDING_REVIEW'" [attr.data-entry-id]="entry.id">
+          <tr class="reconciliation-entry" [class.excluded-entry]="entry.excluded" [class.pending]="entry.pendingReview || entry.status==='PENDING_REVIEW'" [attr.data-entry-id]="entry.id">
             <td class="reconciliation-documents">
               @if(entry.invoices.length === 1) {
-                <button class="row-title" (click)="edit.emit({kind:'INVOICE',record:entry.invoices[0]})">{{entry.invoices[0].supplier || 'Fornecedor por identificar'}}</button>
+                <button class="row-title" (click)="edit.emit({kind:'INVOICE',record:entry.invoices[0]})">{{recordName('INVOICE',entry.invoices[0])}}</button>
                 <small>{{entry.invoices[0].number || 'Sem número'}}</small>
               } @else if(entry.invoices.length > 1) {
                 <strong>{{entry.invoices.length}} faturas</strong>
               }
               @if(entry.movements.length === 1) {
-                <button class="row-title bank-description" (click)="edit.emit({kind:'MOVEMENT',record:entry.movements[0]})">{{entry.movements[0].description || 'Descrição por identificar'}}</button>
+                <button class="row-title bank-description" (click)="edit.emit({kind:'MOVEMENT',record:entry.movements[0]})">{{recordName('MOVEMENT',entry.movements[0])}}</button>
               } @else if(entry.movements.length > 1) { <small>{{entry.movements.length}} movimentos</small> }
               <category-tags [categories]="groupCategories(entry)" (filter)="categoryFilter.emit($event)" />
               <button class="text-button expand-entry" [attr.aria-expanded]="expanded().has(entry.id)" [attr.aria-controls]="'detail-'+entry.id" (click)="toggle(entry.id)">{{expanded().has(entry.id)?'Fechar detalhes':'Ver detalhes'}}</button>
@@ -38,40 +38,47 @@
               }
               @if(entry.differences.dates) { <span class="difference-indicator">Datas diferentes</span> }
             </td>
-            <td class="number">{{entry.invoices.length ? money(entry.invoiceTotal) : '—'}}</td>
+            <td class="number">{{entry.invoices.length ? money(entry.pendingReview?entry.invoices[0].total:entry.invoiceTotal) : '—'}}@if(entry.pendingReview&&entry.invoices.length){<small>Provisório</small>}</td>
             <td class="number">
-              @if(entry.debitTotal !== '0.00') { <span>Débito {{money(entry.debitTotal)}}</span> }
-              @if(entry.creditTotal !== '0.00') { <small>Crédito {{money(entry.creditTotal)}}</small> }
-              @if(!entry.movements.length) { — }
+              @if(entry.pendingReview&&entry.movements.length){
+                <span>{{money(entry.movements[0].amount)}}</span><small>{{labels[entry.movements[0].direction] || 'Direção em falta'}} · Provisório</small>
+              }@else{
+                @if(entry.debitTotal !== '0.00') { <span>Débito {{money(entry.debitTotal)}}</span> }
+                @if(entry.creditTotal !== '0.00') { <small>Crédito {{money(entry.creditTotal)}}</small> }
+                @if(!entry.movements.length) { — }
+              }
             </td>
             <td class="number reconciliation-impact">
               <strong [class.negative]="entry.balanceImpact?.startsWith('-')">{{money(entry.balanceImpact)}}</strong>
               @if(entry.spansPeriods) { <small>No período {{money(entry.periodImpact)}}</small> }
               @if(entry.differences.amounts) { <span class="difference-indicator">Valores diferentes</span> }
             </td>
-            <td><span class="badge" [class.warning]="entry.status==='PENDING_REVIEW' || entry.status==='MATCHED_DIFFERENCES'">{{labels[entry.status]}}</span></td>
-            <td><button class="text-button participation-action" [disabled]="saving() || working()" (click)="participation(entry)">{{entry.excluded?'Voltar a incluir':'Excluir do saldo'}}</button></td>
+            <td><span class="badge" [class.warning]="entry.pendingReview || entry.status==='PENDING_REVIEW' || entry.status==='MATCHED_DIFFERENCES'">{{labels[entry.pendingReview?'PENDING_REVIEW':entry.status]}}</span>@if(entry.pendingReview&&entry.excluded){<small>Excluído do saldo</small>}</td>
+            <td><div class="row-actions pending-entry-actions">@if(entry.pendingReview){
+              @for(i of entry.invoices;track i.id){<button class="text-button" (click)="edit.emit({kind:'INVOICE',record:i})">Rever e validar</button>}
+              @for(m of entry.movements;track m.id){<button class="text-button" (click)="edit.emit({kind:'MOVEMENT',record:m})">Rever e validar</button>}
+            }<button class="text-button participation-action" [disabled]="saving() || working()" (click)="participation(entry)">{{entry.excluded?'Voltar a incluir':'Excluir do saldo'}}</button></div></td>
           </tr>
           @if(expanded().has(entry.id)) {
             <tr class="reconciliation-detail" [id]="'detail-'+entry.id"><td colspan="7">
               @if(entry.excluded) { <p>Excluído dos cálculos e da procura de correspondências. O original e o histórico estão preservados.</p> }
-              @if(entry.status==='PENDING_REVIEW') { <p>Fora dos cálculos até os dados serem validados.</p> }
+              @if(entry.pendingReview || entry.status==='PENDING_REVIEW') { <p>Fora dos cálculos até os dados serem validados.</p> }
               @if(entry.spansPeriods) { <p>O saldo do grupo inclui todas as suas datas. Neste período, só contam os registos com data dentro do filtro.</p> }
               <div class="reconciliation-records">
                 @for(i of entry.invoices; track i.id) {
                   <article>
                     <strong>{{labels[i.type]}} · {{i.number || i.supplier}}</strong><span>{{i.issuedOn || 'Data em falta'}} · {{money(i.total)}}</span>
-                    <small>{{i.supplier}} · {{entry.excluded?'Fora dos cálculos':'Por reconciliar '+money(i.remaining)}}</small>
+                    <small>{{i.supplier}} · {{i.reviewStatus==='OPEN'?'Por validar · fora dos cálculos':entry.excluded?'Fora dos cálculos':'Por reconciliar '+money(i.remaining)}}</small>
                     <category-tags [categories]="i.categoryDetails || []" [classification]="i.classification" [editable]="true" (manage)="categories.emit({type:'invoice',record:i})" (filter)="categoryFilter.emit($event)" />
                     <div class="row-actions">
-                      <button class="text-button" (click)="edit.emit({kind:'INVOICE',record:i})">Editar fatura</button>
+                      <button class="text-button" (click)="edit.emit({kind:'INVOICE',record:i})">{{i.reviewStatus==='OPEN'?'Rever e validar':'Editar fatura'}}</button>
                       <button class="text-button danger" (click)="remove.emit({kind:'INVOICE',record:i})">Eliminar fatura</button>
                       @if(i.documentId) { <button class="text-button" (click)="original.emit(i.documentId)">Original da fatura</button> }
                       @if(!entry.excluded && i.reviewStatus !== 'OPEN' && i.remaining !== '0.00') {
                         <button class="text-button" (click)="assign.emit({invoice:i})">Associar movimento</button>
                       }
                     </div>
-                    @if(!entry.excluded) {
+                    @if(!entry.excluded && !entry.pendingReview) {
                       <div class="suggestion-row">
                         @for(c of candidatesFor(i.id); track c.movementId) {
                           <button class="suggestion" (click)="assign.emit({invoice:i,candidate:c})">{{c.movementDescription || c.movementId.slice(0,8)}} · {{money(c.amount)}}<small>{{c.reason}}</small></button>
@@ -89,10 +96,10 @@
                 }
                 @for(m of entry.movements; track m.id) {
                   <article><strong>{{labels[m.direction]}} · {{m.description}}</strong><span>{{m.bookedOn || 'Data em falta'}} · {{money(m.amount)}}</span>
-                    <small>{{labels[m.kind]}} · {{entry.excluded?'Fora dos cálculos':'Por atribuir '+money(m.remaining)}}</small>
+                    <small>{{labels[m.kind]}} · {{m.reviewStatus==='OPEN'?'Por validar · fora dos cálculos':entry.excluded?'Fora dos cálculos':'Por atribuir '+money(m.remaining)}}</small>
                     <category-tags [categories]="m.categoryDetails || []" [classification]="m.classification" [editable]="true" (manage)="categories.emit({type:'movement',record:m})" (filter)="categoryFilter.emit($event)" />
                     <div class="row-actions">
-                      <button class="text-button" (click)="edit.emit({kind:'MOVEMENT',record:m})">Editar movimento</button>
+                      <button class="text-button" (click)="edit.emit({kind:'MOVEMENT',record:m})">{{m.reviewStatus==='OPEN'?'Rever e validar':'Editar movimento'}}</button>
                       <button class="text-button danger" (click)="remove.emit({kind:'MOVEMENT',record:m})">Eliminar movimento</button>
                       @if(m.documentId) { <button class="text-button" (click)="original.emit(m.documentId)">Original do movimento</button> }
                       @if(!entry.excluded && m.reviewStatus !== 'OPEN' && m.remaining !== '0.00') {

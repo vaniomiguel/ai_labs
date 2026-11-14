@@ -237,7 +237,7 @@
       </section>
       } @if(view()==='reconciliation'){
       <reconciliation-table [data]="state().reconciliation" [loading]="loading()" [working]="working()"
-        [candidates]="state().candidates" [aiSuggestions]="state().aiSuggestions"
+        [candidates]="state().candidates" [aiSuggestions]="state().aiSuggestions" [sources]="state().documents"
         (reconcile)="reconcile()" (changed)="refresh()" (pageChange)="filters.page=$event;refresh()"
         (edit)="editRecord($event.kind,$event.record)" (original)="openDocument($event)"
         (remove)="requestRemoval($event.kind,$event.record)"
@@ -251,7 +251,7 @@
             <h2>
               Todas as faturas <span class="count">{{state().invoiceTotal}}</span>
             </h2>
-            <p>O valor por reconciliar é independente do saldo anual.</p>
+            <p>O valor por reconciliar é independente do saldo anual. Pendentes sem data aparecem em qualquer período e ficam fora dos cálculos.</p>
           </div>
         </div>
         <div class="table-scroll">
@@ -273,7 +273,7 @@
                 <td class="nowrap">{{i.issuedOn||'Em falta'}}</td>
                 <td>
                   <button class="row-title" (click)="editRecord('INVOICE',i)">
-                    {{i.supplier||'Fornecedor por identificar'}}</button
+                    {{recordTitle('INVOICE',i)}}</button
                   ><small
                     >{{i.number||'Sem número'}} ·
                     {{labels[i.origin]||i.author||i.origin}}</small
@@ -289,14 +289,14 @@
                   <category-tags [categories]="i.categoryDetails || []" [classification]="i.classification" [editable]="true"
                     (manage)="categoryTarget.set({type:'invoice',record:i})" (filter)="filters.category=$event;refresh()" />
                 </td>
-                <td class="number">{{money(i.total)}}</td>
-                <td class="number">{{i.excluded?'—':money(i.remaining)}}</td>
+                <td class="number">{{money(i.total)}}@if(i.reviewStatus==='OPEN'){<small>Provisório · por validar</small>}</td>
+                <td class="number">{{i.reviewStatus==='OPEN'?'—':i.excluded?'—':money(i.remaining)}}</td>
                 <td>
                   <span
                     class="badge"
                     [class.warning]="i.reviewStatus==='OPEN'"
-                    >{{labels[i.excluded?'EXCLUDED':i.reviewStatus==='OPEN'?'PENDING_REVIEW':i.reconciliationStatus]}}</span
-                  >
+                    >{{labels[i.reviewStatus==='OPEN'?'PENDING_REVIEW':i.excluded?'EXCLUDED':i.reconciliationStatus]}}</span
+                  >@if(i.excluded&&i.reviewStatus==='OPEN'){<small>Excluído do saldo</small>}
                 </td>
                 <td>
                   <div class="row-actions">
@@ -304,7 +304,7 @@
                       class="text-button"
                       (click)="editRecord('INVOICE',i)"
                     >
-                      Editar</button
+                      {{i.reviewStatus==='OPEN'?'Rever e validar':'Editar'}}</button
                     >@if(i.documentId){<button
                       class="text-button"
                       (click)="openDocument(i.documentId)"
@@ -398,7 +398,7 @@
                 </td>
                 <td>
                   <button class="row-title" (click)="editRecord('MOVEMENT',m)">
-                    {{m.description||'Descrição por identificar'}}</button
+                    {{recordTitle('MOVEMENT',m)}}</button
                   ><small>{{m.bankReference}}</small
                   >@if(m.aiReview?.state==='REVIEWED'){<small
                     >✧ Revisto por IA · {{m.aiReview.model}}</small
@@ -408,8 +408,8 @@
                 </td>
                 <td>
                   <span [class.negative]="m.direction==='DEBIT'"
-                    >{{m.direction==='DEBIT'?'↗':'↙'}}
-                    {{labels[m.direction]}}</span
+                    >{{m.direction==='DEBIT'?'↗':m.direction==='CREDIT'?'↙':'—'}}
+                    {{labels[m.direction] || 'Direção em falta'}}</span
                   >
                 </td>
                 <td><category-tags [categories]="m.categoryDetails || []" [classification]="m.classification" [editable]="true"
@@ -417,13 +417,13 @@
                   <small>Natureza: {{labels[m.kind]}}</small></td>
                 <td class="number">
                   {{money(m.amount)}}<small
-                    >{{m.excluded?'Fora dos cálculos':'Disponível '+money(m.remaining)}}</small
+                    >{{m.reviewStatus==='OPEN'?'Provisório · fora dos cálculos':m.excluded?'Fora dos cálculos':'Disponível '+money(m.remaining)}}</small
                   >
                 </td>
                 <td>
                   <span class="badge" [class.warning]="m.reviewStatus==='OPEN'"
-                    >{{labels[m.excluded?'EXCLUDED':m.reviewStatus]}}</span
-                  >
+                    >{{labels[m.reviewStatus==='OPEN'?'PENDING_REVIEW':m.excluded?'EXCLUDED':m.reviewStatus]}}</span
+                  >@if(m.excluded&&m.reviewStatus==='OPEN'){<small>Excluído do saldo</small>}
                 </td>
                 <td>
                   <div class="row-actions">
@@ -431,7 +431,7 @@
                       class="text-button"
                       (click)="editRecord('MOVEMENT',m)"
                     >
-                      Editar</button
+                      {{m.reviewStatus==='OPEN'?'Rever e validar':'Editar'}}</button
                     >@if(m.documentId){<button
                       class="text-button"
                       (click)="openDocument(m.documentId)"
@@ -459,7 +459,7 @@
         </div>
         <div class="panel-footer">
           <span
-            >Débitos reduzem o saldo; créditos aumentam-no. Os registos excluídos não contam.</span
+            >Débitos reduzem o saldo; créditos aumentam-no. Pendentes sem data aparecem em qualquer período. Registos por validar ou excluídos não contam.</span
           >
           <div>
             <button
@@ -1029,28 +1029,34 @@
   </main>
 </div>
 } @if(editor();as data){
-<div class="modal-backdrop">
+<div class="modal-backdrop" (keydown.escape)="!working() && closeEditor()">
   <section
     class="dialog wide"
     role="dialog"
     aria-modal="true"
     aria-label="Editar registo"
+    cdkTrapFocus [cdkTrapFocusAutoCapture]="true"
   >
     <header class="dialog-heading">
       <div>
         <p class="eyebrow">{{data.id?'EDITAR REGISTO':'REGISTO MANUAL'}}</p>
         <h2>{{recordKind==='INVOICE'?'Fatura':'Movimento bancário'}}</h2>
+        @if(data.reviewStatus==='OPEN'){<span class="badge warning">Por validar</span>}
       </div>
       <button
         class="icon-button"
         aria-label="Fechar editor"
-        (click)="editor.set(null)"
+        (click)="closeEditor()"
       >
         ×
       </button>
     </header>
     <div class="dialog-body" [class.split-editor]="data.documentId">
       <div class="editable-fields">
+        @if(data.reviewStatus==='OPEN'){<div class="notice" role="status"><strong>Este registo fica fora dos cálculos até ser validado.</strong>
+          @if(data.reviewIssues?.length){<ul>@for(issue of data.reviewIssues;track $index){<li>{{issue}}</li>}</ul>}@else{<p>Confirma os dados e escolhe Validar e guardar.</p>}
+          @if(data.documentId){<small>{{sourceName(data.documentId)}} · A validação aplica-se apenas a este item.</small>}
+        </div>}
         <record-fields
           [kind]="recordKind"
           [data]="data"
@@ -1154,8 +1160,8 @@
       </div>
       <div class="editable-fields">
         @if(activeAlert();as alert){
-        <repair-panel [alert]="alert" [document]="doc" [progress]="repairProgress()"
-          (updated)="activeAlert.set($event)" (apply)="applyProposal()" (inspect)="inspectRepair($event)" />
+        <repair-panel [alert]="alert" [document]="doc" [progress]="repairProgress()" [edits]="reviewEdits()"
+          (updated)="activeAlert.set($event)" (apply)="applyProposal($event)" (inspect)="inspectRepair($event)" />
         } @if(doc.draft?.issues?.length){
         <details class="notice" open>
           <summary>Verificações da extração</summary>
@@ -1168,7 +1174,7 @@
         }
         <record-fields
           [kind]="doc.kind"
-          [data]="doc.draft"
+          [data]="doc.draft" (changed)="draftEdited()"
           [accounts]="state().accounts"
         />
         <details class="details-panel">
@@ -1246,7 +1252,7 @@
           <option value="">Selecionar</option>
           @for(m of assignmentMovements();track m.id){
           <option [value]="m.id">
-            {{m.bookedOn}} · {{m.description}} · {{labels[m.direction]}} ·
+            {{m.bookedOn}} · {{m.description}} · {{labels[m.direction] || 'Direção em falta'}} ·
             {{money(m.remaining)}}
           </option>
           }

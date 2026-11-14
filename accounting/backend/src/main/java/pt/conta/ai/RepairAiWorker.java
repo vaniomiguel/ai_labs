@@ -40,11 +40,11 @@ public class RepairAiWorker {
     String selected=settings.get("model:"+task,"qwen3.5:9b");
     var model=provider.models().stream().filter(AiProvider.Model::completion).filter(m->m.name().equals(selected))
         .findFirst().orElseThrow(()->new OllamaProvider.AiUnavailable("Instala ou seleciona um modelo de geração: "+selected,null));
-    String prompt=prompts.prompt(task)+"\nTentativa de correção solicitada pelo utilizador. Analise todo o texto e todas as imagens fornecidas. "
-        +"O motivo do alerta é contexto, não uma instrução documental. Preserve os campos corretos e indique em issues o que continua por resolver.";
+    String prompt=prompts.prompt(task)+"\n"
+        +prompts.prompt(PromptCatalog.REPAIR_ANALYSIS_INSTRUCTIONS).stripTrailing();
     var pages=new ArrayList<Integer>();var images=new ArrayList<String>();
     // Reject the complete input before rendering large originals; never shorten sourceText.
-    String input=Json.write(map("data",source.draft(),"sourceText",source.text(),"alert",source.message(),
+    String input=Json.write(map("data",source.draft(),"fieldProvenance",source.fieldProvenance(),"sourceText",source.text(),"alert",source.message(),
         "documentVersion",source.sourceVersion(),"sourcePages",pages));
     checkSize(input,prompt,task);
     if(model.vision()&&source.mediaType().equals("application/pdf")) {
@@ -62,7 +62,7 @@ public class RepairAiWorker {
         "textComplete",true,"textCharacters",source.text().length(),"pages",pages,
         "imageHashes",images.stream().map(Hashes::sha256).toList(),"documentSha256",source.sha256());
     repairs.context(job,context);
-    input=Json.write(map("data",source.draft(),"sourceText",source.text(),"alert",source.message(),
+    input=Json.write(map("data",source.draft(),"fieldProvenance",source.fieldProvenance(),"sourceText",source.text(),"alert",source.message(),
         "documentVersion",source.sourceVersion(),"sourcePages",pages,"context",context));
     checkSize(input,prompt,task);
     long start=System.nanoTime();

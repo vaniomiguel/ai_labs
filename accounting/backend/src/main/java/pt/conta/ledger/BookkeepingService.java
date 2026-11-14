@@ -10,6 +10,8 @@ import org.springframework.transaction.annotation.Transactional;
 import pt.conta.audit.AuditService;
 import pt.conta.bank.*;
 import pt.conta.document.SourceDocument;
+import pt.conta.document.SourceRecordSync;
+import pt.conta.document.FieldProtection;
 import pt.conta.invoice.*;
 import pt.conta.jobs.JobQueue;
 import pt.conta.reconciliation.*;
@@ -24,6 +26,8 @@ public class BookkeepingService {
   private final ThreadLocal<Boolean> batching = ThreadLocal.withInitial(() -> false);
   private final pt.conta.category.CategoryService categories;
   private final Store store;
+  private final FieldProtection protection;
+  private final SourceRecordSync sourceSync;
   private final LedgerService ledger;
   private final AuditService audit;
   private final ReviewService review;
@@ -41,7 +45,9 @@ public class BookkeepingService {
       AccountingProperties properties,
       JobQueue jobs,
       pt.conta.ai.AiReviewStatus aiReview,
-      pt.conta.category.CategoryService categories) {
+      pt.conta.category.CategoryService categories, SourceRecordSync sourceSync, FieldProtection protection) {
+    this.protection = protection;
+    this.sourceSync = sourceSync;
     this.categories = categories;
     this.store = store;
     this.ledger = ledger;
@@ -77,10 +83,31 @@ public class BookkeepingService {
   /** Publishes extraction data through the same validations as a manual edit. */
   public Map<String, Object> saveInvoice(
       UUID id, Map<String, Object> input, String origin, boolean human) {
+    return saveInvoice(id,input,origin,human,Map.of());
+  }
+
+  public Map<String,Object> saveReviewedInvoice(UUID id,Map<String,Object> input,Map<String,Object> decisions) {
+    return saveInvoice(id,input,"MANUAL",true,decisions);
+  }
+
+  private Map<String,Object> saveInvoice(UUID id,Map<String,Object> input,String origin,boolean human,Map<String,Object> decisions) {
     store.lockFinancialWrites();
     Invoice invoice = id == null ? store.add(new Invoice()) : store.get(Invoice.class, id);
     Object before = id == null ? null : invoiceView(invoice);
+    var ownership=Json.object(invoice.fieldProvenance);
+    var previousFields=before==null?new LinkedHashMap<String,Object>():Json.object(Json.write(before));
+    if(!human && id!=null) {
+      if(invoice.manuallyConfirmed)return invoiceView(invoice);
+      var merged=protection.automatic("INVOICE",previousFields,input,ownership);
+      for(String control:List.of("validate","issues","documentId","statementId","version"))if(input.containsKey(control))merged.put(control,input.get(control));
+      input=merged;
+    }
+    ownership=human?protection.human("INVOICE",previousFields,input,ownership,flag(input,"validate"))
+        :protection.automaticOrigins("INVOICE",input,ownership);
+    for(var entry:decisions.entrySet())if(entry.getValue() instanceof Map<?,?> decision&&Boolean.TRUE.equals(decision.get("protected")))ownership.put(entry.getKey(),entry.getValue());
+    invoice.fieldProvenance=Json.write(ownership);
     if (id != null && human) store.checkVersion(invoice, version(input));
+    var sourceEdit = human && !batching.get() ? sourceSync.prepare(invoice, input) : null;
     var previous = invoice.reviewStatus;
     invoice.issuedOn = date(input, "issuedOn");
     invoice.dueOn = date(input, "dueOn");
@@ -143,13 +170,7 @@ public class BookkeepingService {
     categories.recordChanged("invoice", invoice.id, input, human);
     categories.refreshInheritance();
     store.flush();
-    if (human && invoice.documentId != null) {
-      var doc = store.get(SourceDocument.class, invoice.documentId);
-      if (doc.kind.equals("INVOICE")) {
-        doc.draft = Json.write(invoiceView(invoice));
-        doc.status = invoice.reviewStatus == ReviewStatus.OPEN ? "OPEN" : "DONE";
-      }
-    }
+    sourceSync.sync(sourceEdit, invoice, errors);
     audit.record(
         id == null ? "CREATE" : "UPDATE", "invoice", invoice.id, before, invoiceView(invoice));
     return invoiceView(invoice);
@@ -165,10 +186,31 @@ public class BookkeepingService {
   /** Publishes a parsed movement, retaining source statement and document identities. */
   public Map<String, Object> saveMovement(
       UUID id, Map<String, Object> input, String origin, boolean human) {
+    return saveMovement(id,input,origin,human,Map.of());
+  }
+
+  public Map<String,Object> saveReviewedMovement(UUID id,Map<String,Object> input,Map<String,Object> decisions) {
+    return saveMovement(id,input,"MANUAL",true,decisions);
+  }
+
+  private Map<String,Object> saveMovement(UUID id,Map<String,Object> input,String origin,boolean human,Map<String,Object> decisions) {
     store.lockFinancialWrites();
     var movement = id == null ? store.add(new BankMovement()) : store.get(BankMovement.class, id);
     Object before = id == null ? null : movementView(movement);
+    var ownership=Json.object(movement.fieldProvenance);
+    var previousFields=before==null?new LinkedHashMap<String,Object>():Json.object(Json.write(before));
+    if(!human && id!=null) {
+      if(movement.manuallyConfirmed)return movementView(movement);
+      var merged=protection.automatic("STATEMENT",previousFields,input,ownership);
+      for(String control:List.of("validate","issues","documentId","statementId","version"))if(input.containsKey(control))merged.put(control,input.get(control));
+      input=merged;
+    }
+    ownership=human?protection.human("STATEMENT",previousFields,input,ownership,flag(input,"validate"))
+        :protection.automaticOrigins("STATEMENT",input,ownership);
+    for(var entry:decisions.entrySet())if(entry.getValue() instanceof Map<?,?> decision&&Boolean.TRUE.equals(decision.get("protected")))ownership.put(entry.getKey(),entry.getValue());
+    movement.fieldProvenance=Json.write(ownership);
     if (id != null && human) store.checkVersion(movement, version(input));
+    var sourceEdit = human && !batching.get() ? sourceSync.prepare(movement, input) : null;
     var previous = movement.reviewStatus;
     movement.accountId = uuid(input, "accountId");
     if (movement.accountId != null) store.get(BankAccount.class, movement.accountId);
@@ -212,9 +254,6 @@ public class BookkeepingService {
     if (!batching.get() && movement.statementId != null && !errors.isEmpty()) {
       var statement = store.get(BankStatement.class, movement.statementId);
       statement.validated = false;
-      store.all(BankMovement.class).stream()
-          .filter(m -> movement.statementId.equals(m.statementId))
-          .forEach(m -> m.reviewStatus = ReviewStatus.OPEN);
       review.open(
           statement.documentId,
           "document",
@@ -230,19 +269,7 @@ public class BookkeepingService {
     categories.recordChanged("movement", movement.id, input, human);
     store.flush();
     jobs.enqueue("REVIEW_MOVEMENT", movement.id, movement.version, "{}");
-    if (!batching.get() && human && movement.statementId != null) {
-      var statement = store.get(BankStatement.class, movement.statementId);
-      var doc = store.get(SourceDocument.class, statement.documentId);
-      var draft = Json.object(doc.draft);
-      draft.put(
-          "movements",
-          store.all(BankMovement.class).stream()
-              .filter(m -> movement.statementId.equals(m.statementId) && !m.deleted)
-              .map(this::movementView)
-              .toList());
-      doc.draft = Json.write(draft);
-      doc.status = statement.validated ? "DONE" : "OPEN";
-    }
+    sourceSync.sync(sourceEdit, movement, errors);
     audit.record(
         id == null ? "CREATE" : "UPDATE", "movement", movement.id, before, movementView(movement));
     return movementView(movement);
@@ -313,7 +340,7 @@ public class BookkeepingService {
     return errors;
   }
 
-  /** Reports required movement data, statement integrity and classification-direction conflicts. */
+  /** Reports this movement's required data and classification-direction conflicts. */
   public List<String> movementErrors(BankMovement movement) {
     var errors = new ArrayList<String>();
     if (movement.accountId == null) errors.add("Falta a conta bancária");
@@ -328,10 +355,6 @@ public class BookkeepingService {
         && movement.direction != Direction.DEBIT) errors.add("A classificação exige um débito");
     if (Set.of(MovementKind.RETURN, MovementKind.REFUND).contains(movement.kind)
         && movement.direction != Direction.CREDIT) errors.add("A classificação exige um crédito");
-    if (movement.statementId != null) {
-      var statement = store.get(BankStatement.class, movement.statementId);
-      if (!statement.validated) errors.add("O extrato tem inconsistências por resolver");
-    }
     return errors;
   }
 
@@ -756,12 +779,18 @@ public class BookkeepingService {
         i.relatedInvoiceId,
         "documentId",
         i.documentId,
+        "documentVersion",
+        i.documentId == null ? null : store.get(SourceDocument.class, i.documentId).version,
+        "reviewIssues",
+        i.reviewStatus == ReviewStatus.OPEN ? invoiceErrors(i) : List.of(),
         "reviewStatus",
         i.reviewStatus,
         "excluded",
         i.excluded,
         "origin",
         i.origin,
+        "fieldProvenance",
+        Json.value(i.fieldProvenance),
         "author",
         i.author,
         "updatedAt",
@@ -777,7 +806,7 @@ public class BookkeepingService {
         "lines",
         lines,
         "remaining",
-        Money.text(i.total == null ? null : remaining),
+        Money.text(i.total == null || i.reviewStatus == ReviewStatus.OPEN ? null : remaining),
         "reconciliationStatus",
         i.excluded ? "EXCLUDED" : i.reviewStatus == ReviewStatus.OPEN ? "PENDING_REVIEW"
             : i.total != null && remaining.signum() == 0
@@ -827,18 +856,24 @@ public class BookkeepingService {
         categories.details("movement", m.id).stream().map(c -> c.get("id")).toList(),
         "classification",
         categories.view("movement", m.id),
+        "documentVersion",
+        m.documentId == null ? null : store.get(SourceDocument.class, m.documentId).version,
+        "reviewIssues",
+        m.reviewStatus == ReviewStatus.OPEN ? movementErrors(m) : List.of(),
         "reviewStatus",
         m.reviewStatus,
         "excluded",
         m.excluded,
         "origin",
         m.origin,
+        "fieldProvenance",
+        Json.value(m.fieldProvenance),
         "author",
         m.author,
         "updatedAt",
         m.updatedAt,
         "remaining",
-        Money.text(m.amount == null ? null : remaining(m)),
+        Money.text(m.amount == null || m.reviewStatus == ReviewStatus.OPEN ? null : remaining(m)),
         "aiReview",
         aiReview.describe(m.id, m.version));
   }

@@ -146,7 +146,8 @@
             "$ref": "#/components/schemas/Decimal"
           },
           "remaining": {
-            "$ref": "#/components/schemas/Decimal"
+            "$ref": "#/components/schemas/Decimal",
+            "description": "Montante disponível para reconciliação; null enquanto reviewStatus=OPEN ou quando o montante é desconhecido."
           },
           "version": {
             "type": "integer"
@@ -224,6 +225,30 @@
           "classification": {
             "$ref": "#/components/schemas/Classification",
             "readOnly": true
+          },
+          "documentVersion": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "minimum": 0,
+            "description": "Versão atual do original associado. Quando fornecida numa edição, deve coincidir com a versão guardada; clientes antigos podem omitir."
+          },
+          "reviewIssues": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "readOnly": true,
+            "description": "Verificações do registo que aguardam correção; não inclui o estado de outros itens do original."
+          },
+          "fieldProvenance": {
+            "type": "object",
+            "readOnly": true,
+            "additionalProperties": {
+              "$ref": "#/components/schemas/FieldDecision"
+            },
+            "description": "Decisões por campo. Os valores humanos, incluindo limpezas explícitas, não podem ser substituídos automaticamente."
           }
         }
       },
@@ -334,7 +359,8 @@
             "format": "date-time"
           },
           "remaining": {
-            "$ref": "#/components/schemas/Decimal"
+            "$ref": "#/components/schemas/Decimal",
+            "description": "Montante disponível para reconciliação; null enquanto reviewStatus=OPEN ou quando o montante é desconhecido."
           },
           "reviewStatus": {
             "type": "string"
@@ -369,6 +395,30 @@
           "classification": {
             "$ref": "#/components/schemas/Classification",
             "readOnly": true
+          },
+          "documentVersion": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "minimum": 0,
+            "description": "Versão atual do original associado. Quando fornecida numa edição, deve coincidir com a versão guardada; clientes antigos podem omitir."
+          },
+          "reviewIssues": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "readOnly": true,
+            "description": "Verificações do registo que aguardam correção; não inclui o estado de outros itens do original."
+          },
+          "fieldProvenance": {
+            "type": "object",
+            "readOnly": true,
+            "additionalProperties": {
+              "$ref": "#/components/schemas/FieldDecision"
+            },
+            "description": "Decisões por campo. Os valores humanos, incluindo limpezas explícitas, não podem ser substituídos automaticamente."
           }
         }
       },
@@ -655,6 +705,14 @@
               },
               "draft": {
                 "type": "object"
+              },
+              "fieldProvenance": {
+                "type": "object",
+                "readOnly": true,
+                "additionalProperties": {
+                  "type": "object"
+                },
+                "description": "Proveniência por identidade persistente do item; root identifica uma fatura única. Nunca usa a posição da linha."
               }
             }
           }
@@ -976,7 +1034,8 @@
           "creditTotal",
           "balanceImpact",
           "periodImpact",
-          "spansPeriods"
+          "spansPeriods",
+          "pendingReview"
         ],
         "properties": {
           "id": {
@@ -1061,6 +1120,10 @@
               "null"
             ],
             "format": "date"
+          },
+          "pendingReview": {
+            "type": "boolean",
+            "description": "Há um registo OPEN nesta entrada; independente de excluded. Os seus valores são provisórios e o impacto financeiro fica null."
           }
         }
       },
@@ -1587,7 +1650,8 @@
             "minimum": 0
           },
           "canApply": {
-            "type": "boolean"
+            "type": "boolean",
+            "description": "Compatibilidade: possibilidade de aplicar e validar complementos sem substituir valores existentes; a pré-visualização reavalia as escolhas locais."
           },
           "blockingIssues": {
             "type": "array",
@@ -1625,6 +1689,12 @@
               "null"
             ],
             "format": "date-time"
+          },
+          "canApplyDraft": {
+            "type": "boolean"
+          },
+          "canValidate": {
+            "type": "boolean"
           }
         },
         "required": [
@@ -1678,7 +1748,8 @@
             "type": [
               "object",
               "null"
-            ]
+            ],
+            "description": "Proposta guardada, com draft, documentVersion, jobId quando existe tarefa, evidence, changes (FieldSuggestion) e eventual structureIssue. Não altera dados financeiros."
           },
           "repair": {
             "oneOf": [
@@ -1711,6 +1782,156 @@
           "status",
           "proposal",
           "repair"
+        ]
+      },
+      "FieldDecision": {
+        "type": "object",
+        "readOnly": true,
+        "properties": {
+          "origin": {
+            "enum": [
+              "AUTOMATIC",
+              "HUMAN_EDIT",
+              "HUMAN_CONFIRMED",
+              "HUMAN_ACCEPTED_AI",
+              "HUMAN_LEGACY"
+            ]
+          },
+          "protected": {
+            "type": "boolean"
+          },
+          "actor": {
+            "type": "string"
+          },
+          "at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "proposalId": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "origin",
+          "protected",
+          "actor",
+          "at"
+        ]
+      },
+      "FieldSuggestion": {
+        "type": "object",
+        "properties": {
+          "key": {
+            "type": "string"
+          },
+          "itemId": {
+            "type": "string"
+          },
+          "itemIndex": {
+            "type": "integer"
+          },
+          "field": {
+            "type": "string"
+          },
+          "current": {},
+          "proposed": {},
+          "protected": {
+            "type": "boolean"
+          },
+          "kind": {
+            "enum": [
+              "COMPLEMENT",
+              "CONFLICT"
+            ]
+          },
+          "proposalIndex": {
+            "type": "integer",
+            "description": "Posição no resultado original da IA para ligar a evidência após reordenar itens."
+          }
+        },
+        "required": [
+          "key",
+          "itemId",
+          "itemIndex",
+          "field",
+          "current",
+          "proposed",
+          "protected",
+          "kind"
+        ]
+      },
+      "RepairApply": {
+        "type": "object",
+        "properties": {
+          "documentVersion": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "proposalId": {
+            "type": "string"
+          },
+          "draft": {
+            "type": "object",
+            "description": "Edições locais; apenas os campos editáveis dos itens selecionados são considerados."
+          },
+          "acceptedFields": {
+            "type": "array",
+            "uniqueItems": true,
+            "items": {
+              "type": "string"
+            },
+            "description": "Chaves das sugestões aceites explicitamente. Valores vêm exclusivamente da proposta guardada no servidor."
+          },
+          "selectedItems": {
+            "type": "array",
+            "uniqueItems": true,
+            "items": {
+              "type": "string"
+            }
+          },
+          "validate": {
+            "type": "boolean",
+            "default": false
+          }
+        },
+        "required": [
+          "documentVersion",
+          "proposalId"
+        ]
+      },
+      "RepairPreview": {
+        "type": "object",
+        "properties": {
+          "draft": {
+            "type": "object"
+          },
+          "changes": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/FieldSuggestion"
+            }
+          },
+          "blockingIssues": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "canApplyDraft": {
+            "type": "boolean"
+          },
+          "canValidate": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "changes",
+          "blockingIssues",
+          "canApplyDraft",
+          "canValidate"
         ]
       }
     },
@@ -1758,35 +1979,40 @@
             "in": "query",
             "schema": {
               "type": "integer"
-            }
+            },
+            "description": "Filtra registos com data; registos OPEN sem data mantêm-se visíveis."
           },
           {
             "name": "month",
             "in": "query",
             "schema": {
               "type": "integer"
-            }
+            },
+            "description": "Filtra registos com data; registos OPEN sem data mantêm-se visíveis."
           },
           {
             "name": "day",
             "in": "query",
             "schema": {
               "type": "integer"
-            }
+            },
+            "description": "Filtra registos com data; registos OPEN sem data mantêm-se visíveis."
           },
           {
             "name": "from",
             "in": "query",
             "schema": {
               "type": "string"
-            }
+            },
+            "description": "Filtra registos com data; registos OPEN sem data mantêm-se visíveis."
           },
           {
             "name": "to",
             "in": "query",
             "schema": {
               "type": "string"
-            }
+            },
+            "description": "Filtra registos com data; registos OPEN sem data mantêm-se visíveis."
           },
           {
             "name": "q",
@@ -1859,7 +2085,8 @@
               "type": "integer"
             }
           }
-        ]
+        ],
+        "description": "Inclui registos OPEN sem data em qualquer período, antes dos registos datados. Outros filtros mantêm-se aplicáveis. Pendentes entram na paginação, sem participar nos cálculos ou correspondências."
       },
       "post": {
         "summary": "Criar registo manual ou rascunho",
@@ -1973,7 +2200,8 @@
               }
             }
           }
-        }
+        },
+        "description": "Edita apenas este registo. documentVersion, quando fornecida, protege o original contra alterações concorrentes. A sincronização do rascunho preserva os restantes itens e validações."
       },
       "delete": {
         "summary": "Eliminar logicamente e anular efeitos",
@@ -2048,35 +2276,40 @@
             "in": "query",
             "schema": {
               "type": "integer"
-            }
+            },
+            "description": "Filtra registos com data; registos OPEN sem data mantêm-se visíveis."
           },
           {
             "name": "month",
             "in": "query",
             "schema": {
               "type": "integer"
-            }
+            },
+            "description": "Filtra registos com data; registos OPEN sem data mantêm-se visíveis."
           },
           {
             "name": "day",
             "in": "query",
             "schema": {
               "type": "integer"
-            }
+            },
+            "description": "Filtra registos com data; registos OPEN sem data mantêm-se visíveis."
           },
           {
             "name": "from",
             "in": "query",
             "schema": {
               "type": "string"
-            }
+            },
+            "description": "Filtra registos com data; registos OPEN sem data mantêm-se visíveis."
           },
           {
             "name": "to",
             "in": "query",
             "schema": {
               "type": "string"
-            }
+            },
+            "description": "Filtra registos com data; registos OPEN sem data mantêm-se visíveis."
           },
           {
             "name": "q",
@@ -2149,7 +2382,8 @@
               "type": "integer"
             }
           }
-        ]
+        ],
+        "description": "Inclui registos OPEN sem data em qualquer período, antes dos registos datados. Outros filtros mantêm-se aplicáveis. Pendentes entram na paginação, sem participar nos cálculos ou correspondências."
       },
       "post": {
         "summary": "Criar registo manual ou rascunho",
@@ -2263,7 +2497,8 @@
               }
             }
           }
-        }
+        },
+        "description": "Edita apenas este registo. documentVersion, quando fornecida, protege o original contra alterações concorrentes. A sincronização do rascunho preserva os restantes itens e validações."
       },
       "delete": {
         "summary": "Eliminar logicamente e anular efeitos",
@@ -3214,10 +3449,17 @@
     },
     "/alerts/{id}/apply": {
       "post": {
-        "summary": "Confirmar proposta atual",
+        "summary": "Aplicar complementos e sugestões explicitamente aceites aos itens selecionados",
         "responses": {
           "200": {
-            "description": "Operação concluída"
+            "description": "Documento atualizado; irmãos e registos publicados preservados ao guardar rascunho",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Document"
+                }
+              }
+            }
           },
           "401": {
             "description": "Sessão necessária"
@@ -3245,7 +3487,18 @@
               "type": "string"
             }
           }
-        ]
+        ],
+        "description": "O servidor preserva campos humanos, valida identidades e versões e deriva os valores da proposta guardada. validate=false permite rascunhos incompletos. Pedidos antigos sem corpo só autorizam complementos seguros e mantêm a validação obrigatória.",
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RepairApply"
+              }
+            }
+          }
+        }
       }
     },
     "/jobs": {
@@ -3967,42 +4220,47 @@
     "/reconciliation/entries": {
       "get": {
         "summary": "Grupos completos e registos sem correspondência, incluindo excluídos",
-        "description": "Os grupos são formados antes dos filtros e da paginação. Basta uma data do grupo pertencer ao período; todos os membros são devolvidos. balanceImpact abrange o grupo; periodImpact aplica as datas do filtro. participation pode ser active ou excluded; por omissão inclui ambos. Valores pendentes de validação têm impacto null.",
+        "description": "Inclui registos OPEN sem data em qualquer período, antes dos registos datados. Outros filtros mantêm-se aplicáveis. Pendentes entram na paginação, sem participar nos cálculos ou correspondências.",
         "parameters": [
           {
             "name": "year",
             "in": "query",
             "schema": {
               "type": "integer"
-            }
+            },
+            "description": "Filtra registos com data; registos OPEN sem data mantêm-se visíveis."
           },
           {
             "name": "month",
             "in": "query",
             "schema": {
               "type": "integer"
-            }
+            },
+            "description": "Filtra registos com data; registos OPEN sem data mantêm-se visíveis."
           },
           {
             "name": "day",
             "in": "query",
             "schema": {
               "type": "integer"
-            }
+            },
+            "description": "Filtra registos com data; registos OPEN sem data mantêm-se visíveis."
           },
           {
             "name": "from",
             "in": "query",
             "schema": {
               "type": "string"
-            }
+            },
+            "description": "Filtra registos com data; registos OPEN sem data mantêm-se visíveis."
           },
           {
             "name": "to",
             "in": "query",
             "schema": {
               "type": "string"
-            }
+            },
+            "description": "Filtra registos com data; registos OPEN sem data mantêm-se visíveis."
           },
           {
             "name": "q",
@@ -4575,6 +4833,49 @@
                 }
               }
             }
+          }
+        }
+      }
+    },
+    "/alerts/{id}/preview": {
+      "post": {
+        "summary": "Pré-visualizar escolhas sem alterar dados",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RepairApply"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Diferenças e validações do resultado combinado",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RepairPreview"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Documento ou proposta desatualizados"
+          },
+          "422": {
+            "description": "Seleção inválida"
           }
         }
       }

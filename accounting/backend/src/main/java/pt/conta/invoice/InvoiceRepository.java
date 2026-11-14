@@ -14,7 +14,7 @@ public interface InvoiceRepository extends JpaRepository<Invoice, UUID> {
             to_tsvector('portuguese',coalesce(i.supplier,'') || ' ' || coalesce(i.description,'') || ' ' || coalesce(i.number,'')) @@ plainto_tsquery('portuguese',:query)
             or i.supplier ilike :literal or i.number ilike :literal or i.description ilike :literal
             or exists(select 1 from source_document d where d.id=i.document_id and
-              (to_tsvector('portuguese',d.text) @@ plainto_tsquery('portuguese',:query) or d.text ilike :literal)))
+              (d.filename ilike :literal or to_tsvector('portuguese',d.text) @@ plainto_tsquery('portuguese',:query) or d.text ilike :literal)))
           """,
       nativeQuery = true)
   List<UUID> search(@Param("query") String query, @Param("literal") String literal);

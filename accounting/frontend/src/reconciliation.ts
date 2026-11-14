@@ -20,6 +20,7 @@ export class ReconciliationTable {
   readonly working = input(false);
   readonly candidates = input<any[]>([]);
   readonly aiSuggestions = input<any[]>([]);
+  readonly sources = input<any[]>([]);
   readonly reconcile = output<void>();
   readonly changed = output<void>();
   readonly pageChange = output<number>();
@@ -38,6 +39,11 @@ export class ReconciliationTable {
   readonly error = signal("");
   readonly money = euros;
   readonly labels = labels;
+
+  recordName(kind:string,row:any) {
+    return (kind==='INVOICE'?row.supplier:row.description) || this.sources().find(d=>d.id===row.documentId)?.filename
+      || (kind==='INVOICE'?'Fornecedor por identificar':'Descrição por identificar');
+  }
 
   groupCategories(entry: ReconciliationEntry) {
     return [...new Map([...entry.invoices,...entry.movements].flatMap(r => r.categoryDetails ?? []).map(c => [c.id,c])).values()];
