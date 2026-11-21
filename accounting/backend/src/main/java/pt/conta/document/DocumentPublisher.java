@@ -13,7 +13,6 @@ import pt.conta.bank.*;
 import pt.conta.history.HistoryService;
 import pt.conta.invoice.Invoice;
 import pt.conta.ledger.BookkeepingService;
-import pt.conta.reconciliation.MatchingRules;
 import pt.conta.review.ReviewService;
 import pt.conta.shared.*;
 import pt.conta.shared.Types.*;
@@ -166,7 +165,7 @@ public class DocumentPublisher {
       for(String derived:List.of("categories","categoryDetails","categoryIds","classification","excluded","fieldProvenance"))input.remove(derived);
       var decisions=protection.rowMetadata(provenance,key);UUID record=uuid(row,"id");
       if(doc.kind.equals("INVOICE")) {
-        Invoice existing=record==null?store.all(Invoice.class).stream().filter(i->doc.id.equals(i.documentId)&&!i.deleted).filter(i->protection.root(doc.kind,draft)).findFirst().orElse(null):store.get(Invoice.class,record);
+        Invoice existing=record==null?store.all(Invoice.class).stream().filter(i->doc.id.equals(i.documentId)&&!i.deleted).filter(_->protection.root(doc.kind,draft)).findFirst().orElse(null):store.get(Invoice.class,record);
         if(existing!=null){if(!doc.id.equals(existing.documentId))throw protection.ambiguous();input.put("version",existing.version);}
         if(validate||existing==null||existing.reviewStatus==ReviewStatus.OPEN) {
           var result=book.saveReviewedInvoice(existing==null?null:existing.id,input,decisions);
@@ -216,27 +215,15 @@ public class DocumentPublisher {
     draft.put("documentId", doc.id.toString());
     boolean issues = draft.get("issues") instanceof List<?> list && !list.isEmpty();
     if (!human && issues) draft.put("validate", false);
-    if (doc.kind.equals("HISTORY")) {
-      if (human) history.validateDraft(draft);
-      history.importRows(doc, draft);
-      doc.status = human || !issues ? "DONE" : "OPEN";
-    } else if (doc.kind.equals("INVOICE")) {
-      if (!rows(draft, "invoices").isEmpty()) {
-        publishInvoices(doc, draft, origin, human);
-      } else {
-        var existing =
-            store.all(Invoice.class).stream()
-                .filter(i -> Objects.equals(i.documentId, doc.id) && !i.deleted)
-                .findFirst();
-        existing.ifPresent(i -> draft.put("version", i.version));
-        var published = new ArrayList<Map<String,Object>>();
-        book.batch(() -> published.add(book.saveInvoice(existing.map(i -> i.id).orElse(null), draft, origin, human)));
-        var result = published.getFirst();
-        draft.put("id",result.get("id").toString());doc.draft=Json.write(draft);
-        doc.status = result.get("reviewStatus") == ReviewStatus.OPEN ? "OPEN" : "DONE";
+    switch (doc.kind) {
+      case "HISTORY" -> {
+        if (human) history.validateDraft(draft);
+        history.importRows(doc, draft);
+        doc.status = human || !issues ? "DONE" : "OPEN";
       }
-    } else if (doc.kind.equals("STATEMENT")) {
-      publishStatement(doc, draft, origin, human);
+      case "INVOICE" -> publishInvoiceDraft(doc, draft, origin, human);
+      case "STATEMENT" -> publishStatement(doc, draft, origin, human);
+      default -> { }
     }
     if (issues && !human)
       review.open(
@@ -271,6 +258,25 @@ public class DocumentPublisher {
   }
 
   /** Publishes independent receipts in one original as separate identities, never summed lines. */
+  private void publishInvoiceDraft(
+      SourceDocument doc, Map<String, Object> draft, String origin, boolean human) {
+    if (!rows(draft, "invoices").isEmpty()) {
+      publishInvoices(doc, draft, origin, human);
+      return;
+    }
+    var existing =
+        store.all(Invoice.class).stream()
+            .filter(i -> Objects.equals(i.documentId, doc.id) && !i.deleted)
+            .findFirst();
+    existing.ifPresent(i -> draft.put("version", i.version));
+    var published = new ArrayList<Map<String, Object>>();
+    book.batch(() -> published.add(book.saveInvoice(existing.map(i -> i.id).orElse(null), draft, origin, human)));
+    var result = published.getFirst();
+    draft.put("id", result.get("id").toString());
+    doc.draft = Json.write(draft);
+    doc.status = result.get("reviewStatus") == ReviewStatus.OPEN ? "OPEN" : "DONE";
+  }
+
   private void publishInvoices(
       SourceDocument doc, Map<String, Object> draft, String origin, boolean human) {
     var existing =

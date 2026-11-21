@@ -114,7 +114,7 @@ test("manual merges and their undo preserve later assignments and visible histor
 });
 
 test("category editor works on a small screen and restores keyboard focus",async({page},testInfo)=>{
-  const record=await movement(page,2084,"E2E-CATEGORIA-MOBILE");
+  await movement(page,2084,"E2E-CATEGORIA-MOBILE");
   await page.setViewportSize({width:390,height:844});await open(page,"↗ Movimentos",2084);
   const row=page.locator("tr").filter({hasText:"E2E-CATEGORIA-MOBILE"});await row.getByRole("button",{name:"Editar categorias",exact:true}).click();
   const dialog=page.getByRole("dialog",{name:"Categorias do movimento",exact:true});await expect(dialog).toBeVisible();

@@ -22,7 +22,8 @@
     </div>}
     <div class="category-catalog-list">
       @for(c of visible();track c.id){<article class="category-catalog-row" [class.excluded-entry]="c.archived">
-        <input type="checkbox" [checked]="selected().has(c.id)" [disabled]="c.archived||c.origin==='REFERENCE'" [attr.aria-label]="'Selecionar '+c.name" (change)="toggle(c.id)" />
+        <input type="checkbox" id="category-select-{{c.id}}" [checked]="selected().has(c.id)" [disabled]="c.archived||c.origin==='REFERENCE'" (change)="toggle(c.id)" />
+        <label class="sr-only" for="category-select-{{c.id}}">Selecionar {{c.name}}</label>
         <div><strong>{{c.path}}</strong><small>{{c.origin==='REFERENCE'?'Referência SNC':c.protected?'Protegida · utilizador':'Evolução automática'}} · {{c.usage}} atribuições{{c.archived?' · Arquivada':''}}</small>
           @if(c.description){<small>{{c.description}}</small>}@if(c.referenceCode){<small>SNC {{c.referenceCode}} · {{c.referenceVersion}} · <a [href]="c.referenceSource" target="_blank" rel="noopener">Fonte</a></small>}
           @if(c.mergedIntoId){<small>Encaminhada para {{categoryName(c.mergedIntoId)}}</small>}

@@ -1,6 +1,7 @@
 package pt.conta;
 
 import static org.assertj.core.api.Assertions.*;
+import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static pt.conta.shared.Inputs.*;
 
 import io.zonky.test.db.postgres.embedded.EmbeddedPostgres;
@@ -141,7 +142,8 @@ class FieldProtectionIntegrationTest {
     var initial=invoice("LOCAL");initial.put("supplier",null);var doc=document("INVOICE",initial);
     var ai=invoice("LOCAL");ai.put("supplier","Fornecedor IA");var alert=proposal(doc,ai);var body=request(doc,alert,List.of(),List.of("root"),false);
     var local=Json.object(doc.draft);local.put("supplier","Fornecedor escrito agora");body.put("draft",local);
-    var preview=repairs.preview(alert.id,body);assertThat(((List<?>)preview.get("changes")).toString()).contains("CONFLICT","protected=true");
+    var preview=repairs.preview(alert.id,body);
+    assertThat(assertInstanceOf(List.class, preview.get("changes")).toString()).contains("CONFLICT","protected=true");
     repairs.apply(alert.id,body,documents);assertThat(record(doc).supplier).isEqualTo("Fornecedor escrito agora");
   }
 
@@ -152,7 +154,17 @@ class FieldProtectionIntegrationTest {
     var ai=protection.copy(Json.object(doc.draft));rows(ai,"invoices").forEach(r->r.put("issuedOn","2026-01-02"));var reversed=new ArrayList<>(rows(ai,"invoices"));Collections.reverse(reversed);ai.put("invoices",reversed);
     var alert=proposal(doc,ai);
     var preview=repairs.preview(alert.id,request(doc,alert,List.of(),List.of(a),true));
-    assertThat(((List<Map<String,Object>>)preview.get("changes")).stream().filter(c->c.get("itemId").equals(a)).findFirst().orElseThrow()).containsEntry("proposalIndex",1);
+    assertThat(preview).containsOnlyKeys("draft", "changes", "fieldProvenance", "selectedItems",
+        "accepted", "blockingIssues", "canApplyDraft", "canValidate");
+    assertThat(Json.read(Json.write(preview)).path("selectedItems").isArray()).isTrue();
+    assertThat(preview).containsEntry("selectedItems", Set.of(a))
+        .containsEntry("canApplyDraft", true).containsEntry("canValidate", true);
+    List<?> changes = assertInstanceOf(List.class, preview.get("changes"));
+    Map<?, ?> selectedChange = changes.stream()
+        .map(change -> assertInstanceOf(Map.class, change))
+        .filter(change -> a.equals(change.get("itemId")))
+        .findFirst().orElseThrow();
+    assertThat(selectedChange.get("proposalIndex")).isEqualTo(1);
     repairs.apply(alert.id,request(doc,alert,List.of(),List.of(a),true),documents);
     assertThat(store.get(Invoice.class,UUID.fromString(a)).reviewStatus.name()).isEqualTo("CORRECTED");
     assertThat(store.get(Invoice.class,UUID.fromString(b)).reviewStatus.name()).isEqualTo("OPEN");
@@ -194,7 +206,7 @@ class FieldProtectionIntegrationTest {
 
   @Test void ambiguousReprocessingKeepsAllExistingChildrenAndRaisesReview() {
     var doc=document("INVOICE",map("invoices",List.of(invoice("OLD-A"),invoice("OLD-B")),"validate",false));
-    String before=doc.draft;var replacement=map("invoices",List.of(invoice("NEW-A"),invoice("NEW-B")),"validate",false);
+    var replacement=map("invoices",List.of(invoice("NEW-A"),invoice("NEW-B")),"validate",false);
     publisher.aiExtracted(doc.id,doc.version,replacement,"[]",List.of());
     assertThat(rows(Json.object(doc.draft),"invoices")).extracting(r->r.get("number")).containsExactly("OLD-A","OLD-B");
     assertThat(store.all(Invoice.class)).hasSize(2);assertThat(store.all(Alert.class)).anySatisfy(a->assertThat(a.code).isEqualTo("AI_STRUCTURE_REVIEW"));

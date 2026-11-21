@@ -211,12 +211,15 @@ public class PortugueseDocumentParser {
 
   /** Blanks only an unreadable date while retaining the bank row's description and amount. */
   private String safeBankDate(String text, List<String> issues) {
+    LocalDate parsed;
     try {
-      return date(text, null).toString();
-    } catch (Exception e) {
-      issues.add("Data bancária inválida: " + text);
-      return null;
+      parsed = date(text, null);
+    } catch (DateTimeException | NumberFormatException e) {
+      parsed = null;
     }
+    if (parsed != null) return parsed.toString();
+    issues.add("Data bancária inválida: " + text);
+    return null;
   }
 
   private String unique(String text, String regex, List<String> issues, String field) {

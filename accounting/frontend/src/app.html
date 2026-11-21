@@ -759,6 +759,7 @@
                   <span class="badge">{{labels[row.status]}}</span
                   >@if(row.invoiceId){<small>Fatura associada</small
                   >}@else{<select
+                    aria-label="Associar fatura"
                     #linkChoice
                     (change)="link(row,linkChoice.value)"
                   >

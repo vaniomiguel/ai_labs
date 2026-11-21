@@ -7,6 +7,11 @@ const jobId = "e245b1ab-5314-4ad8-a91f-c75510594004";
 const invoicePath = `/invoice/${invoiceId}/edit`;
 const alertPath = `/alert/${alertId}/review`;
 const draft = { supplier: "Fornecedor da ligação", type: "INVOICE", currency: "EUR", lines: [] };
+const jobsPageUrl = "**/api/v1/jobs/page?*";
+const emptyJobsPage = {
+  items: [], total: 0, page: 0, size: 50,
+  counts: { QUEUED: 0, RUNNING: 0, WAITING: 0, DONE: 0, FAILED: 0, active: 0, total: 0 },
+};
 
 async function signIn(page: Page) {
   const csrf = await (await page.request.get("/api/v1/csrf")).json();
@@ -94,6 +99,67 @@ test("a job opens the canonical record editor and closing restores the job", asy
   await page.getByRole("button", { name: "Fechar editor" }).click();
   await expect(page).toHaveURL(path);
   await expect(page.getByRole("button", { name: "Consultar registo associado →" })).toBeVisible();
+});
+
+test("a rejected processing page shows the error and allows retry", async ({ page }) => {
+  await signIn(page);
+  await page.route(jobsPageUrl, route => route.fulfill({
+    status: 503, json: { detail: "Não foi possível carregar as tarefas." },
+  }));
+  await page.goto("/processing");
+  await expect(page.getByRole("alert")).toContainText("Não foi possível carregar as tarefas.");
+  const retry = page.getByRole("button", { name: "Atualizar tarefas" });
+  await expect(retry).toBeEnabled();
+  await page.getByRole("button", { name: "Fechar mensagem" }).click();
+
+  await page.route(jobsPageUrl, route => route.fulfill({ json: emptyJobsPage }));
+  const response = page.waitForResponse(result => result.url().includes("/jobs/page?") && result.ok());
+  await retry.click();
+  await response;
+  await expect(page.getByText("Não existem tarefas neste estado.")).toBeVisible();
+  await expect(retry).toBeEnabled();
+  await expect(page.getByRole("alert")).toHaveCount(0);
+});
+
+test("a late processing page rejection is ignored after navigation", async ({ page }) => {
+  await signIn(page);
+  const release = Promise.withResolvers<void>();
+  await page.route(jobsPageUrl, async route => {
+    await release.promise;
+    await route.fulfill({ status: 503, json: { detail: "Falha de uma página anterior." } });
+  });
+  const request = page.waitForRequest(result => result.url().includes("/jobs/page?"));
+  await page.goto("/processing");
+  await request;
+  await expect(page.getByRole("button", { name: "Atualizar tarefas" })).toBeDisabled();
+
+  await page.getByRole("navigation").getByRole("button", { name: "Faturas" }).click();
+  await expect(page).toHaveURL("/invoice");
+  const response = page.waitForResponse(result => result.url().includes("/jobs/page?") && result.status() === 503);
+  release.resolve();
+  await (await response).finished();
+  await expect(page.getByRole("alert")).toHaveCount(0);
+});
+
+test("the history invoice selector is named and can link an invoice by keyboard", async ({ page }) => {
+  await signIn(page);
+  const row = { id: documentId, year: new Date().getFullYear(), description: "Linha a associar", status: "OPEN" };
+  await page.route("**/api/v1/history", route => route.fulfill({ json: [row] }));
+  await page.route("**/api/v1/invoices?size=500", route => route.fulfill({
+    json: { items: [{ id: invoiceId, number: "FT E2E", total: "12.00" }] },
+  }));
+  await page.route(`**/api/v1/history/${row.id}/link`, route => route.fulfill({ json: { ...row, invoiceId } }));
+  await page.goto("/history");
+  await page.getByRole("button", { name: "Escolher faturas para associar" }).click();
+  const historyRow = page.getByRole("row").filter({ hasText: row.description });
+  const selector = historyRow.getByRole("combobox", { name: "Associar fatura", exact: true });
+  await expect(selector.getByRole("option", { name: /FT E2E/ })).toBeAttached();
+  await historyRow.getByRole("button").first().focus();
+  await page.keyboard.press("Tab");
+  await expect(selector).toBeFocused();
+  const link = page.waitForRequest(request => request.url().endsWith(`/history/${row.id}/link`));
+  await page.keyboard.press("f");
+  expect((await link).postDataJSON()).toEqual({ invoiceId });
 });
 
 test("a missing reconciliation anchor exposes a way back to the list", async ({ page }) => {

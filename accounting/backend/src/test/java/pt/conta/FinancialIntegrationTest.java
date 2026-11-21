@@ -1,6 +1,8 @@
 package pt.conta;
 
 import static org.assertj.core.api.Assertions.*;
+import static org.assertj.core.api.InstanceOfAssertFactories.MAP;
+import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static pt.conta.shared.Inputs.map;
 import static pt.conta.shared.Inputs.rows;
 
@@ -73,7 +75,7 @@ class FinancialIntegrationTest {
   @BeforeEach
   void account() {
     transactions.executeWithoutResult(
-        status -> {
+        _ -> {
           var a = new pt.conta.bank.BankAccount();
           a.name = "Conta de teste";
           account = store.add(a).id;
@@ -154,9 +156,9 @@ class FinancialIntegrationTest {
 
   @Test
   void legacyThreeFourTwoProducesThreeFourSix() {
-    var one = invoice("3.00", "2026-05-01", "LEG-1");
+    invoice("3.00", "2026-05-01", "LEG-1");
     var two = invoice("4.00", "2026-05-02", "LEG-2");
-    var three = invoice("2.00", "2026-05-03", "LEG-3");
+    invoice("2.00", "2026-05-03", "LEG-3");
     var payment =
         movement("3.00", "2026-05-02", "Transferência por confirmar", "UNCLASSIFIED", "DEBIT");
     allocate(two, payment, "3.00");
@@ -166,8 +168,8 @@ class FinancialIntegrationTest {
 
   @Test
   void equalAmountsAndAmbiguousSuppliersNeverAutoMatch() {
-    var a = invoice("25.00", "2026-04-01", "AMB-1");
-    var b = invoice("25.00", "2026-04-02", "AMB-2");
+    invoice("25.00", "2026-04-01", "AMB-1");
+    invoice("25.00", "2026-04-02", "AMB-2");
     movement("25.00", "2026-04-03", "Pagamento Fornecedor Exemplo", "UNCLASSIFIED", "DEBIT");
     assertThat(store.all(Allocation.class)).isEmpty();
     assertThat(book.candidates()).hasSize(2);
@@ -177,7 +179,7 @@ class FinancialIntegrationTest {
 
   @Test
   void explicitReferenceSupportsAutomaticPartialPayment() {
-    var invoice = invoice("100.00", "2026-04-01", "FT2026/100");
+    invoice("100.00", "2026-04-01", "FT2026/100");
     movement("60.00", "2026-08-03", "Pagamento FT2026/100", "UNCLASSIFIED", "DEBIT");
     assertThat(store.all(Allocation.class)).hasSize(1);
     assertThat(store.all(Allocation.class).getFirst().origin).isEqualTo("RULES");
@@ -362,14 +364,14 @@ class FinancialIntegrationTest {
     jdbc.update("update job set state='WAITING',error='Ollama indisponível'");
     var page = jobMonitor.page("active", 0, 50);
     assertThat(page.get("total")).isEqualTo(5L);
-    assertThat((Map<String, Object>) page.get("counts")).containsEntry("WAITING", 5L);
+    assertThat(page.get("counts")).asInstanceOf(MAP).containsEntry("WAITING", 5L);
     var items = (List<?>) page.get("items");
     assertThat(items).hasSize(5);
     assertThat(items.stream().map(item -> ((Map<?, ?>) item).get("kind").toString()).toList())
         .containsExactlyInAnyOrder("REVIEW_MOVEMENT", "REVIEW_MOVEMENT", "REVIEW_DOCUMENT", "CLASSIFY_MOVEMENT", "CLASSIFY_MOVEMENT");
     var jobId = jdbc.queryForObject("select id from job where target_id=? and kind='REVIEW_MOVEMENT'", UUID.class, first.get("id"));
     var detail = jobMonitor.detail(jobId);
-    assertThat((Map<String, Object>) detail.get("target")).containsEntry("label", "FIDELIDADE COMPANHI");
+    assertThat(detail.get("target")).asInstanceOf(MAP).containsEntry("label", "FIDELIDADE COMPANHI");
     assertThat(detail.get("attempts")).isEqualTo(0);
     assertThat(progress.snapshot().get("jobs")).isEqualTo(5L);
     jdbc.update("update job set state='DONE',error=null,updated_at=now() where id=?", jobId);
@@ -396,18 +398,19 @@ class FinancialIntegrationTest {
     }
     assertThat(jobMonitor.page("active", 0, 50).get("total")).isEqualTo(3L);
     assertThat(jobMonitor.page("all", 0, 50).get("total")).isEqualTo(59L);
-    var firstPage = (List<Object>) jobMonitor.page("all", 0, 50).get("items");
-    var secondPage = (List<Object>) jobMonitor.page("all", 1, 50).get("items");
+    List<?> firstPage = assertInstanceOf(List.class, jobMonitor.page("all", 0, 50).get("items"));
+    List<?> secondPage = assertInstanceOf(List.class, jobMonitor.page("all", 1, 50).get("items"));
     assertThat(firstPage).hasSize(50);
-    assertThat(secondPage).hasSize(9).doesNotContainAnyElementsOf(firstPage);
+    assertThat(secondPage).hasSize(9);
+    assertThat(Collections.disjoint(firstPage, secondPage)).as("job pages are disjoint").isTrue();
     assertThat((List<?>) jobMonitor.page("all", 2, 50).get("items")).isEmpty();
     UUID orphan = jdbc.queryForObject("select id from job where state='WAITING'", UUID.class);
-    assertThat((Map<String, Object>) jobMonitor.detail(orphan).get("target")).containsEntry("available", false);
+    assertThat(jobMonitor.detail(orphan).get("target")).asInstanceOf(MAP).containsEntry("available", false);
     var m = movement("10.00", "2016-01-01", "Eliminado", "UNCLASSIFIED", "DEBIT");
     store.get(pt.conta.bank.BankMovement.class, (UUID) m.get("id")).deleted = true;
     store.flush();
     UUID deleted = jdbc.queryForObject("select id from job where target_id=? and kind='REVIEW_MOVEMENT'", UUID.class, m.get("id"));
-    assertThat((Map<String, Object>) jobMonitor.detail(deleted).get("target"))
+    assertThat(jobMonitor.detail(deleted).get("target")).asInstanceOf(MAP)
         .containsEntry("available", false).containsEntry("label", "Eliminado");
     assertThatThrownBy(() -> jobMonitor.page("unexpected", 0, 50)).isInstanceOf(DomainException.class);
     assertThatThrownBy(() -> jobMonitor.page("all", -1, 50)).isInstanceOf(DomainException.class);
@@ -433,12 +436,16 @@ class FinancialIntegrationTest {
     queue.enqueue("REVIEW_ALLOCATION", allocation.id, allocation.version, "{}");
     queue.enqueue("REPAIR_ALERT", alert.id, alert.version, "{}");
     UUID allocationJob = jdbc.queryForObject("select id from job where target_id=?", UUID.class, allocation.id);
-    var target = (Map<String, Object>) jobMonitor.detail(allocationJob).get("target");
-    assertThat(target).containsEntry("type", "allocation").containsEntry("available", true)
+    assertThat(jobMonitor.detail(allocationJob).get("target")).asInstanceOf(MAP)
+        .containsEntry("type", "allocation").containsEntry("available", true)
         .containsEntry("invoiceId", i.get("id")).containsEntry("movementId", m.get("id"))
         .containsEntry("amount", "25.00").containsEntry("evidence", "Associação confirmada");
-    var items = (List<Map<String, Object>>) jobMonitor.page("all", 0, 50).get("items");
-    assertThat(items.stream().map(item -> ((Map<?, ?>) item.get("target")).get("type").toString()).toList())
+    List<?> items = assertInstanceOf(List.class, jobMonitor.page("all", 0, 50).get("items"));
+    assertThat(items).extracting(item -> {
+      Map<?, ?> job = assertInstanceOf(Map.class, item);
+      Map<?, ?> target = assertInstanceOf(Map.class, job.get("target"));
+      return target.get("type").toString();
+    })
         .contains("invoice", "movement", "allocation", "alert");
   }
 
@@ -630,7 +637,7 @@ class FinancialIntegrationTest {
 
   @Test
   void laterInvoiceWithdrawsAnEarlierWeakAutomaticMatch() {
-    var first = invoice("100.00", "2026-01-01", "LATE-1");
+    invoice("100.00", "2026-01-01", "LATE-1");
     var payment =
         movement("100.00", "2026-02-01", "Pagamento Fornecedor Exemplo", "UNCLASSIFIED", "DEBIT");
     assertThat(store.all(Allocation.class).stream().filter(a -> a.active)).hasSize(1);
@@ -1244,7 +1251,7 @@ class FinancialIntegrationTest {
       start.countDown();
       exclude.get(15, TimeUnit.SECONDS);
       associate.get(15, TimeUnit.SECONDS);
-      transactions.executeWithoutResult(status -> {
+      transactions.executeWithoutResult(_ -> {
         assertThat(store.get(Invoice.class, (UUID) i.get("id")).excluded).isTrue();
         assertThat(store.all(Allocation.class).stream().filter(a -> a.active)).isEmpty();
         assertThat(closing(2097, 1)).isEqualTo("-100.00");

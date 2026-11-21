@@ -21,6 +21,20 @@ public class RepairService {
   public record Snapshot(UUID alertId, UUID documentId, long sourceVersion, String kind,
       String mediaType, String storageKey, String sha256, String text, Map<String,Object> draft,
       String message, Map<String,Object> fieldProvenance) {}
+
+  private record PreparedRepair(
+      Map<String,Object> draft, List<Map<String,Object>> changes, Map<String,Object> fieldProvenance,
+      Set<String> selectedItems, List<Map<String,Object>> accepted, List<String> blockingIssues) {
+    boolean canApplyDraft() { return !selectedItems.isEmpty(); }
+    boolean canValidate() { return canApplyDraft() && blockingIssues.isEmpty(); }
+
+    Map<String,Object> view() {
+      return map("draft", draft, "changes", changes, "fieldProvenance", fieldProvenance,
+          "selectedItems", selectedItems, "accepted", accepted, "blockingIssues", blockingIssues,
+          "canApplyDraft", canApplyDraft(), "canValidate", canValidate());
+    }
+  }
+
   private final Store store;
   private final JdbcTemplate jdbc;
   private final JobQueue jobs;
@@ -67,7 +81,10 @@ public class RepairService {
   private long sourceVersion(Map<String,Object> job,long fallback) {
     var value=metadata(job).get("sourceVersion");return value instanceof Number n?n.longValue():fallback;
   }
-  private boolean active(Map<String,Object> job) { return Set.of("QUEUED","RUNNING","WAITING").contains(job.get("state")); }
+  private boolean active(Map<String,Object> job) {
+    String state = (String) job.get("state");
+    return Set.of("QUEUED", "RUNNING", "WAITING").contains(state);
+  }
 
   private Map<String,Object> view(Alert alert,Map<String,Object> job) {
     Map<String,Object> proposal=alert.proposal==null?null:Json.object(alert.proposal);
@@ -81,17 +98,17 @@ public class RepairService {
       if(proposal!=null&&doc!=null)enrich(doc,proposal);
       String outcome=stale?"STALE":Objects.toString(metadata(job).get("outcome"),null);
       if(outcome==null&&"DONE".equals(job.get("state"))) outcome=proposal==null?"REVIEW_REQUIRED":outcome(doc,proposal,errors);
-      Map<String,Object> eligibility=Map.of();
+      PreparedRepair eligibility=null;
       if(!stale&&"DONE".equals(job.get("state"))&&!"STALE".equals(outcome)&&proposal!=null&&proposal.containsKey("draft")) {
         try{eligibility=prepare(alert.id,Map.of());}catch(DomainException ignored){}
       }
+      boolean canValidate=eligibility!=null&&eligibility.canValidate();
       repair=map("jobId",job.get("id"),"state",job.get("state"),"outcome",outcome,
           "sourceVersion",source,"error",job.get("error"),"attempts",job.get("attempts"),
           "createdAt",instant(job.get("created_at")),"updatedAt",instant(job.get("updated_at")),
           "availableAt",instant(job.get("available_at")),"blockingIssues",errors,
-          "canApplyDraft",Boolean.TRUE.equals(eligibility.get("canApplyDraft")),
-          "canValidate",Boolean.TRUE.equals(eligibility.get("canValidate")),
-          "canApply",Boolean.TRUE.equals(eligibility.get("canValidate")),"context",metadata(job).get("context"));
+          "canApplyDraft",eligibility!=null&&eligibility.canApplyDraft(),
+          "canValidate",canValidate,"canApply",canValidate,"context",metadata(job).get("context"));
     }
     if(proposal!=null&&job==null&&alert.documentId!=null)enrich(store.get(SourceDocument.class,alert.documentId),proposal);
     return map("id",alert.id,"version",alert.version,"documentId",alert.documentId,"entityType",alert.entityType,
@@ -136,7 +153,7 @@ public class RepairService {
     var proposal=new LinkedHashMap<>(response);
     if(response.get("draft") instanceof Map<?,?> raw) {
       var draft=DraftSanitizer.sanitize(doc.kind,Json.object(Json.write(raw)));
-      var issues=new LinkedHashSet<Object>();
+      Set<Object> issues=new LinkedHashSet<>();
       if(response.get("issues") instanceof List<?> list)issues.addAll(list);
       if(draft.get("issues") instanceof List<?> list)issues.addAll(list);
       draft.put("issues",new ArrayList<>(issues));proposal.put("draft",draft);proposal.put("issues",new ArrayList<>(issues));
@@ -200,9 +217,9 @@ public class RepairService {
 
   /** A preview has no writes; acceptance is evaluated again under the financial write lock. */
   @Transactional(readOnly=true)
-  public Map<String,Object> preview(UUID id,Map<String,Object> body) {return prepare(id,body);}
+  public Map<String,Object> preview(UUID id,Map<String,Object> body) {return prepare(id,body).view();}
 
-  private Map<String,Object> prepare(UUID id,Map<String,Object> body) {
+  private PreparedRepair prepare(UUID id,Map<String,Object> body) {
     var alert=store.get(Alert.class,id);
     if(!alert.status.equals("OPEN")||alert.documentId==null||alert.proposal==null)throw DomainException.invalid("Não existe uma proposta aplicável");
     var doc=store.get(SourceDocument.class,alert.documentId);var proposal=Json.object(alert.proposal);
@@ -248,22 +265,20 @@ public class RepairService {
       ownership.put(field,protection.decision("HUMAN_ACCEPTED_AI",proposalId));metadata.put(item,ownership);touched.add(item);accepted.add(change);
     }
     var errors=blocking(doc,map("draft",current),touched);
-    return map("draft",current,"changes",changes,"fieldProvenance",metadata,"selectedItems",touched,"accepted",accepted,
-        "blockingIssues",errors,"canApplyDraft",!touched.isEmpty(),"canValidate",!touched.isEmpty()&&errors.isEmpty());
+    return new PreparedRepair(current, changes, metadata, touched, accepted, errors);
   }
 
   public Map<String,Object> apply(UUID id,Map<String,Object> body,DocumentService documents) {
     store.lockFinancialWrites();var prepared=prepare(id,body);
-    if(!Boolean.TRUE.equals(prepared.get("canApplyDraft")))throw DomainException.invalid("Não existem complementos ou escolhas para aplicar");
+    if(!prepared.canApplyDraft())throw DomainException.invalid("Não existem complementos ou escolhas para aplicar");
     boolean validate=body.isEmpty()||flag(body,"validate");
-    if(validate&&!Boolean.TRUE.equals(prepared.get("canValidate")))throw DomainException.invalid(String.join("; ",(List<String>)prepared.get("blockingIssues")));
-    var alert=store.get(Alert.class,id);var selected=new LinkedHashSet<String>((Set<String>)prepared.get("selectedItems"));
-    return publisher.applySelected(alert.documentId,protection.copy(prepared.get("draft")),protection.copy(prepared.get("fieldProvenance")),selected,validate,documents);
+    if(validate&&!prepared.canValidate())throw DomainException.invalid(String.join("; ",prepared.blockingIssues()));
+    var alert=store.get(Alert.class,id);var selected=new LinkedHashSet<>(prepared.selectedItems());
+    return publisher.applySelected(alert.documentId,protection.copy(prepared.draft()),protection.copy(prepared.fieldProvenance()),selected,validate,documents);
   }
 
   /** Publication remains authoritative; this preview reuses its invoice arithmetic rules. */
   private List<String> blocking(SourceDocument doc,Map<String,Object> proposal) {
-    if(!(proposal.get("draft") instanceof Map<?,?> raw))return List.of("A análise não contém uma correção de dados aplicável");
     return blocking(doc,proposal,null);
   }
   private List<String> blocking(SourceDocument doc,Map<String,Object> proposal,Set<String> selected) {

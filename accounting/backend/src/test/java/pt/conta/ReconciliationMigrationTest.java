@@ -37,7 +37,8 @@ class ReconciliationMigrationTest {
       assertThat(jdbc.queryForObject("select excluded from invoice where id=?", Boolean.class, invoice)).isFalse();
       assertThat(jdbc.queryForObject("select sum(amount) from ledger_entry where effective_on between '2026-01-01' and '2026-12-31'", BigDecimal.class)).isEqualByComparingTo("-105.00");
       assertThat(jdbc.queryForObject("select sum(amount) from ledger_entry where effective_on < '2026-01-01'", BigDecimal.class)).isEqualByComparingTo("100.00");
-      int postings = jdbc.queryForObject("select count(*) from ledger_entry", Integer.class);
+      int postings = java.util.Objects.requireNonNull(
+          jdbc.queryForObject("select count(*) from ledger_entry", Integer.class), "Ledger entry count");
       assertThat(flyway.migrate().migrationsExecuted).isZero();
       assertThat(jdbc.queryForObject("select count(*) from ledger_entry", Integer.class)).isEqualTo(postings);
       // The application must recognize the migrated postings as current, rather than replace

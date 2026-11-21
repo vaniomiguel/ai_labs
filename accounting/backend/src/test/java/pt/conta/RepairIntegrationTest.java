@@ -49,7 +49,7 @@ class RepairIntegrationTest {
   @Autowired AiOrchestrator orchestrator;
   private record Fixture(UUID doc,UUID alert){}
 
-  @BeforeEach void setup(){provider.calls=0;provider.vision=false;provider.program=request->Json.write(response(valid(),List.of()));}
+  @BeforeEach void setup(){provider.calls=0;provider.vision=false;provider.program=_->Json.write(response(valid(),List.of()));}
   private Map<String,Object> valid(){return map("issuedOn","2026-01-01","supplier","Fornecedor de teste","total","100.00",
       "currency","EUR","type","INVOICE","categories",List.of(),"lines",List.of());}
   private Map<String,Object> response(Map<String,Object> draft,List<String> issues){return map("draft",draft,"evidence",List.of(),"issues",issues);}
@@ -89,8 +89,9 @@ class RepairIntegrationTest {
 
   @Test void requestReturnsAcceptedAndRepeatedClicksReuseTheActiveJob()throws Exception {
     var f=fixture();var accepted=controller.repair(f.alert);
-    assertThat(accepted.getStatusCode().value()).isEqualTo(202);var first=accepted.getBody();
-    var second=controller.repair(f.alert).getBody();
+    assertThat(accepted.getStatusCode().value()).isEqualTo(202);
+    var first=Objects.requireNonNull(accepted.getBody(), "Initial repair response body");
+    var second=Objects.requireNonNull(controller.repair(f.alert).getBody(), "Repeated repair response body");
     assertThat(task(second).get("jobId")).isEqualTo(task(first).get("jobId"));
     assertThat(second.get("version")).isEqualTo(first.get("version"));
     assertThat(task(controller.alert(f.alert)).get("state")).isEqualTo("QUEUED");
@@ -312,7 +313,7 @@ class RepairIntegrationTest {
   @Test void providerContextRejectionPermanentlyFailsTheRepair() throws Exception {
     var f = fixture();
     request(f);
-    provider.program = request -> { throw new AiProvider.ContextExceeded("Limite de contexto do modelo"); };
+    provider.program = _ -> { throw new AiProvider.ContextExceeded("Limite de contexto do modelo"); };
     var enabled = org.mockito.Mockito.mock(AccountingProperties.class);
     org.mockito.Mockito.when(enabled.jobsEnabled()).thenReturn(true);
     new BackgroundWorker(enabled, queue, null, null, orchestrator, null,
@@ -332,7 +333,7 @@ class RepairIntegrationTest {
   }
 
   @Test void missingRequiredFieldsAndWarningsProduceAnExplicitReviewResult()throws Exception {
-    var f=fixture();provider.program=request->{var draft=valid();draft.put("issuedOn",null);return Json.write(response(draft,List.of("Data ilegível")));};
+    var f=fixture();provider.program=_-> {var draft=valid();draft.put("issuedOn",null);return Json.write(response(draft,List.of("Data ilegível")));};
     process(request(f));var task=task(repairs.view(f.alert));
     assertThat(task).containsEntry("outcome","REVIEW_REQUIRED").containsEntry("canApply",false);
     assertThat(task.get("blockingIssues").toString()).contains("Falta a data");
@@ -346,24 +347,24 @@ class RepairIntegrationTest {
 
   @Test void missingModelValuesAreNotPresentedAsApplicableDeletions()throws Exception {
     var f=fixture();store.get(SourceDocument.class,f.doc).draft=Json.write(valid());store.flush();
-    provider.program=request->{var draft=valid();draft.put("supplier",null);draft.put("total",null);return Json.write(response(draft,List.of()));};
+    provider.program=_-> {var draft=valid();draft.put("supplier",null);draft.put("total",null);return Json.write(response(draft,List.of()));};
     process(request(f));assertThat(task(repairs.view(f.alert))).containsEntry("outcome","NO_CHANGES").containsEntry("canApply",false).containsEntry("canApplyDraft",false);assertNoMoney();
   }
 
   @Test void editingTheSourceWhileTheModelRunsMakesTheResultStale()throws Exception {
-    var f=fixture();provider.program=request->{var doc=store.get(SourceDocument.class,f.doc);doc.text="Texto corrigido";store.flush();return Json.write(response(valid(),List.of()));};
+    var f=fixture();provider.program=_-> {var doc=store.get(SourceDocument.class,f.doc);doc.text="Texto corrigido";store.flush();return Json.write(response(valid(),List.of()));};
     process(request(f));assertThat(task(repairs.view(f.alert))).containsEntry("outcome","STALE").containsEntry("canApply",false);
     assertThat(store.get(Alert.class,f.alert).proposal).isNull();assertNoMoney();
   }
 
   @Test void resolvingTheAlertWhileTheModelRunsCannotRestoreTheProposal()throws Exception {
-    var f=fixture();provider.program=request->{store.get(Alert.class,f.alert).status="RESOLVED";store.flush();return Json.write(response(valid(),List.of()));};
+    var f=fixture();provider.program=_-> {store.get(Alert.class,f.alert).status="RESOLVED";store.flush();return Json.write(response(valid(),List.of()));};
     process(request(f));assertThat(task(repairs.view(f.alert)).get("outcome")).isEqualTo("STALE");assertThat(store.get(Alert.class,f.alert).proposal).isNull();
   }
 
   @Test void newRequestAfterSourceEditSupersedesTheOlderRunningResult()throws Exception {
     var f=fixture();var old=request(f);UUID[] newer={null};
-    provider.program=request->{var doc=store.get(SourceDocument.class,f.doc);doc.text="Dados novos";store.flush();newer[0]=request(f).id();return Json.write(response(valid(),List.of()));};
+    provider.program=_-> {var doc=store.get(SourceDocument.class,f.doc);doc.text="Dados novos";store.flush();newer[0]=request(f).id();return Json.write(response(valid(),List.of()));};
     process(old);assertThat(task(repairs.view(f.alert)).get("jobId").toString()).isEqualTo(newer[0].toString());
     assertThat(task(repairs.view(f.alert)).get("state")).isEqualTo("QUEUED");assertThat(store.get(Alert.class,f.alert).proposal).isNull();
   }
@@ -385,7 +386,7 @@ class RepairIntegrationTest {
 
   @Test void modelOutageRemainsWaitingAndCanBeRetried()throws Exception {
     var f=fixture();var raw=request(f);var claim=queue.claim().orElseThrow();assertThat(claim.id()).isEqualTo(raw.id());
-    provider.program=request->{throw new OllamaProvider.AiUnavailable("Modelo indisponível",null);};
+    provider.program=_-> {throw new OllamaProvider.AiUnavailable("Modelo indisponível",null);};
     assertThatThrownBy(()->worker.process(claim)).isInstanceOf(OllamaProvider.AiUnavailable.class);
     queue.finish(claim,"Modelo indisponível",true);
     assertThat(task(repairs.view(f.alert))).containsEntry("state","WAITING").containsEntry("attempts",0);
@@ -404,7 +405,7 @@ class RepairIntegrationTest {
   @Test void structuredOutputFailuresStayVisibleAndNeverPublishAProposal()throws Exception {
     var f=fixture();request(f);var first=queue.claim().orElseThrow();
     var claim=new JobQueue.Claim(first.id(),first.kind(),first.target(),first.revision(),first.payload(),4,first.token());
-    provider.program=request->"{\"draft\":\"inválido\"}";
+    provider.program=_->"{\"draft\":\"inválido\"}";
     assertThatThrownBy(()->worker.process(claim)).isInstanceOf(IllegalArgumentException.class);
     queue.finish(claim,"Resposta estruturada inválida",false);
     assertThat(task(repairs.view(f.alert))).containsEntry("state","FAILED").containsEntry("error","Resposta estruturada inválida");
@@ -413,7 +414,7 @@ class RepairIntegrationTest {
 
   @Test @Transactional(propagation=Propagation.NOT_SUPPORTED)
   void simultaneousRequestsCreateOnlyOneJob()throws Exception {
-    var f=transactions.execute(tx->{try{return fixture();}catch(Exception e){throw new RuntimeException(e);}});
+    var f=transactions.execute(_->{try{return fixture();}catch(Exception e){throw new RuntimeException(e);}});
     try(var pool=Executors.newFixedThreadPool(2)) {
       var start=new CountDownLatch(1);
       Callable<String> request=()->{start.await();return task(repairs.request(f.alert)).get("jobId").toString();};

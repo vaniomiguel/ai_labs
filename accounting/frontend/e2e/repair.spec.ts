@@ -279,6 +279,12 @@ test("a multi-invoice proposal only validates the checked item and preserves edi
   state.submitted=()=>state.result({invoices:[{...valid(),id:first},{...valid(),id:second}]});
   await dialog.getByRole('button',{name:'✧ Pedir tentativa de correção à IA',exact:true}).click();
   await expect(dialog.getByRole('checkbox',{name:'Comprovativo 2',exact:true})).toBeChecked();
+  const repairItem = dialog.getByRole("region", { name: "Comprovativo 2", exact: true });
+  await expect(repairItem).toHaveCSS("border-top-width", "1px");
+  await page.setViewportSize({ width: 390, height: 844 });
+  await expect(repairItem).toHaveCSS("border-top-width", "1px");
+  const dialogFits = await dialog.evaluate(element => element.scrollWidth <= element.clientWidth + 1);
+  expect(dialogFits).toBe(true);
   await expect(dialog.getByLabel('Vencimento',{exact:true})).toHaveCount(0);
   await dialog.getByLabel('Data de emissão',{exact:true}).nth(0).fill('2026-02-14');
   await dialog.getByLabel('Data de emissão',{exact:true}).nth(0).blur();

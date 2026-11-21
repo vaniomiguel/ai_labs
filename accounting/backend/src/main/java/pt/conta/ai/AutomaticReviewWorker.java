@@ -14,7 +14,7 @@ import pt.conta.shared.Json;
 
 /** Runs bounded, text-only automatic reviews outside the financial write transaction. */
 @Service
-class AutomaticReviewWorker {
+public class AutomaticReviewWorker {
   private final AutomaticReviewContext context;
   private final AutomaticReviewRequests requests;
   private final AutomaticReviewEvidence evidence;

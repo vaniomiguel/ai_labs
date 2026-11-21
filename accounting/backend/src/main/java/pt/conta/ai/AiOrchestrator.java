@@ -186,7 +186,6 @@ public class AiOrchestrator {
             && ((List<?>) merged.get("issues")).isEmpty();
     draft.put("validate", safe);
     if (doc.kind.equals("INVOICE") && !rows(draft, "invoices").isEmpty()) {
-      boolean all = true;
       int n = 0;
       for (var child : rows(draft, "invoices")) {
         String prefix = "invoices[" + (n++) + "].";
@@ -204,7 +203,6 @@ public class AiOrchestrator {
             AiEvidence.supportsInvoice(child, proof, source)
                 && ((List<?>) merged.get("issues")).isEmpty();
         child.put("validate", valid);
-        all &= valid;
       }
       draft.put("validate", ((List<?>) merged.get("issues")).isEmpty());
     }
@@ -249,8 +247,7 @@ public class AiOrchestrator {
         for (int from = 0; from < Math.max(1, text.length()); from += 32000)
           result.add(
               new Chunk(
-                  text.substring(
-                      Math.min(from, text.length()), Math.min(from + 32000, text.length())),
+                  text.substring(from, Math.min(from + 32000, text.length())),
                   List.of(number)));
       }
     }
@@ -258,8 +255,7 @@ public class AiOrchestrator {
       for (int from = 0; from < Math.max(1, source.length()); from += 32000)
         result.add(
             new Chunk(
-                source.substring(
-                    Math.min(from, source.length()), Math.min(from + 32000, source.length())),
+                source.substring(from, Math.min(from + 32000, source.length())),
                 List.of()));
     if (result.size() > 1 && result.size() <= 3 && source.length() < 32000) {
       var pages = result.stream().flatMap(c -> c.pages().stream()).distinct().toList();
@@ -298,7 +294,7 @@ public class AiOrchestrator {
         var e = new LinkedHashMap<>(entry);
         String field = Objects.toString(e.get("field"), "");
         var matcher =
-            java.util.regex.Pattern.compile("^(lines|movements)\\[(\\d+)\\](.*)$").matcher(field);
+            java.util.regex.Pattern.compile("^(lines|movements)\\[(\\d+)](.*)$").matcher(field);
         if (matcher.matches())
           e.put(
               "field",

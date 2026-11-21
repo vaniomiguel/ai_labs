@@ -46,7 +46,7 @@ class InvoiceExtractionTest {
     when(settings.get(anyString(), anyString())).thenAnswer(call -> call.getArgument(1));
     when(provider.models()).thenReturn(List.of(
         new AiProvider.Model("qwen3.5:9b", "invoice-test-digest", true, true, true)));
-    when(provider.complete(any())).thenAnswer(call -> Json.write(response()));
+    when(provider.complete(any())).thenAnswer(_ -> Json.write(response()));
     when(store.all(AiExecution.class)).thenReturn(executions);
     doAnswer(call -> { executions.add(call.getArgument(0)); return null; }).when(results).record(any());
     doc = new SourceDocument();
@@ -207,7 +207,7 @@ class InvoiceExtractionTest {
   }
 
   @Test
-  void malformedOutputIsRecordedAndNeverPublishedOrCached() throws Exception {
+  void malformedOutputIsRecordedAndNeverPublishedOrCached() {
     when(provider.complete(any())).thenReturn("{\"draft\":\"invalid\"}");
     assertThatThrownBy(this::process).isInstanceOf(IllegalArgumentException.class);
     assertThatThrownBy(this::process).isInstanceOf(IllegalArgumentException.class);

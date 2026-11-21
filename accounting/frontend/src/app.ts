@@ -454,7 +454,10 @@ export class AppComponent implements OnDestroy {
         selectedId ? this.api.get<JobItem>("/jobs/" + selectedId) : Promise.resolve(null),
       ]);
       if (request !== this.processingRequest || this.view() !== "processing") return;
-      if (page.status === "rejected") throw page.reason;
+      if (page.status === "rejected") {
+        this.error.set(errorMessage(page.reason));
+        return;
+      }
       if (this.processingPage > 0 && this.processingPage * 50 >= page.value.total) {
         this.processingPage = Math.max(0, Math.ceil(page.value.total / 50) - 1);
         await this.loadProcessing();
