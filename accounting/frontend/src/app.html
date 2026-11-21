@@ -656,16 +656,26 @@
         <div class="section-heading">
           <div>
             <h2>
-              Revisões pendentes <span class="count">{{counts().alerts}}</span>
+              Lista de alertas <span class="count">{{visibleAlerts().length}}</span>
             </h2>
+            @if(alertStatusFilter()!=='RESOLVED'){
             <p>
               Guardar alterações não resolve o alerta. Valida os dados quando
               estiverem corretos.
             </p>
+            }
           </div>
+          <label>
+            Estado
+            <select [ngModel]="alertStatusFilter()" (ngModelChange)="alertStatusFilter.set($event)">
+              <option value="OPEN">Em aberto</option>
+              <option value="RESOLVED">Resolvidos</option>
+              <option value="all">Todos</option>
+            </select>
+          </label>
         </div>
         <div class="alert-list">
-          @for(a of state().alerts;track a.id){
+          @for(a of visibleAlerts();track a.id){
           <article class="alert-item" [class.resolved]="a.status==='RESOLVED'">
             <span class="alert-icon">{{a.status==='OPEN'?'!':'✓'}}</span>
             <div>
@@ -673,21 +683,18 @@
               >@if((a.concerns?.length ?? 0) > 1){<small>{{a.concerns?.length}} questões</small>}<small
                 >{{a.documentId?sourceName(a.documentId):'Registo manual ou
                 tarefa'}} · {{labels[a.status]}}</small
-              >@if(a.resolvedAt){<small
-                >{{a.resolvedBy}} · {{a.resolvedAt|date:'dd/MM/yyyy
-                HH:mm'}}</small
-              >}
+              >@if(a.resolvedAt){
+              <small>{{a.resolvedBy}} · {{a.resolvedAt|date:'dd/MM/yyyy HH:mm'}}</small>
+              }
             </div>
             <button mat-stroked-button (click)="openAlert(a.id)">
               Consultar →
             </button>
           </article>
           }@empty{
-          <div class="empty-state">
-            <span>✓</span>
-            <h3>Tudo em dia</h3>
-            <p>Não existem alertas para rever.</p>
-          </div>
+          <p class="empty-state" role="status">
+            {{loading() ? 'A carregar alertas…' : alertEmptyMessages[alertStatusFilter()]}}
+          </p>
           }
         </div>
       </section>

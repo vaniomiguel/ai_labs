@@ -23,6 +23,7 @@ import { DEFAULT_WORKSPACE_URL, RecordKind, recordView, WORKSPACE_PATHS, Workspa
 
 interface WorkspaceOrigin { url: string; view: WorkspaceView }
 interface SuspendedEditor { url: string; draft: ReviewableRecord }
+type AlertStatusFilter = "OPEN" | "RESOLVED" | "all";
 interface RecordAlertSource {
   id: string; version: number; kind: string; mediaType: string; draft: Record<string, unknown>;
 }
@@ -93,6 +94,17 @@ export class AppComponent implements OnDestroy {
   readonly executions = signal<AiExecutionItem[]>([]);
   private executionHistoryRequest = 0;
   readonly counts = signal<{jobs: number; alerts: number; jobStates?: JobCounts}>({ jobs: 0, alerts: 0 });
+  readonly alertStatusFilter = signal<AlertStatusFilter>("OPEN");
+  readonly visibleAlerts = computed(() => {
+    const alerts: AlertView[] = this.state().alerts;
+    const status = this.alertStatusFilter();
+    return status === "all" ? alerts : alerts.filter(alert => alert.status === status);
+  });
+  readonly alertEmptyMessages: Record<AlertStatusFilter, string> = {
+    OPEN: "Não existem alertas em aberto.",
+    RESOLVED: "Não existem alertas resolvidos.",
+    all: "Não existem alertas.",
+  };
   readonly processing = signal<JobPage | null>(null);
   readonly jobDetail = signal<JobItem | null>(null);
   readonly selectedJobId = signal<string | null>(null);
@@ -246,6 +258,7 @@ export class AppComponent implements OnDestroy {
       this.financialFilters.set(initialFinancialFilters());
       this.documentQuery.set("");
       this.catalogFilters.set(DEFAULT_CATALOG_FILTERS);
+      this.alertStatusFilter.set("OPEN");
       this.processingState.set("active");
       this.processingPage = 0;
       this.processing.set(null);

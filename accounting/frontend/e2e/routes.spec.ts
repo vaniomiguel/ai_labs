@@ -194,6 +194,80 @@ test("alert review restores the original and its alert context through browser h
   await expect(review.getByRole("button", { name: "✧ Pedir tentativa de correção à IA" })).toBeVisible();
 });
 
+test("alert status filter defaults to open and preserves the selection when returning from a resolved alert", async ({ page }) => {
+  await signIn(page);
+  const open = { id: alertId, status: "OPEN", message: "Confirmar os dados da extração" };
+  const resolvedId = "e245b1ab-5314-4ad8-a91f-c75510594006";
+  const resolved = {
+    id: resolvedId, status: "RESOLVED", message: "Corrigir os dados da fatura", documentId: null,
+    entityType: "invoice", entityId: invoiceId, resolvedBy: "gestor", resolvedAt: "2026-11-10T12:00:00Z",
+  };
+  await page.route("**/api/v1/events", route => route.fulfill({ status: 204 }));
+  await page.route("**/api/v1/alerts", route => route.fulfill({ json: [open, resolved] }));
+  await page.route(`**/api/v1/alerts/${resolvedId}`, route => route.fulfill({ json: resolved }));
+  await page.route(`**/api/v1/invoices/${invoiceId}`, route => route.fulfill({ json: {
+    ...draft, id: invoiceId, version: 1, categoryDetails: [], reviewStatus: "CORRECTED",
+  } }));
+  await page.route(`**/api/v1/audit/invoice/${invoiceId}`, route => route.fulfill({ json: [] }));
+
+  await page.goto("/alert");
+  const filter = page.getByRole("combobox", { name: "Estado", exact: true });
+  const openCard = page.getByRole("article").filter({ hasText: open.message });
+  const resolvedCard = page.getByRole("article").filter({ hasText: resolved.message });
+  const badge = page.getByRole("navigation").getByRole("button", { name: /Alertas/ }).locator(".nav-count");
+  await expect(filter).toHaveValue("OPEN");
+  await expect(openCard).toBeVisible();
+  await expect(resolvedCard).toHaveCount(0);
+  await expect(page.getByRole("heading", { name: "Lista de alertas 1", exact: true })).toBeVisible();
+
+  await filter.selectOption({ label: "Todos" });
+  await expect(openCard).toBeVisible();
+  await expect(resolvedCard).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Lista de alertas 2", exact: true })).toBeVisible();
+  await expect(badge).toHaveText("1");
+
+  await filter.selectOption({ label: "Resolvidos" });
+  await expect(openCard).toHaveCount(0);
+  await expect(page.getByRole("heading", { name: "Lista de alertas 1", exact: true })).toBeVisible();
+  await expect(badge).toHaveText("1");
+  await expect(resolvedCard).toContainText(/gestor · 10\/11\/2026/);
+  await resolvedCard.getByRole("button", { name: "Consultar →" }).click();
+  await expect(page).toHaveURL(`/alert/${resolvedId}/review`);
+  const editor = page.getByRole("dialog", { name: "Editar registo" });
+  await expect(editor.getByRole("region", { name: "Questões do alerta" })).toContainText(resolved.message);
+  await editor.getByRole("button", { name: "Fechar editor" }).click();
+  await expect(page).toHaveURL("/alert");
+  await expect(filter).toHaveValue("RESOLVED");
+  await expect(resolvedCard).toBeVisible();
+
+  await page.reload();
+  await expect(filter).toHaveValue("OPEN");
+  await expect(openCard).toBeVisible();
+  await expect(resolvedCard).toHaveCount(0);
+});
+
+test("alert status filter shows an empty resolved list and resets at sign-out", async ({ page }) => {
+  await signIn(page);
+  const open = { id: alertId, status: "OPEN", message: "Validar extração pendente" };
+  await page.route("**/api/v1/alerts", route => route.fulfill({ json: [open] }));
+  await page.goto("/alert");
+  await expect(page.getByText(open.message, { exact: true })).toBeVisible();
+  const filter = page.getByRole("combobox", { name: "Estado", exact: true });
+
+  await filter.selectOption({ label: "Resolvidos" });
+  await expect(page.getByText("Não existem alertas resolvidos.", { exact: true })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Lista de alertas 0", exact: true })).toBeVisible();
+  await expect(page.getByRole("article")).toHaveCount(0);
+
+  await page.getByRole("button", { name: /Terminar sessão/ }).click();
+  await expect(page).toHaveURL("/login");
+  await page.getByLabel("Palavra-passe", { exact: true }).fill("conta-e2e-dev");
+  await page.getByRole("button", { name: "Entrar" }).click();
+  await page.getByRole("navigation").getByRole("button", { name: /Alertas/ }).click();
+  await expect(filter).toHaveValue("OPEN");
+  await expect(page.getByText(open.message, { exact: true })).toBeVisible();
+});
+
 test("a job opens the canonical record editor and closing restores the job", async ({ page }) => {
   await signIn(page);
   await mockRecord(page, "invoice", invoiceId, draft);
