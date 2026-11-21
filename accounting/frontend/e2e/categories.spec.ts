@@ -191,13 +191,20 @@ test("an unlabelled invoice can be classified from the list and retried from the
   expect(requests).toBe(2);
 });
 
-test("the invoice classification endpoint accepts an already queued request", async ({ page }) => {
+test("the invoice classification endpoint accepts an already queued review with labels", async ({ page }) => {
   const record = await invoice(page, 2086, "E2E-CATEGORIA-ACEITE");
+  const insurance = (await references(page)).find((category: { referenceCode: string }) => category.referenceCode === "6263");
+  const classification = await assign(page, "invoices", record, [insurance.id]);
   const csrf = await get(page, "/csrf");
-  const response = await page.request.post(`/api/v1/invoices/${record.id}/categories/classify`, {
-    data: { version: record.classification.version },
+  const requestReview = () => page.request.post(`/api/v1/invoices/${record.id}/categories/classify`, {
+    data: { version: classification.version },
     headers: { "X-XSRF-TOKEN": csrf.token },
   });
+  const response = await requestReview();
   expect(response.status()).toBe(202);
-  expect(await response.json()).toMatchObject({ state: "PENDING", jobState: "QUEUED" });
+  const queued = await response.json();
+  expect(queued).toMatchObject({ state: "PENDING", jobState: "QUEUED", categories: [{ id: insurance.id }] });
+  const duplicate = await requestReview();
+  expect(duplicate.status()).toBe(202);
+  expect(await duplicate.json()).toEqual(queued);
 });

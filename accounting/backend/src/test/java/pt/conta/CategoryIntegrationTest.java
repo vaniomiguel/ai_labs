@@ -452,6 +452,39 @@ class CategoryIntegrationTest {
     assertThat(names("invoice", id)).isEmpty();
   }
 
+  @Test void reclassifyingAnInvoiceReplacesAiLabelsAndPreservesManualDecisions() {
+    UUID id = invoice("Seguro anual, Papel A4, Contabilidade Janeiro e serviço telefónico");
+    UUID insurance = reference("6263");
+    UUID stationery = reference("6233");
+    UUID accounting = reference("6221");
+    UUID telephone = reference("6262");
+    classify("invoice", id, stationery, "Papel A4");
+    categories.manual("invoice", id, version("invoice", id), List.of(insurance), false);
+    classify("invoice", id, accounting, "Contabilidade Janeiro");
+    long financialVersion = store.get(Invoice.class, id).version;
+    long expected = version("invoice", id);
+    assertThat(categories.details("invoice", id)).extracting(tag -> tag.get("id"))
+        .containsExactlyInAnyOrder(insurance, accounting);
+    assertThatThrownBy(() -> categories.requestInvoiceClassification(id, expected - 1))
+        .isInstanceOf(DomainException.class);
+
+    var first = categories.requestInvoiceClassification(id, expected);
+    var job = classificationJob("CLASSIFY_INVOICE", id);
+    assertThat(categories.requestInvoiceClassification(id, expected)).containsEntry("version", first.get("version"));
+    assertThat(classificationJob("CLASSIFY_INVOICE", id)).isEqualTo(job);
+    assertThat(first).containsEntry("jobState", "QUEUED");
+
+    provider.program = request -> Json.write(result(List.of(
+        label(stationery.toString(), "Papel A4"), label(telephone.toString(), "serviço telefónico")), List.of()));
+    worker.process(job);
+    var tags = categories.details("invoice", id);
+    assertThat(tags).extracting(tag -> tag.get("id")).containsExactlyInAnyOrder(insurance, telephone);
+    assertThat(tags).anySatisfy(tag -> assertThat(tag).containsEntry("id", insurance)
+        .containsEntry("origins", List.of("MANUAL")));
+    assertThat(categories.view("invoice", id)).containsEntry("rejectedCategoryIds", List.of(stationery));
+    assertThat(store.get(Invoice.class, id).version).isEqualTo(financialVersion);
+  }
+
   @Test void aFailedJobCanBeRetriedAndAnOlderGenerationDoesNotCallTheModel() {
     UUID id = invoice("Papel A4");
     var old = classificationJob("CLASSIFY_INVOICE", id);

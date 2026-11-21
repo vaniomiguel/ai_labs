@@ -65,6 +65,8 @@ export interface ReviewableRecord {
   documentVersion: number | null; fieldProvenance: Record<string, FieldDecision>; reviewStatus: string; reviewIssues: string[];
   remaining: string | null;
   manuallyConfirmed: boolean;
+  categoryDetails: CategoryDetail[];
+  classification: Classification;
   [field: string]: any;
 }
 

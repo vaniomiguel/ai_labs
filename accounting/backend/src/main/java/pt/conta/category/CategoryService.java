@@ -296,8 +296,6 @@ public class CategoryService {
     var invoice = store.get(Invoice.class, id);
     if (invoice.deleted) throw new DomainException(404, "Fatura não encontrada");
     var s = state("invoice", id, true);
-    if (!details("invoice", id).isEmpty())
-      throw new DomainException(409, "A fatura já tem categorias");
     var active = jdbc.queryForList("""
         select state from job where kind='CLASSIFY_INVOICE' and target_id=? and target_version=?
         order by created_at desc,id desc

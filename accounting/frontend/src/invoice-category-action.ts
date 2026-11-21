@@ -1,4 +1,4 @@
-import { Component, computed, inject, input, linkedSignal, output, signal } from "@angular/core";
+import { Component, computed, DestroyRef, inject, input, linkedSignal, output, signal } from "@angular/core";
 import { Api, Classification, errorMessage } from "./api";
 
 @Component({
@@ -10,7 +10,7 @@ import { Api, Classification, errorMessage } from "./api";
     </small>
     @if (!active()) {
       <button type="button" class="text-button" [disabled]="submitting() || disabled()" (click)="classify()">
-        Classificar com IA
+        {{ review() && current()?.categories?.length ? "Rever categorias com IA" : "Classificar com IA" }}
       </button>
     }
     @if (error()) { <small class="error" role="alert">{{ error() }}</small> }
@@ -18,8 +18,10 @@ import { Api, Classification, errorMessage } from "./api";
 })
 export class InvoiceCategoryAction {
   private readonly api = inject(Api);
+  private readonly destroyRef = inject(DestroyRef);
   readonly invoiceId = input.required<string>();
   readonly classification = input<Classification | null>(null);
+  readonly review = input(false);
   readonly disabled = input(false);
   readonly queued = output<void>();
   protected readonly current = linkedSignal(() => this.classification());
@@ -37,22 +39,28 @@ export class InvoiceCategoryAction {
       case "WAITING": return "A aguardar IA";
       case "FAILED": return "Classificação falhou";
     }
+    if (state?.state === "CLASSIFIED") return "Categorias classificadas";
     return state?.state === "REVIEW" ? "Categorias por rever" : "Sem categorias";
   });
 
   protected async classify() {
     if (this.active() || this.submitting() || this.disabled()) return;
+    const previous = this.current();
     this.submitting.set(true);
     this.error.set("");
     try {
       const classification = await this.api.post<Classification>(
         `/invoices/${this.invoiceId()}/categories/classify`,
-        { version: this.current()?.version ?? 0 },
+        { version: previous?.version ?? 0 },
       );
-      this.current.set(classification);
+      if (this.destroyRef.destroyed) return;
+      const latest = this.current();
+      if (latest === previous || classification.version > (latest?.version ?? 0)) {
+        this.current.set(classification);
+      }
       this.queued.emit();
     } catch (error) {
-      this.error.set(errorMessage(error));
+      if (!this.destroyRef.destroyed) this.error.set(errorMessage(error));
     } finally {
       this.submitting.set(false);
     }

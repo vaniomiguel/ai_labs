@@ -7,7 +7,7 @@ import { FormsModule } from "@angular/forms";
 import { MatButtonModule } from "@angular/material/button";
 import { MatSnackBar, MatSnackBarModule } from "@angular/material/snack-bar";
 import { A11yModule } from "@angular/cdk/a11y";
-import { AiExecutionItem, AlertView, Api, contextUsagePercent, contextWarningLabels, DocumentAttempt, euros, errorMessage, labels, JobCounts, JobItem, JobPage, ReconciliationEntry, ReconciliationPage, RepairApplyRequest, RepairPreview, ReviewableRecord } from "./api";
+import { AiExecutionItem, AlertView, Api, Classification, contextUsagePercent, contextWarningLabels, DocumentAttempt, euros, errorMessage, labels, JobCounts, JobItem, JobPage, ReconciliationEntry, ReconciliationPage, RepairApplyRequest, RepairPreview, ReviewableRecord } from "./api";
 import { AppliedFilters } from "./applied-filters";
 import { FinancialFilterBar } from "./financial-filters";
 import { DEFAULT_CATALOG_FILTERS, defaultFinancialFilters, financialQuery, initialFinancialFilters, isFinancialFilterView } from "./workspace-filters";
@@ -128,6 +128,8 @@ export class AppComponent implements OnDestroy {
   private processingRequest = 0;
   readonly editor = signal<any>(null);
   private editorRequest=0;
+  readonly editorClassification = signal<Classification | null>(null);
+  private editorClassificationRequest = 0;
   readonly categoryTarget = signal<{type:"invoice"|"movement";record:any}|null>(null);
   readonly reviewDocument = signal<any>(null);
   readonly activeAlert = signal<AlertView | null>(null);
@@ -365,6 +367,7 @@ export class AppComponent implements OnDestroy {
     this.routeLoading.set(false);
     this.error.set("");
     this.editor.set(null);
+    this.editorClassification.set(null);
     this.reviewDocument.set(null);
     this.activeAlert.set(null);
     this.alertSource.set(null);
@@ -415,6 +418,7 @@ export class AppComponent implements OnDestroy {
   /** Reloads server-derived amounts; the browser never calculates financial balances. */
   async refresh(refreshGroup = true) {
     if (refreshGroup && this.routeKind() === "group") void this.refreshGroup();
+    void this.refreshInvoiceClassification();
     const view = this.view();
     if (view === "processing") return this.loadProcessing();
     if (view === "assistant") return this.loadAssistant();
@@ -649,11 +653,22 @@ export class AppComponent implements OnDestroy {
     this.recordKind = kind;
     const draft = this.suspendedEditor?.url === this.router.url ? this.suspendedEditor.draft : undefined;
     this.suspendedEditor = undefined;
+    this.editorClassification.set(record.classification ?? null);
     this.editor.set(draft ? {
       ...draft, categories: record.categories, categoryDetails: record.categoryDetails, classification: record.classification,
     } : structuredClone(record));
     const history = await this.api.get<any[]>(`/audit/${WORKSPACE_PATHS[recordView(kind)]}/${id}`);
     if (request === this.routeRequest) this.timeline.set(history);
+  }
+
+  private async refreshInvoiceClassification() {
+    const id = this.editor()?.id;
+    if (this.recordKind !== "INVOICE" || !id) return;
+    const editorRequest = this.editorRequest;
+    const request = ++this.editorClassificationRequest;
+    const record = await this.fetchRecord("INVOICE", id).catch(() => null);
+    if (!record || editorRequest !== this.editorRequest || request !== this.editorClassificationRequest) return;
+    this.editorClassification.set(record.classification ?? null);
   }
 
   private async loadEditorAccounts(request: number) {

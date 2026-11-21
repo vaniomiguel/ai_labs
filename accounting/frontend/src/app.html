@@ -1096,10 +1096,19 @@
           [accounts]="state().accounts"
           (changed)="draftEdited()"
         />
-        @if(data.id && activeAlert()?.status!=='OPEN'){<section class="record-categories"><h3>Categorias</h3>
-          <category-tags [categories]="data.categoryDetails || []" [classification]="data.classification" [editable]="true"
-            (manage)="openCategories(recordKind==='INVOICE'?'invoice':'movement',data.id)" />
-        </section>}
+        @if(data.id && (recordKind==='INVOICE' || activeAlert()?.status!=='OPEN')){
+          <section class="record-categories" aria-labelledby="record-categories-title">
+            <h3 id="record-categories-title">Categorias</h3>
+            <category-tags [categories]="editorClassification()?.categories ?? data.categoryDetails ?? []"
+              [classification]="editorClassification()" [editable]="activeAlert()?.status!=='OPEN'"
+              [invoiceId]="recordKind==='INVOICE' ? data.id : null" [reviewInvoice]="recordKind==='INVOICE'"
+              [classificationDisabled]="working()" (classificationRequested)="refresh()"
+              (manage)="openCategories(recordKind==='INVOICE'?'invoice':'movement',data.id)" />
+            @if(recordKind==='INVOICE'){
+              <p class="hint">A IA usa os dados guardados da fatura. Guarda as alterações para as incluir na classificação.</p>
+            }
+          </section>
+        }
         @if(activeAlert()?.status!=='OPEN'){<label
           >Documento de suporte · opcional<input
             type="file"

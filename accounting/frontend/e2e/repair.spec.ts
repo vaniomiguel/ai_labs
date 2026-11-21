@@ -1,4 +1,5 @@
 import { expect, test, Page } from "@playwright/test";
+import type { Classification } from "../src/api";
 
 const docId="e245b1ab-5314-4ad8-a91f-c75510592001",alertId="e245b1ab-5314-4ad8-a91f-c75510592002",jobId="e245b1ab-5314-4ad8-a91f-c75510592003";
 const recordId = "e245b1ab-5314-4ad8-a91f-c75510592004";
@@ -19,7 +20,7 @@ async function setup(page:Page,initial:any={supplier:"",issuedOn:null,total:null
     state.saves = [];
     await page.route("**/api/v1/invoices/" + recordId, route => reply(route, {
       ...document.draft.invoices[0], version: 0, documentId: docId, documentVersion: document.version,
-      reviewStatus: "OPEN",
+      reviewStatus: "OPEN", classification: state.classification,
     }));
     await page.route("**/api/v1/audit/invoices/" + recordId, route => reply(route, []));
     await page.route("**/api/v1/alerts/" + alertId + "/draft", async route => {
@@ -124,6 +125,43 @@ test("record alert stages AI values locally and saves only the selected invoice"
   await dialog.getByRole("button", {name: "Validar e resolver", exact: true}).click();
   await expect(dialog).not.toBeVisible();
   expect(state.saves.at(-1)).toMatchObject({resolve: true, draft: {id: recordId, issuedOn: "2026-01-01"}});
+});
+
+test("AI category classification in an invoice alert preserves staged corrections", async ({ page }) => {
+  let revision = 0;
+  await page.route("**/api/v1/events", route => route.fulfill({
+    contentType: "text/event-stream",
+    body: `retry: 300\nevent: progress\ndata: {"revision":"${revision}","jobs":1,"alerts":1}\n\n`,
+  }));
+  const invoice = { ...valid(), id: recordId, supplier: "" };
+  const { state, dialog } = await setup(page, { invoices: [invoice] }, true);
+  const queued: Classification = { version: 1, state: "PENDING", jobState: "QUEUED", reason: null,
+    categories: [], rejectedCategoryIds: [], catalogRevision: 0 };
+  await page.route(`**/api/v1/invoices/${recordId}/categories/classify`, route => {
+    expect(route.request().postDataJSON()).toEqual({ version: 0 });
+    state.classification = queued;
+    return route.fulfill({ status: 202, json: queued });
+  });
+
+  state.submitted = () => state.result({ invoices: [{ ...invoice, supplier: "Fornecedor proposto" }] });
+  await dialog.getByRole("button", { name: "✧ Pedir tentativa de correção à IA", exact: true }).click();
+  await dialog.getByRole("button", { name: "Aplicar ao rascunho", exact: true }).click();
+  const supplier = dialog.getByLabel("Fornecedor", { exact: true });
+  await expect(supplier).toHaveValue("Fornecedor proposto");
+  const categories = dialog.getByRole("region", { name: "Categorias" });
+  await categories.getByRole("button", { name: "Classificar com IA", exact: true }).click();
+  await expect(categories).toContainText("Classificação agendada");
+  state.classification = { ...queued, version: 2, state: "CLASSIFIED", jobState: null, reason: "Seguro indicado no original.",
+    categories: [{ id: "insurance", name: "Seguros", path: "Seguros", archived: false, origins: ["AI"], evidence: [] }] } satisfies Classification;
+  revision++;
+
+  await expect(categories.getByRole("button", { name: "Seguros", exact: true })).toBeVisible();
+  await expect(categories.getByRole("button", { name: "Rever categorias com IA", exact: true })).toBeVisible();
+  await expect(supplier).toHaveValue("Fornecedor proposto");
+  expect(state.saves).toHaveLength(0);
+  await dialog.getByRole("button", { name: "Validar e resolver", exact: true }).click();
+  await expect(dialog).not.toBeVisible();
+  expect(state.saves).toMatchObject([{ resolve: true, draft: { supplier: "Fornecedor proposto" }, repairs: [{ selectedItems: [recordId] }] }]);
 });
 
   test('editing the invoice date reaches repair previews and validation requests', async ({page}) => {

@@ -1,5 +1,5 @@
 import { expect, Page, test } from "@playwright/test";
-import type { JobTarget } from "../src/api";
+import type { CategoryDetail, Classification, JobTarget } from "../src/api";
 
 const invoiceId = "e245b1ab-5314-4ad8-a91f-c75510594001";
 const documentId = "e245b1ab-5314-4ad8-a91f-c75510594002";
@@ -167,6 +167,58 @@ test("sign-in returns to an invoice bookmark and its editor survives reload", as
   await expect(editor.getByLabel("Fornecedor", { exact: true })).toHaveValue(draft.supplier);
   await editor.getByRole("button", { name: "Fechar editor" }).click();
   await expect(page).toHaveURL("/invoice");
+});
+
+test("invoice editor retries AI category review and refreshes labels without replacing the draft", async ({ page }) => {
+  await signIn(page);
+  const original: CategoryDetail = { id: "initial", name: "Seguros", path: "Seguros", archived: false, origins: ["AI"], evidence: [] };
+  const revised: CategoryDetail = { ...original, id: "revised", name: "Material de escritório", path: "Material de escritório" };
+  let classification: Classification = { version: 4, state: "CLASSIFIED", reason: null, categories: [original], rejectedCategoryIds: [], catalogRevision: 0 };
+  let posts = 0;
+  let revision = 0;
+  await page.route("**/api/v1/events", route => route.fulfill({
+    contentType: "text/event-stream",
+    body: `retry: 300\nevent: progress\ndata: {"revision":"${revision}","jobs":1,"alerts":0}\n\n`,
+  }));
+  await mockRecord(page, "invoice", invoiceId, draft);
+  await page.route(`**/api/v1/invoices/${invoiceId}`, route => {
+    expect(route.request().method()).toBe("GET");
+    return route.fulfill({ json: { ...draft, id: invoiceId, version: 0, classification, categoryDetails: classification.categories } });
+  });
+  await page.route(`**/api/v1/invoices/${invoiceId}/categories/classify`, route => {
+    expect(route.request().postDataJSON()).toEqual({ version: classification.version });
+    posts++;
+    classification = { ...classification, version: classification.version + 1, state: "PENDING", jobState: "QUEUED" };
+    return route.fulfill({ status: 202, json: classification });
+  });
+
+  await page.goto(invoicePath);
+  const editor = page.getByRole("dialog", { name: "Editar registo" });
+  const categories = editor.getByRole("region", { name: "Categorias" });
+  const review = categories.getByRole("button", { name: "Rever categorias com IA", exact: true });
+  const supplier = editor.getByLabel("Fornecedor", { exact: true });
+  await supplier.fill("Fornecedor editado localmente");
+  await expect(categories).toContainText("A IA usa os dados guardados da fatura");
+  await expect(categories.getByRole("button", { name: original.name, exact: true })).toBeVisible();
+  await review.click();
+  await expect(categories).toContainText("Classificação agendada");
+  for (const [jobState, status] of [["RUNNING", "A classificar"], ["WAITING", "A aguardar IA"], ["FAILED", "Classificação falhou"]] as const) {
+    classification = { ...classification, jobState, reason: jobState === "FAILED" ? "A resposta do modelo é inválida." : null };
+    revision++;
+    await expect(categories).toContainText(status);
+  }
+  await expect(categories).toContainText("A resposta do modelo é inválida.");
+  await review.click();
+  await expect(categories).toContainText("Classificação agendada");
+  classification = { ...classification, version: classification.version + 1, state: "CLASSIFIED", jobState: null,
+    reason: "Revisão baseada nos artigos da fatura.", categories: [revised] };
+  revision++;
+  await expect(categories.getByRole("button", { name: revised.name, exact: true })).toBeVisible();
+  await expect(categories.getByRole("button", { name: original.name, exact: true })).toHaveCount(0);
+  await expect(categories).toContainText("Revisão baseada nos artigos da fatura.");
+  await expect(supplier).toHaveValue("Fornecedor editado localmente");
+  await expect(page).toHaveURL(invoicePath);
+  expect(posts).toBe(2);
 });
 
 test("alert review restores the original and its alert context through browser history", async ({ page }) => {
