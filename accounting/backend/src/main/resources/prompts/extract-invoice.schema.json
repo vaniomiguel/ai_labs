@@ -12,12 +12,6 @@
             "null"
           ]
         },
-        "dueOn": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
         "number": {
           "type": [
             "string",
@@ -149,12 +143,6 @@
             "additionalProperties": false,
             "properties": {
               "issuedOn": {
-                "type": [
-                  "string",
-                  "null"
-                ]
-              },
-              "dueOn": {
                 "type": [
                   "string",
                   "null"

@@ -111,10 +111,81 @@ test("category editor works on a small screen and restores keyboard focus",async
   const row=page.locator("tr").filter({hasText:"E2E-CATEGORIA-MOBILE"});await row.getByRole("button",{name:"Editar categorias",exact:true}).click();
   const dialog=page.getByRole("dialog",{name:"Categorias do movimento",exact:true});await expect(dialog).toBeVisible();
   await dialog.getByLabel("Pesquisar categorias",{exact:true}).fill("Seguros");
-  await dialog.getByRole("checkbox",{name:/Seguros/}).check();
+  await dialog.getByRole("checkbox",{name:/Serviços diversos › Seguros\b/}).check();
   await page.screenshot({path:testInfo.outputPath("category-mobile-editor.png"),fullPage:true});
   await dialog.getByRole("button",{name:"Guardar categorias",exact:true}).focus();await page.keyboard.press("Enter");
   await expect(dialog).not.toBeVisible();await expect(row.getByRole("button",{name:"Seguros",exact:true})).toBeVisible();
   await expect(row.getByRole("button",{name:"Editar categorias",exact:true})).toBeFocused();
   await page.screenshot({path:testInfo.outputPath("category-mobile.png"),fullPage:true});
+});
+
+test("an unlabelled invoice can be classified from the list and retried from the editor", async ({ page }) => {
+  const record = await invoice(page, 2085, "E2E-CLASSIFICAR-IA");
+  const classification = {
+    ...record.classification,
+    state: "REVIEW",
+    jobState: null as string | null,
+    reason: "Ainda não há uma categoria para este artigo.",
+  };
+  let requests = 0;
+  await page.route("**/api/v1/invoices?*", async route => {
+    const response = await route.fetch();
+    const body: { items: Array<{ id: string; classification: unknown }> } = await response.json();
+    const row = body.items.find(item => item.id === record.id);
+    if (row) row.classification = { ...classification };
+    await route.fulfill({ response, json: body });
+  });
+  await page.route(`**/api/v1/invoices/${record.id}/categories/classify`, async route => {
+    expect(route.request().method()).toBe("POST");
+    expect(route.request().postDataJSON()).toEqual({ version: classification.version });
+    requests++;
+    classification.version++;
+    classification.state = "PENDING";
+    classification.jobState = "QUEUED";
+    classification.reason = "À espera do classificador.";
+    await route.fulfill({ status: 202, json: { ...classification } });
+  });
+
+  await open(page, "▤ Faturas", 2085);
+  const row = page.getByRole("row").filter({ hasText: "E2E-CLASSIFICAR-IA" });
+  const classify = row.getByRole("button", { name: "Classificar com IA", exact: true });
+  await expect(row).toContainText("Ainda não há uma categoria para este artigo.");
+  await classify.evaluate((button: HTMLButtonElement) => {
+    button.click();
+    button.click();
+  });
+  await expect(row).toContainText("Classificação agendada");
+  expect(requests).toBe(1);
+  await expect(classify).toHaveCount(0);
+
+  classification.state = "WAITING";
+  classification.jobState = "WAITING";
+  classification.reason = "Modelo de categorias indisponível.";
+  await page.getByRole("button", { name: "Atualizar dados", exact: true }).click();
+  await expect(row).toContainText("A aguardar IA");
+
+  classification.state = "FAILED";
+  classification.jobState = "FAILED";
+  classification.reason = "A resposta do modelo é inválida.";
+  await page.getByRole("button", { name: "Atualizar dados", exact: true }).click();
+  await expect(row).toContainText("Classificação falhou");
+  await expect(row).toContainText("A resposta do modelo é inválida.");
+  await row.getByRole("button", { name: "Editar categorias", exact: true }).click();
+  const dialog = page.getByRole("dialog", { name: "Categorias do documento", exact: true });
+  await expect(dialog).toContainText("A resposta do modelo é inválida.");
+  await dialog.getByRole("button", { name: "Classificar com IA", exact: true }).click();
+  await expect(dialog).not.toBeVisible();
+  await expect(row).toContainText("Classificação agendada");
+  expect(requests).toBe(2);
+});
+
+test("the invoice classification endpoint accepts an already queued request", async ({ page }) => {
+  const record = await invoice(page, 2086, "E2E-CATEGORIA-ACEITE");
+  const csrf = await get(page, "/csrf");
+  const response = await page.request.post(`/api/v1/invoices/${record.id}/categories/classify`, {
+    data: { version: record.classification.version },
+    headers: { "X-XSRF-TOKEN": csrf.token },
+  });
+  expect(response.status()).toBe(202);
+  expect(await response.json()).toMatchObject({ state: "PENDING", jobState: "QUEUED" });
 });

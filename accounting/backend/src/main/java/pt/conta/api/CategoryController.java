@@ -4,6 +4,7 @@ import jakarta.validation.Valid;
 import jakarta.validation.constraints.*;
 import java.util.*;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.http.HttpStatus;
 import org.springframework.web.bind.annotation.*;
 import pt.conta.category.CategoryService;
 import pt.conta.shared.Inputs;
@@ -20,6 +21,11 @@ public class CategoryController {
   @PutMapping("/invoices/{id}/categories")
   public Map<String, Object> invoice(@PathVariable UUID id, @Valid @RequestBody AssignmentEdit body) {
     return categories.manual("invoice", id, body.version(), body.categoryIds(), body.allowAi());
+  }
+  @PostMapping("/invoices/{id}/categories/classify")
+  @ResponseStatus(HttpStatus.ACCEPTED)
+  public Map<String, Object> classifyInvoice(@PathVariable UUID id, @Valid @RequestBody Revision body) {
+    return categories.requestInvoiceClassification(id, body.version());
   }
   @PutMapping("/movements/{id}/categories")
   public Map<String, Object> movement(@PathVariable UUID id, @Valid @RequestBody AssignmentEdit body) {

@@ -57,9 +57,18 @@ public class AiReviewStatus {
     var reviews = new HashMap<UUID, Header>();
     var jobs = new HashMap<UUID, Pending>();
     jdbc.query(
-        "select target_id,target_version,model,created_at,case when outcome='VALID' then"
-            + " response::jsonb->>'verdict' else 'INVALID' end as verdict from ai_execution where"
-            + " task='review' order by created_at desc",
+        """
+        select target_id,target_version,model,reviewed_at,verdict from (
+          select target_id,target_version,payload::jsonb->'reviewResult'->>'model' as model,
+            updated_at as reviewed_at,payload::jsonb->'reviewResult'->>'verdict' as verdict,true as aggregate
+          from job where state='DONE' and kind in ('REVIEW_INVOICE','REVIEW_MOVEMENT','REVIEW_DOCUMENT','REVIEW_ALLOCATION')
+            and payload::jsonb->'reviewResult' is not null
+          union all
+          select target_id,target_version,model,created_at,
+            case when outcome='VALID' then response::jsonb->>'verdict' else 'INVALID' end,false
+          from ai_execution where task='review'
+        ) reviews order by target_version desc, aggregate desc, reviewed_at desc
+        """,
         (org.springframework.jdbc.core.RowCallbackHandler)
             rs -> {
               UUID id = rs.getObject(1, UUID.class);
@@ -73,7 +82,8 @@ public class AiReviewStatus {
             });
     jdbc.query(
         "select target_id,target_version,state from job where kind in"
-            + " ('REVIEW_INVOICE','REVIEW_MOVEMENT','REVIEW_ALLOCATION') order by created_at desc",
+            + " ('REVIEW_INVOICE','REVIEW_MOVEMENT','REVIEW_DOCUMENT','REVIEW_ALLOCATION')"
+            + " order by target_version desc,created_at desc",
         (org.springframework.jdbc.core.RowCallbackHandler)
             rs ->
                 jobs.putIfAbsent(

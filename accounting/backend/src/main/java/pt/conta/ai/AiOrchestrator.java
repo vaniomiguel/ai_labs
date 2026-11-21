@@ -3,20 +3,15 @@ package pt.conta.ai;
 import static pt.conta.shared.Inputs.*;
 
 import java.io.ByteArrayOutputStream;
-import java.nio.charset.StandardCharsets;
-import java.security.MessageDigest;
 import java.util.*;
 import javax.imageio.ImageIO;
 import org.apache.pdfbox.Loader;
 import org.apache.pdfbox.rendering.PDFRenderer;
 import org.springframework.stereotype.Service;
-import pt.conta.bank.BankMovement;
 import pt.conta.document.*;
 import pt.conta.invoice.*;
 import pt.conta.jobs.JobQueue;
 import pt.conta.ledger.BookkeepingService;
-import pt.conta.reconciliation.Allocation;
-import pt.conta.review.Alert;
 import pt.conta.shared.*;
 
 /**
@@ -28,38 +23,30 @@ public class AiOrchestrator {
   private final RepairAiWorker repairWorker;
   private final InvoiceExtractionRequests invoiceRequests;
   private final Store store;
-  private final AiProvider provider;
+  private final AiModelExecution models;
+  private final AutomaticReviewWorker automaticReviews;
   private final PromptCatalog prompts;
   private final Settings settings;
-  private final AiResults results;
   private final DocumentPublisher publisher;
   private final DocumentStorage storage;
   private final BookkeepingService book;
 
-  @org.springframework.beans.factory.annotation.Value("${accounting.ai-history-months:}")
-  private String historyMonths;
-
   public AiOrchestrator(
-      Store store,
-      AiProvider provider,
-      PromptCatalog prompts,
-      Settings settings,
-      AiResults results,
-      DocumentPublisher publisher,
-      DocumentStorage storage,
-      BookkeepingService book, pt.conta.category.CategoryAiWorker categoryWorker, RepairAiWorker repairWorker,
-      InvoiceExtractionRequests invoiceRequests) {
-    this.invoiceRequests = invoiceRequests;
-    this.repairWorker = repairWorker;
-    this.categoryWorker = categoryWorker;
+      Store store, AiModelExecution models, PromptCatalog prompts, Settings settings,
+      DocumentPublisher publisher, DocumentStorage storage, BookkeepingService book,
+      pt.conta.category.CategoryAiWorker categoryWorker, RepairAiWorker repairWorker,
+      InvoiceExtractionRequests invoiceRequests, AutomaticReviewWorker automaticReviews) {
     this.store = store;
-    this.provider = provider;
+    this.models = models;
     this.prompts = prompts;
     this.settings = settings;
-    this.results = results;
     this.publisher = publisher;
     this.storage = storage;
     this.book = book;
+    this.categoryWorker = categoryWorker;
+    this.repairWorker = repairWorker;
+    this.invoiceRequests = invoiceRequests;
+    this.automaticReviews = automaticReviews;
   }
 
   /** Executes one extraction, review or explicitly requested repair task. */
@@ -69,84 +56,57 @@ public class AiOrchestrator {
       categoryWorker.process(job);
       return;
     }
-    SourceDocument doc = null;
-    Object subject;
-    BaseEntity target;
-    boolean suggest = job.kind().equals("SUGGEST_RECONCILIATION");
-    var candidateContext =
-        suggest
-            ? book.candidateContext(job.target(), book.candidates())
-            : List.<Map<String, Object>>of();
-    if (suggest
-        && (candidateContext.isEmpty()
-            || !Hashes.sha256(Json.write(candidateContext))
-                .equals(Json.read(job.payload()).path("fingerprint").asText()))) return;
-    if (job.kind().equals("REVIEW_INVOICE") || suggest) {
-      var i = store.get(Invoice.class, job.target());
-      target = i;
-      if (i.deleted) return;
-      subject = book.invoiceView(i);
-      if (i.documentId != null) doc = store.get(SourceDocument.class, i.documentId);
-    } else if (job.kind().equals("REVIEW_MOVEMENT")) {
-      var m = store.get(BankMovement.class, job.target());
-      target = m;
-      if (m.deleted) return;
-      subject = book.movementView(m);
-      if (m.documentId != null) doc = store.get(SourceDocument.class, m.documentId);
-    } else if (job.kind().equals("REVIEW_ALLOCATION")) {
-      var a = store.get(Allocation.class, job.target());
-      target = a;
-      if (!a.active) return;
-      var invoice = store.get(Invoice.class, a.invoiceId);
-      subject =
-          map(
-              "allocation",
-              book.allocationView(a),
-              "invoice",
-              book.invoiceView(invoice),
-              "movement",
-              book.movementView(store.get(BankMovement.class, a.movementId)));
-      if (invoice.documentId != null) doc = store.get(SourceDocument.class, invoice.documentId);
-    } else {
-      doc = store.get(SourceDocument.class, job.target());
-      target = doc;
-      if (doc.deleted) return;
-      subject = Json.read(doc.draft);
-    }
-    if (target.version != job.revision()) return;
-    boolean extract =
-        job.kind().equals("AI_EXTRACT_DOCUMENT")
-            && doc != null
-            && Set.of("INVOICE", "STATEMENT").contains(doc.kind);
-    String task =
-        suggest
-            ? "reconciliation"
-            : extract
-                ? doc.kind.equals("STATEMENT") ? "extract-statement" : "extract-invoice"
-                : "review";
-    String selected = settings.get("model:" + task, "qwen3.5:9b");
-    var model =
-        provider.models().stream()
-            .filter(AiProvider.Model::completion)
-            .filter(m -> m.name().equals(selected))
-            .findFirst()
-            .orElseThrow(
-                () ->
-                    new OllamaProvider.AiUnavailable(
-                        "Instala ou seleciona um modelo de geração: " + selected, null));
-    String source = doc == null ? "" : doc.text;
-    if (doc != null && doc.kind.equals("HISTORY") && !historyMonths.isBlank()) {
-      subject = historyScope(Json.object(doc.draft));
-      source = Json.write(subject);
-    }
-    if (extract && doc.kind.equals("INVOICE")) {
-      var request = invoiceRequests.automatic(model.name(), source);
-      var response = execute(job, model, task, doc.sha256, request);
-      publishExtraction(job, doc, List.of(response), source);
+    if (AutomaticReviewContext.Kind.forJob(job.kind()).isPresent()) {
+      automaticReviews.process(job);
       return;
     }
+    if (job.kind().equals("SUGGEST_RECONCILIATION")) {
+      suggestReconciliation(job);
+      return;
+    }
+    if (job.kind().equals("AI_EXTRACT_DOCUMENT")) {
+      extractDocument(job);
+      return;
+    }
+    throw DomainException.invalid("Tipo de tarefa de IA desconhecido: " + job.kind());
+  }
+
+  private void suggestReconciliation(JobQueue.Claim job) throws Exception {
+    var candidates = book.candidateContext(job.target(), book.candidates());
+    String fingerprint = Json.read(job.payload()).path("fingerprint").asText();
+    if (candidates.isEmpty() || !Hashes.sha256(Json.write(candidates)).equals(fingerprint)) return;
+    var invoice = store.get(Invoice.class, job.target());
+    if (invoice.deleted || invoice.version != job.revision()) return;
+    var doc = invoice.documentId == null ? null : store.get(SourceDocument.class, invoice.documentId);
+    var input = new ChunkedInput("reconciliation", doc, book.invoiceView(invoice), false, candidates, fingerprint);
+    executeByChunk(job, models.select(input.task()), input);
+  }
+
+  private void extractDocument(JobQueue.Claim job) throws Exception {
+    var doc = store.get(SourceDocument.class, job.target());
+    if (doc.deleted || doc.version != job.revision()) return;
+    if (doc.kind.equals("INVOICE")) {
+      String task = PromptCatalog.INVOICE_EXTRACTION_SYSTEM_INSTRUCTIONS;
+      var model = models.select(task);
+      var request = invoiceRequests.automatic(model.name(), doc.text);
+      var response = models.execute(job, model, task, doc.sha256, request);
+      publishExtraction(job, doc, List.of(response), doc.text);
+      return;
+    }
+    if (!doc.kind.equals("STATEMENT")) return;
+    var input = new ChunkedInput("extract-statement", doc, Json.read(doc.draft), true, List.of(), null);
+    publishExtraction(job, doc, executeByChunk(job, models.select(input.task()), input), doc.text);
+  }
+
+  private record ChunkedInput(
+      String task, SourceDocument document, Object subject, boolean headerOnly,
+      List<Map<String, Object>> candidates, String candidateFingerprint) {}
+
+  private List<Map<String, Object>> executeByChunk(
+      JobQueue.Claim job, AiProvider.Model model, ChunkedInput input) throws Exception {
+    var doc = input.document();
     var responses = new ArrayList<Map<String, Object>>();
-    var chunks = chunks(doc, source);
+    var chunks = chunks(doc, doc == null ? "" : doc.text);
     int chunkNumber = 0;
     for (var chunk : chunks) {
       var images = new ArrayList<String>();
@@ -155,7 +115,7 @@ public class AiOrchestrator {
       var payload =
           map(
               "data",
-              compact(subject, extract || job.kind().equals("REVIEW_DOCUMENT")),
+              compact(input.subject(), input.headerOnly()),
               "sourceText",
               chunk.text(),
               "sourcePages",
@@ -178,87 +138,30 @@ public class AiOrchestrator {
                   "ambiguousMatches",
                   "SUGGEST_ONLY"),
               "candidates",
-              candidateContext,
+              input.candidates(),
               "candidateFingerprint",
-              suggest ? Json.read(job.payload()).path("fingerprint").asText() : null);
-      String input = Json.write(payload);
-      String prompt = prompts.prompt(task) + "\n"
+              input.candidateFingerprint());
+      String serialized = Json.write(payload);
+      String prompt = prompts.prompt(input.task()) + "\n"
           + prompts.prompt(PromptCatalog.HUMAN_FIELD_AUTHORITY_INSTRUCTIONS).stripTrailing();
-      if (input.length() > 50000)
+      if (serialized.length() > 50000)
         throw DomainException.invalid(
             "O conteúdo excede o contexto seguro; revê este documento manualmente");
-      var request = new AiProvider.Request(model.name(), prompt, input, prompts.schema(task), images);
-      var parsed = execute(job, model, task, doc == null ? "" : doc.sha256, request);
-      if (suggest) {
-        var allowed =
-            candidateContext.stream()
-                .map(c -> Json.read(Json.write(c.get("movement"))).path("id").asText())
-                .collect(java.util.stream.Collectors.toSet());
-        for (var ranked : rows(parsed, "rankedCandidates"))
-          if (!allowed.contains(ranked.get("movementId").toString()))
-            throw DomainException.invalid("A IA sugeriu um movimento que não está nos candidatos");
-      }
-      responses.add(parsed);
+      var request = new AiProvider.Request(model.name(), prompt, serialized, prompts.schema(input.task()), images);
+      var response = models.execute(job, model, input.task(), doc == null ? "" : doc.sha256, request);
+      responses.add(response);
+      if (input.candidateFingerprint() != null) validateCandidateIds(response, input.candidates());
     }
-    if (suggest) return;
-    if (extract) {
-      publishExtraction(job, doc, responses, source);
-    } else {
-      var concerns = new ArrayList<Map<String, Object>>();
-      var suggestions = new ArrayList<Object>();
-      var summaries = new ArrayList<String>();
-      for (var response : responses) {
-        concerns.addAll(rows(response, "concerns"));
-        if (response.get("suggestions") instanceof List<?> list) suggestions.addAll(list);
-        summaries.add(Objects.toString(response.get("summary"), ""));
-      }
-      var combined =
-          map(
-              "verdict",
-              concerns.isEmpty() ? "PASS" : "CONCERN",
-              "concerns",
-              concerns,
-              "suggestions",
-              suggestions,
-              "summary",
-              String.join("; ", summaries));
-      results.reviewed(job, combined, source);
-    }
+    return responses;
   }
 
-  private Map<String, Object> execute(
-      JobQueue.Claim job, AiProvider.Model model, String task, String documentHash,
-      AiProvider.Request request) {
-    String inputHash = hash(request.input() + model.digest() + request.instructions() + documentHash);
-    var cached = store.all(AiExecution.class).stream()
-        .filter(e -> e.inputHash.equals(inputHash) && "VALID".equals(e.outcome))
-        .findFirst();
-    if (cached.isPresent()) return StructuredOutput.parse(cached.get().response, request.schema());
-
-    long started = System.nanoTime();
-    String raw = provider.complete(request);
-    var execution = new AiExecution();
-    execution.targetId = job.target();
-    execution.targetVersion = job.revision();
-    execution.task = task;
-    execution.model = model.name();
-    execution.modelDigest = model.digest();
-    execution.promptVersion = "v1:" + hash(request.instructions());
-    execution.inputHash = inputHash;
-    execution.durationMs = (System.nanoTime() - started) / 1_000_000;
-    execution.request = request.input();
-    execution.response = raw;
-    Map<String, Object> parsed;
-    try {
-      parsed = StructuredOutput.parse(raw, request.schema());
-      execution.outcome = "VALID";
-    } catch (RuntimeException e) {
-      execution.outcome = "INVALID";
-      results.record(execution);
-      throw e;
-    }
-    results.record(execution);
-    return parsed;
+  private void validateCandidateIds(Map<String, Object> response, List<Map<String, Object>> candidates) {
+    var allowed = candidates.stream()
+        .map(c -> Json.read(Json.write(c.get("movement"))).path("id").asText())
+        .collect(java.util.stream.Collectors.toSet());
+    for (var ranked : rows(response, "rankedCandidates"))
+      if (!allowed.contains(ranked.get("movementId").toString()))
+        throw DomainException.invalid("A IA sugeriu um movimento que não está nos candidatos");
   }
 
   private void publishExtraction(
@@ -322,50 +225,6 @@ public class AiOrchestrator {
     if (result.get("description") instanceof String text && text.length() > 2000)
       result.put("description", text.substring(0, 2000) + " [consultar o texto da página]");
     return result;
-  }
-
-  /** Restricts optional evaluation history reviews by original sheet, never by invoice date. */
-  private Map<String, Object> historyScope(Map<String, Object> draft) {
-    var monthNames =
-        List.of(
-            "JANEIRO",
-            "FEVEREIRO",
-            "MARCO",
-            "ABRIL",
-            "MAIO",
-            "JUNHO",
-            "JULHO",
-            "AGOSTO",
-            "SETEMBRO",
-            "OUTUBRO",
-            "NOVEMBRO",
-            "DEZEMBRO");
-    var allowed = new HashSet<String>();
-    for (String part : historyMonths.split(",")) {
-      int number = Integer.parseInt(part.trim());
-      if (number < 1 || number > 12)
-        throw DomainException.invalid("Mês de revisão histórica inválido");
-      allowed.add(monthNames.get(number - 1));
-    }
-    var rows =
-        rows(draft, "rows").stream()
-            .filter(
-                r ->
-                    allowed.contains(
-                        pt.conta.reconciliation.MatchingRules.normalize(
-                            Objects.toString(r.get("sheet"), ""))))
-            .toList();
-    var sheets =
-        rows(draft, "sheets").stream()
-            .filter(
-                s ->
-                    allowed.contains(
-                        pt.conta.reconciliation.MatchingRules.normalize(
-                            Objects.toString(s.get("name"), ""))))
-            .map(s -> map("name", s.get("name"), "controls", s.get("controls")))
-            .toList();
-    return map(
-        "rows", rows, "sheets", sheets, "reviewMonths", historyMonths, "year", draft.get("year"));
   }
 
   private record Chunk(String text, List<Integer> pages) {}
@@ -457,15 +316,5 @@ public class AiOrchestrator {
     if (!kind.equals("STATEMENT")) draft.put("categories", new ArrayList<>(categories));
     if (!invoices.isEmpty()) draft.put("invoices", invoices);
     return map("draft", draft, "evidence", evidence, "issues", new ArrayList<>(issues));
-  }
-
-  private static String hash(String value) {
-    try {
-      return HexFormat.of()
-          .formatHex(
-              MessageDigest.getInstance("SHA-256").digest(value.getBytes(StandardCharsets.UTF_8)));
-    } catch (Exception e) {
-      throw new IllegalStateException(e);
-    }
   }
 }

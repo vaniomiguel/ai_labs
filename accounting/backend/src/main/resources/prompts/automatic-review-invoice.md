@@ -1,0 +1,3 @@
+Check the supplier and supplier tax ID against the issuer, not the customer. Check the saved issue date against the date in the invoice context. Exclude explicitly identified due, service, print, travel and booking dates. If several candidates remain in the same month and year, extraction uses the earliest; that heuristic by itself does not establish a contradiction. Treat unresolved dates from different months or years as uncertain.
+
+Distinguish the final total including VAT from taxable bases, subtotals, VAT, balances and change. Compare only supplied invoice fields and individual indexed items. Match article descriptions, quantities and monetary values to the correct row, preserving legitimate repeated items. Do not join independent receipts.

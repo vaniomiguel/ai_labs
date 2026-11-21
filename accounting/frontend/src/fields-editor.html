@@ -1,6 +1,6 @@
 @if(kind==='INVOICE' && data.invoices?.length){
   <p>Este original contém {{data.invoices.length}} comprovativos independentes.</p>
-  @for(invoice of data.invoices;track $index){<details [open]="true"><summary>Comprovativo {{$index+1}} · {{invoice.supplier || 'Por identificar'}}</summary><record-fields kind="INVOICE" [data]="invoice" [accounts]="accounts" /></details>}
+  @for(invoice of data.invoices;track $index){<details [open]="true"><summary>Comprovativo {{$index+1}} · {{invoice.supplier || 'Por identificar'}}</summary><record-fields kind="INVOICE" [data]="invoice" [accounts]="accounts" (changed)="changed.emit()" /></details>}
 } @else {
 @if(kind==='INVOICE'){
 <div class="form-grid">
@@ -23,7 +23,6 @@
   <label
     >Data de emissão<input type="date" [(ngModel)]="data.issuedOn"
   /></label>
-  <label>Vencimento<input type="date" [(ngModel)]="data.dueOn" /></label>
   <label
     >Total com IVA<input
       inputmode="decimal"

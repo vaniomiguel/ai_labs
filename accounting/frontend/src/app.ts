@@ -2,6 +2,7 @@ import { Component, signal, inject, computed, OnDestroy } from "@angular/core";
 import { CommonModule } from "@angular/common";
 import { FormsModule } from "@angular/forms";
 import { MatButtonModule } from "@angular/material/button";
+import { MatSnackBar, MatSnackBarModule } from "@angular/material/snack-bar";
 import { A11yModule } from "@angular/cdk/a11y";
 import { Api, euros, errorMessage, labels, JobCounts, JobItem, JobPage } from "./api";
 import { FieldsEditor } from "./fields-editor";
@@ -20,6 +21,7 @@ import { RepairPanel } from "./repair-panel";
     CommonModule,
     FormsModule,
     MatButtonModule,
+    MatSnackBarModule,
     A11yModule,
     FieldsEditor,
     PdfViewer,
@@ -29,6 +31,7 @@ import { RepairPanel } from "./repair-panel";
 })
 export class AppComponent implements OnDestroy {
   private api = inject(Api);
+  private readonly snackBar = inject(MatSnackBar);
   private readonly activeOperations = signal(0);
   readonly working = computed(() => this.activeOperations() > 0);
   readonly money = euros;
@@ -418,6 +421,7 @@ export class AppComponent implements OnDestroy {
       &&(!this.filters.day||day===Number(this.filters.day))&&(!this.filters.from||date>=this.filters.from)&&(!this.filters.to||date<=this.filters.to);
   }
   async saveRecord(validate: boolean) {
+    if (this.working() || !this.editor()) return;
     const request=this.editorRequest;
     await this.run(async () => {
       const data = { ...this.editor(), validate };
@@ -428,12 +432,26 @@ export class AppComponent implements OnDestroy {
       else await this.api.post(resource, data);
       if(request!==this.editorRequest){await this.refresh();return;}
       this.closeEditor();
-      this.notice.set(
-        validate
-          ? this.inCurrentPeriod(data.issuedOn || data.bookedOn) ? "Registo validado e saldos atualizados." : "Registo validado. Pertence a outro período e fica fora dos filtros atuais."
-          : "Rascunho guardado; fica fora dos saldos.",
+      this.showSaveSuccess(
+        validate ? "Validar e guardar" : "Guardar rascunho",
+        this.recordSaveContext(validate, data.issuedOn || data.bookedOn),
       );
       await this.refresh();
+    });
+  }
+  private recordSaveContext(validate: boolean, date: string | null): string {
+    if (!validate) return "Rascunho guardado; fica fora dos saldos.";
+    return this.inCurrentPeriod(date)
+      ? "Registo validado e saldos atualizados."
+      : "Registo validado. Pertence a outro período e fica fora dos filtros atuais.";
+  }
+  private showSaveSuccess(action: string, context = "") {
+    const message = `${action}: operação concluída com sucesso.${context ? " " + context : ""}`;
+    this.snackBar.open(message, "Fechar", {
+      duration: 7000,
+      horizontalPosition: "center",
+      verticalPosition: "bottom",
+      politeness: "polite",
     });
   }
   async attach(event: Event) {
@@ -477,21 +495,19 @@ export class AppComponent implements OnDestroy {
   }
   closeReview(){++this.documentRequest;this.reviewDocument.set(null);this.activeAlert.set(null);}
   async saveDraft(resolve: boolean) {
+    const doc = this.reviewDocument();
+    if (this.working() || !doc) return;
+    const request = this.documentRequest;
     await this.run(async () => {
-      const doc = this.reviewDocument();
-      this.reviewDocument.set(
-        await this.api.put("/documents/" + doc.id + "/draft", {
-          version: doc.version,
-          draft: doc.draft,
-          resolve,
-        }),
-      );
-      this.notice.set(
-        resolve
-          ? "Dados validados e publicados."
-          : "Alterações guardadas. O alerta continua em aberto.",
-      );
-      if (resolve) this.activeAlert.set(null);
+      await this.api.put("/documents/" + doc.id + "/draft", {
+        version: doc.version,
+        draft: doc.draft,
+        resolve,
+      });
+      if (request === this.documentRequest) {
+        this.closeReview();
+        this.showSaveSuccess(resolve ? "Validar e resolver" : "Guardar sem resolver");
+      }
       await this.refresh();
     });
   }

@@ -35,6 +35,43 @@ test.beforeEach(async({page})=>{
 });
 test.afterEach(async({page})=>{for(const row of created){const current=await get(page,`/${row.resource}/${row.id}`);const csrf=await get(page,'/csrf');const response=await page.request.delete(`/api/v1/${row.resource}/${row.id}?version=${current.version}`,{headers:{'X-XSRF-TOKEN':csrf.token}});expect(response.ok(),await response.text()).toBeTruthy();}});
 
+  test('manual invoices edit and save only the invoice date', async ({page}) => {
+    await open(page, '▤ Faturas', 2077);
+    await page.getByRole('button', {name: '+ Nova fatura', exact: true}).click();
+    const dialog = page.getByRole('dialog', {name: 'Editar registo', exact: true});
+    const firstDate = dialog.getByLabel('Data de emissão', {exact: true});
+    await expect(dialog.getByLabel('Vencimento', {exact: true})).toHaveCount(0);
+    await dialog.getByLabel('Fornecedor', {exact: true}).fill('E2E-INVOICE-DATE');
+    await firstDate.focus();
+    await firstDate.press('ArrowLeft');
+    await firstDate.press('ArrowLeft');
+    await firstDate.pressSequentially('0129');
+    await firstDate.pressSequentially('2016');
+    await expect(firstDate).toHaveValue('2016-01-29');
+    await dialog.getByLabel('Fornecedor', {exact: true}).click();
+    await expect(firstDate).toHaveValue('2016-01-29');
+    await firstDate.fill('2077-02-15');
+    await expect(firstDate).toHaveValue('2077-02-15');
+    await firstDate.clear();
+    await firstDate.blur();
+    await expect(firstDate).toHaveValue('');
+    await firstDate.fill('2077-02-17');
+    await firstDate.blur();
+    const saved = page.waitForResponse(response =>
+      response.url().endsWith('/api/v1/invoices') && response.request().method() === 'POST');
+    await dialog.getByRole('button', {name: 'Guardar rascunho', exact: true}).click();
+    const response = await saved;
+    expect(response.ok(), await response.text()).toBeTruthy();
+    const row = await response.json();
+    created.push({resource: 'invoices', id: row.id});
+    await expect(dialog).not.toBeVisible();
+    await expect(page.locator('mat-snack-bar-container')).toContainText('Guardar rascunho: operação concluída com sucesso.');
+    expect(await get(page, '/invoices/' + row.id)).toMatchObject({
+      issuedOn: '2077-02-17', reviewStatus: 'OPEN',
+    });
+    expect(row).not.toHaveProperty('dueOn');
+  });
+
 test('undated pending invoices are visible in both lists and validate without losing the selected filters',async({page},testInfo)=>{
   const row=await create(page,'invoices',{supplier:'E2E-UNDATED-INVOICE',number:'E2E-PENDING-I',total:'100.00',issuedOn:null,validate:false});
   await open(page,'',2070);let entry=page.locator('tr.reconciliation-entry').filter({hasText:'E2E-UNDATED-INVOICE'});
@@ -45,8 +82,10 @@ test('undated pending invoices are visible in both lists and validate without lo
   await page.getByRole('button',{name:'▤ Faturas',exact:true}).click();const invoice=page.locator('tr').filter({hasText:'E2E-UNDATED-INVOICE'});
   await expect(invoice).toContainText('Provisório');await invoice.getByRole('button',{name:'Rever e validar',exact:true}).click();
   dialog=page.getByRole('dialog',{name:'Editar registo',exact:true});await dialog.getByLabel('Data de emissão',{exact:true}).fill('2070-01-01');
+  await dialog.getByLabel('Data de emissão',{exact:true}).blur();
+  await expect(dialog.getByLabel('Vencimento',{exact:true})).toHaveCount(0);
   await dialog.getByRole('button',{name:'Validar e guardar',exact:true}).click();await expect(dialog).not.toBeVisible();
-  expect((await get(page,'/invoices/'+row.id)).reviewStatus).toBe('CORRECTED');await expect(page.getByLabel('Ano',{exact:true})).toHaveValue('2070');
+  const saved=await get(page,'/invoices/'+row.id);expect(saved).toMatchObject({reviewStatus:'CORRECTED',issuedOn:'2070-01-01'});expect(saved).not.toHaveProperty('dueOn');await expect(page.getByLabel('Ano',{exact:true})).toHaveValue('2070');
   await expect(invoice.getByRole('button',{name:'Rever e validar',exact:true})).toHaveCount(0);
   await page.screenshot({path:testInfo.outputPath('pending-invoice-validated.png'),fullPage:true});
 });
@@ -61,7 +100,7 @@ test('source filename identifies an invoice with missing fields and opens its or
   await expect(dialog).toContainText('Falta a data');await expect(dialog).toContainText('Falta o fornecedor');await expect(dialog).toContainText('apenas a este item');
   await dialog.getByLabel('Fornecedor',{exact:true}).fill('Fornecedor corrigido');await dialog.getByLabel('Data de emissão',{exact:true}).fill('2016-01-01');await dialog.getByLabel('Total com IVA',{exact:true}).fill('56.64');
   await dialog.getByRole('button',{name:'Validar e guardar',exact:true}).click();await expect(dialog).not.toBeVisible();
-  await expect(page.getByRole('status')).toContainText('Registo validado. Pertence a outro período e fica fora dos filtros atuais.');
+  await expect(page.locator('mat-snack-bar-container')).toContainText('Validar e guardar: operação concluída com sucesso. Registo validado. Pertence a outro período e fica fora dos filtros atuais.');
   await expect(page.getByLabel('Ano',{exact:true})).toHaveValue('2071');
 });
 
@@ -74,6 +113,7 @@ test('pending movements show missing amount and direction without inventing a cr
   await expect(entry).toContainText('Direção em falta');await expect(entry).not.toContainText('0,00 €');await entry.getByRole('button',{name:'Rever e validar',exact:true}).click();
   const dialog=page.getByRole('dialog',{name:'Editar registo',exact:true});await dialog.getByLabel('Data do movimento',{exact:true}).fill('2072-01-01');await dialog.getByLabel('Montante positivo',{exact:true}).fill('60.00');await dialog.getByLabel('Direção',{exact:true}).selectOption('DEBIT');
   await dialog.getByRole('button',{name:'Validar e guardar',exact:true}).click();await expect(dialog).not.toBeVisible();
+  await expect(page.locator('mat-snack-bar-container')).toContainText('Validar e guardar: operação concluída com sucesso.');
   expect((await get(page,'/movements/'+row.id)).reviewStatus).toBe('CORRECTED');await expect(entry.locator('.reconciliation-impact')).toContainText('-60,00 €');
 });
 
@@ -112,4 +152,5 @@ test('pending review is accessible on a small screen and keyboard users can save
   const dialog=page.getByRole('dialog',{name:'Editar registo',exact:true});await expect(dialog).toContainText('fora dos cálculos');await dialog.getByLabel('Número da fatura',{exact:true}).fill('MOBILE-DRAFT');
   await page.screenshot({path:testInfo.outputPath('pending-mobile-review.png'),fullPage:true});
   await dialog.getByRole('button',{name:'Guardar rascunho',exact:true}).click();await expect(dialog).not.toBeVisible();expect((await get(page,'/invoices/'+row.id)).reviewStatus).toBe('OPEN');await expect(item).toContainText('Por validar');
+  await expect(page.locator('mat-snack-bar-container')).toContainText('Guardar rascunho: operação concluída com sucesso.');
 });

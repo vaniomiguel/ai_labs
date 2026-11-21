@@ -98,7 +98,9 @@ class RepairIntegrationTest {
   }
 
   @Test void fullTextLongerThanOldChunksReachesTheProviderUnchanged()throws Exception {
-    String source="Documento "+"texto completo ".repeat(2250)+" FIM";
+    // Leave room for explicit schema/field state while still exceeding the former chunk boundary.
+    String source="Documento "+"texto completo ".repeat(2140)+" FIM";
+    assertThat(source.length()).isGreaterThan(32000);
     var f=fixture(source,1,"{\"pages\":[{\"page\":1,\"text\":\"excerto incompleto\"}]}");
     provider.program=request->{assertThat(Json.read(request.input()).path("sourceText").asText()).isEqualTo(source);
       assertThat(request.input()).contains("Falta a data da fatura");assertThat(request.images()).isEmpty();assertThat(request.requireFullContext()).isTrue();return Json.write(response(valid(),List.of()));};
@@ -112,6 +114,43 @@ class RepairIntegrationTest {
     provider.program=request->{assertThat(Json.read(request.input()).path("fieldProvenance").path("root").path("supplier").path("protected").asBoolean()).isTrue();
       assertThat(request.instructions()).contains("Human-entered values are authoritative","only suggestions");return Json.write(response(valid(),List.of()));};
     process(request(f));assertThat(Json.object(doc.draft)).containsEntry("supplier","Nome humano");assertNoMoney();
+  }
+
+  @Test void savedHumanValuesAndAutomaticCorrectionsHaveExplicitModelContext() throws Exception {
+    var f = fixture("Emissão 2026-01-01 Fornecedor OCR Total 200,00", 1, "{}");
+    var doc = store.get(SourceDocument.class, f.doc);
+    doc.draft = Json.write(map("supplier", "Human supplier", "issuedOn", null, "total", "100.00"));
+    doc.fieldProvenance = Json.write(map("root", map(
+        "supplier", map("origin", "HUMAN_EDIT", "protected", true),
+        "total", map("origin", "AUTOMATIC", "protected", false))));
+    store.flush();
+    provider.program = request -> {
+      var input = Json.object(request.input());
+      var supplier = rows(input, "filledFields").stream()
+          .filter(field -> field.get("path").equals("supplier")).findFirst().orElseThrow();
+      var total = rows(input, "filledFields").stream()
+          .filter(field -> field.get("path").equals("total")).findFirst().orElseThrow();
+      assertThat(supplier).containsEntry("value", "Human supplier").containsEntry("authoritative", true)
+          .containsEntry("correctionAllowed", false);
+      assertThat(total).containsEntry("value", "100.00").containsEntry("origin", "AUTOMATIC")
+          .containsEntry("correctionAllowed", true);
+      assertThat(rows(input, "fieldsToExtract").getFirst()).containsEntry("path", "issuedOn")
+          .containsEntry("requiredForValidation", true);
+      assertThat(input.get("responseSchema")).isEqualTo(request.schema());
+      var proposed = valid();
+      proposed.put("supplier", "Human supplier");
+      proposed.put("total", "200.00");
+      return Json.write(map("draft", proposed,
+          "evidence", List.of(map("field", "total", "quote", "Total 200,00", "page", null)),
+          "issues", List.of("OCR supplier differs from the authoritative human value: Fornecedor OCR")));
+    };
+    process(request(f));
+    assertThat(Json.object(doc.draft)).containsEntry("supplier", "Human supplier").containsEntry("total", "100.00");
+    var proposal = Json.read(store.get(Alert.class, f.alert).proposal);
+    assertThat(proposal.path("draft").path("supplier").asText()).isEqualTo("Human supplier");
+    assertThat(proposal.path("draft").path("total").asText()).isEqualTo("200.00");
+    assertThat(proposal.path("issues").get(0).asText()).contains("authoritative human value");
+    assertNoMoney();
   }
 
   @Test void aStatementVisualModelReceivesEveryRealPdfPageWithoutLayoutMetadata()throws Exception {
@@ -161,7 +200,14 @@ class RepairIntegrationTest {
       assertThat(input.path("sourcePages").isEmpty()).isTrue();
       assertThat(request.images()).isEmpty();
       assertThat(request.requireFullContext()).isTrue();
-      assertThat(request.instructions()).startsWith("You are an experienced accountant");
+      assertThat(request.instructions()).startsWith("You are an expert accountant");
+      assertThat(request.instructions()).containsSubsequence("look first to the text surrounding each of those dates",
+          "same month and year", "pick the earliest one", "Otherwise, if the invoice date remains uncertain, use null")
+          .contains("Explicitly identified non-invoice dates are not candidates");
+      assertThat(input.path("fields").asText()).doesNotContain("dueOn");
+      assertThat(input.path("fieldsToExtract").toString()).doesNotContain("dueOn");
+      assertThat(input.path("responseTemplate").toString()).doesNotContain("dueOn");
+      assertThat(Json.write(request.schema())).doesNotContain("dueOn");
       return Json.write(response(valid(), List.of()));
     };
     process(request(f));

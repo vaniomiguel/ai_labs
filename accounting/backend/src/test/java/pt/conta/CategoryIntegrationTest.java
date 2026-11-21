@@ -51,7 +51,6 @@ class CategoryIntegrationTest {
   @Autowired JdbcTemplate jdbc;
   @Autowired FakeProvider provider;
   @Autowired pt.conta.api.FinanceController finance;
-  @Autowired AiResults aiResults;
   @Autowired JobQueue jobs;
   UUID account;
 
@@ -68,6 +67,13 @@ class CategoryIntegrationTest {
   private UUID movement(String description, String amount) {
     return (UUID) book.saveMovement(null, map("accountId", account.toString(), "bookedOn", "2026-01-02",
         "description", description, "amount", amount, "direction", "DEBIT", "validate", true)).get("id");
+  }
+  private JobQueue.Claim classificationJob(String kind, UUID id) {
+    var row = jdbc.queryForMap(
+        "select id,target_version,payload from job where kind=? and target_id=? order by target_version desc limit 1",
+        kind, id);
+    return new JobQueue.Claim((UUID) row.get("id"), kind, id, ((Number) row.get("target_version")).longValue(),
+        (String) row.get("payload"), 0);
   }
   private UUID reference(String code) { return store.all(Category.class).stream().filter(c -> code.equals(c.referenceCode)).findFirst().orElseThrow().id; }
   private long version(String type, UUID id) { return ((Number) categories.view(type,id).get("version")).longValue(); }
@@ -200,10 +206,10 @@ class CategoryIntegrationTest {
     UUID id=invoice("Seguro anual");
     provider.program=request->{
       assertThat(request.instructions()).contains("USB-A","protected=true");
-      assertThat(Json.read(request.input()).path("reference").path("version").asText()).isEqualTo("OCC-SNC-2019-02");
+      assertThat(Json.read(request.input()).path("reference").path("version").asText()).isEqualTo("OCC-SNC-2019-02-EXPENSES-2");
       return Json.write(result(List.of(label(reference("6263").toString(),"Seguro anual")),List.of()));
     };
-    worker.process(new JobQueue.Claim(UUID.randomUUID(),"CLASSIFY_INVOICE",id,0,"{}",0));
+    worker.process(classificationJob("CLASSIFY_INVOICE", id));
     assertThat(names("invoice",id)).containsExactly("Seguros");assertThat(provider.calls).isEqualTo(1);
     assertThat(store.all(AiExecution.class)).hasSize(1);
     worker.process(new JobQueue.Claim(UUID.randomUUID(),"NORMALIZE_CATEGORIES",id,0,"{}",0));
@@ -213,10 +219,10 @@ class CategoryIntegrationTest {
   @Test void insufficientEvidenceAndInvalidJsonDoNotInventLabels() {
     UUID id=movement("Transferência","100.00");
     provider.program=request->Json.write(map("status","REVIEW","explanation","Descrição insuficiente","categories",List.of(),"operations",List.of()));
-    worker.process(new JobQueue.Claim(UUID.randomUUID(),"CLASSIFY_MOVEMENT",id,0,"{}",0));
+    worker.process(classificationJob("CLASSIFY_MOVEMENT", id));
     assertThat(names("movement",id)).isEmpty();assertThat(categories.view("movement",id).get("state")).isEqualTo("REVIEW");
     UUID another=invoice("Papel");provider.program=request->"{\"categories\":\"inventado\"}";
-    assertThatThrownBy(()->worker.process(new JobQueue.Claim(UUID.randomUUID(),"CLASSIFY_INVOICE",another,0,"{}",0))).isInstanceOf(IllegalArgumentException.class);
+    assertThatThrownBy(()->worker.process(classificationJob("CLASSIFY_INVOICE", another))).isInstanceOf(IllegalArgumentException.class);
     assertThat(names("invoice",another)).isEmpty();
     assertThat(store.all(AiExecution.class).stream().anyMatch(e->"INVALID".equals(e.outcome))).isTrue();
   }
@@ -225,7 +231,7 @@ class CategoryIntegrationTest {
     UUID id=invoice("Seguro anual e Papel");
     provider.program=request->{categories.manual("invoice",id,version("invoice",id),List.of(reference("6233")),false);
       return Json.write(result(List.of(label(reference("6263").toString(),"Seguro anual")),List.of()));};
-    worker.process(new JobQueue.Claim(UUID.randomUUID(),"CLASSIFY_INVOICE",id,0,"{}",0));
+    worker.process(classificationJob("CLASSIFY_INVOICE", id));
     assertThat(names("invoice",id)).containsExactly("Material de escritório");
     assertThat(store.all(AiExecution.class).getFirst().outcome).isEqualTo("STALE");
   }
@@ -233,7 +239,7 @@ class CategoryIntegrationTest {
   @Test void genericBankReferencesNeverBecomeInventedExpenseCategories() {
     UUID id=movement("TRANSFERENCIA 001","100.00");
     provider.program=request->Json.write(result(List.of(label(reference("681").toString(),"TRANSFERENCIA 001")),List.of()));
-    worker.process(new JobQueue.Claim(UUID.randomUUID(),"CLASSIFY_MOVEMENT",id,0,"{}",0));
+    worker.process(classificationJob("CLASSIFY_MOVEMENT", id));
     assertThat(names("movement",id)).isEmpty();
     assertThat(categories.view("movement",id).get("state")).isEqualTo("REVIEW");
     assertThat(store.all(AiExecution.class).getFirst().outcome).isEqualTo("GUARDED_REVIEW");
@@ -249,7 +255,7 @@ class CategoryIntegrationTest {
       return Json.write(result(List.of(label("new:usb","cabo USB-A")),List.of(
           op(repair?"GENERALIZE":"CREATE",repair?List.of(original):List.of(),"new:usb","Cabos USB",reference("623"),null,"cabo USB-A"))));
     };
-    worker.process(new JobQueue.Claim(UUID.randomUUID(),"CLASSIFY_INVOICE",id,0,"{}",0));
+    worker.process(classificationJob("CLASSIFY_INVOICE", id));
     assertThat(provider.calls).isEqualTo(2);
     assertThat(names("invoice",first)).containsExactly("Cabos USB");
     assertThat(names("invoice",id)).containsExactly("Cabos USB");
@@ -268,7 +274,7 @@ class CategoryIntegrationTest {
           op("GENERALIZE",List.of(original),"new:usb","Cabos USB",reference("623"),null,
               repair?"Compra de cabo USB-A":"cabo USB-C e cabo USB-A"))));
     };
-    worker.process(new JobQueue.Claim(UUID.randomUUID(),"CLASSIFY_INVOICE",id,0,"{}",0));
+    worker.process(classificationJob("CLASSIFY_INVOICE", id));
     assertThat(provider.calls).isEqualTo(2);
     assertThat(names("invoice",first)).containsExactly("Cabos USB");
     assertThat(names("invoice",id)).containsExactly("Cabos USB");
@@ -281,9 +287,9 @@ class CategoryIntegrationTest {
         return Json.write(result(List.of(label(original.toString(),"cabo USB-A")),List.of()));
       assertThat(request.input()).contains("VARIANT_MISMATCH","Cabos USB", "Do not assign", "assign categories.id='new:general'");
       return Json.write(result(List.of(label("new:usb","cabo USB-A")),List.of(
-          op("GENERALIZE",List.of(original),"new:usb","Cabos USB",reference("623"),null,"cabo USB-A; cabo USB-C"))));
+          op("GENERALIZE",List.of(original),"new:usb","Cabos USB",reference("623"),null,"cabo USB-A"))));
     };
-    worker.process(new JobQueue.Claim(UUID.randomUUID(),"CLASSIFY_INVOICE",id,0,"{}",0));
+    worker.process(classificationJob("CLASSIFY_INVOICE", id));
     assertThat(provider.calls).isEqualTo(2);
     assertThat(names("invoice",first)).containsExactly("Cabos USB");
     assertThat(names("invoice",id)).containsExactly("Cabos USB");
@@ -298,7 +304,7 @@ class CategoryIntegrationTest {
     assertThat(names("invoice",first)).containsExactly("Cabos USB-C");
     assertThat(names("invoice",id)).containsExactly("Cabos HDMI");
     assertThat(store.get(Category.class,original).mergedIntoId).isNull();
-    assertThat(categories.details("invoice",first).getFirst().get("path")).isEqualTo("Materiais › Cabos › Cabos USB-C");
+    assertThat(categories.details("invoice",first).getFirst().get("path")).isEqualTo("Fornecimentos e serviços externos › Materiais › Cabos › Cabos USB-C");
   }
 
   @Test void aGenericServicesFamilyIsNotAnExpenseClassificationByItself() {
@@ -310,7 +316,7 @@ class CategoryIntegrationTest {
       }
       return Json.write(result(List.of(label(reference("626").toString(),"Fornecedor não identificado")),List.of()));
     };
-    worker.process(new JobQueue.Claim(UUID.randomUUID(),"CLASSIFY_MOVEMENT",id,0,"{}",0));
+    worker.process(classificationJob("CLASSIFY_MOVEMENT", id));
     assertThat(provider.calls).isEqualTo(2);
     assertThat(names("movement",id)).isEmpty();
     assertThat(categories.view("movement",id).get("state")).isEqualTo("REVIEW");
@@ -380,26 +386,113 @@ class CategoryIntegrationTest {
       categories.save(map("name","Projeto manual","aliases",List.of()));
       return Json.write(result(List.of(label(reference("6263").toString(),"Seguro anual")),List.of()));
     };
-    worker.process(new JobQueue.Claim(UUID.randomUUID(),"CLASSIFY_INVOICE",id,0,"{}",0));
+    worker.process(classificationJob("CLASSIFY_INVOICE", id));
     assertThat(names("invoice",id)).isEmpty();
     assertThat(store.all(AiExecution.class).getFirst().outcome).isEqualTo("STALE");
     assertThat(jdbc.queryForObject("select count(*) from job where kind='CLASSIFY_INVOICE' and target_id=?",Long.class,id)).isEqualTo(before+1);
   }
 
-  @Test void batchRequestsOnlyOneCatalogReviewAndCategoryConcernsDoNotSuspendMoney() {
-    UUID id=invoice("Seguro anual");
+  @Test void batchRequestsOnlyOneCatalogReview() {
+    invoice("Seguro anual");
     categories.reviewWhenSettled(UUID.randomUUID());
     assertThat(jdbc.queryForObject("select count(*) from job where kind='REFINE_CATEGORIES'",Long.class)).isZero();
     jdbc.update("update job set state='DONE' where kind='CLASSIFY_INVOICE'");
     categories.reviewWhenSettled(UUID.randomUUID());categories.reviewWhenSettled(UUID.randomUUID());
     assertThat(jdbc.queryForObject("select count(*) from job where kind='REFINE_CATEGORIES'",Long.class)).isEqualTo(1);
-    var i=store.get(Invoice.class,id);i.manuallyConfirmed=false;store.flush();
-    long financialVersion=i.version;var financialStatus=i.reviewStatus;int postings=store.all(LedgerEntry.class).size();
-    aiResults.reviewed(new JobQueue.Claim(UUID.randomUUID(),"REVIEW_INVOICE",id,i.version,"{}",0),
-        map("verdict","CONCERN","summary","Categoria incerta","concerns",List.of(
-            map("field","categories","quote","Seguro anual","reason","Categoria diferente"))),"Seguro anual");
-    assertThat(i.reviewStatus).isEqualTo(financialStatus);
-    assertThat(i.version).isEqualTo(financialVersion);
-    assertThat(store.all(LedgerEntry.class)).hasSize(postings);
+
+  }
+
+  @Test void catalogAndExpenseRequestsHaveSeparatePromptsAndTheSameStructuredSchema() {
+    UUID id = invoice("Papel A4 e seguro multirriscos");
+    provider.program = request -> {
+      var input = Json.object(request.input());
+      assertThat(request.images()).isEmpty();
+      assertThat(request.requireFullContext()).isTrue();
+      assertThat(input.get("responseSchema")).isEqualTo(request.schema());
+      if ("REVIEW_CATALOG".equals(input.get("task"))) {
+        assertThat(request.instructions()).contains("maintaining a Portuguese expense-label catalog");
+        assertThat(Json.read(request.input()).path("examples").size()).isGreaterThan(0);
+        return Json.write(result(List.of(), List.of()));
+      }
+      assertThat(request.instructions()).contains("experienced Portuguese accountant");
+      assertThat(input).containsEntry("task", "CLASSIFY_EXPENSE").containsKeys("currentAssignments", "manualDecisions");
+      return Json.write(result(List.of(label(reference("6233").toString(), "Papel A4"),
+          label(reference("6263").toString(), "seguro multirriscos")), List.of()));
+    };
+    worker.process(classificationJob("CLASSIFY_INVOICE", id));
+    worker.process(new JobQueue.Claim(UUID.randomUUID(), "REFINE_CATEGORIES", CategoryCatalog.ID,
+        categories.revision(), "{}", 0));
+    assertThat(names("invoice", id)).containsExactlyInAnyOrder("Material de escritório", "Seguros");
+    assertThat(provider.calls).isEqualTo(2);
+  }
+
+  @Test void retryCoalescesRequestsAndKeepsARejectedCategoryRemoved() {
+    UUID id = invoice("Seguro anual");
+    UUID insurance = reference("6263");
+    classify("invoice", id, insurance, "Seguro anual");
+    categories.manual("invoice", id, version("invoice", id), List.of(), false);
+    long expected = version("invoice", id);
+    var requested = categories.requestInvoiceClassification(id, expected);
+    var job = classificationJob("CLASSIFY_INVOICE", id);
+    categories.requestInvoiceClassification(id, expected);
+    assertThat(classificationJob("CLASSIFY_INVOICE", id)).isEqualTo(job);
+    assertThat(requested).containsEntry("state", "PENDING").containsEntry("jobState", "QUEUED");
+    provider.program = request -> Json.write(result(List.of(label(insurance.toString(), "Seguro anual")), List.of()));
+    worker.process(job);
+    assertThat(categories.view("invoice", id)).containsEntry("state", "REVIEW")
+        .containsEntry("rejectedCategoryIds", List.of(insurance));
+    assertThat(names("invoice", id)).isEmpty();
+  }
+
+  @Test void aFailedJobCanBeRetriedAndAnOlderGenerationDoesNotCallTheModel() {
+    UUID id = invoice("Papel A4");
+    var old = classificationJob("CLASSIFY_INVOICE", id);
+    jdbc.update("update job set state='FAILED',error=? where id=?", "A resposta do modelo é inválida.", old.id());
+    var requested = categories.requestInvoiceClassification(id, version("invoice", id));
+    var retry = classificationJob("CLASSIFY_INVOICE", id);
+    assertThat(retry.revision()).isGreaterThan(old.revision());
+    assertThat(requested).containsEntry("state", "PENDING");
+    worker.process(old);
+    assertThat(provider.calls).isZero();
+    provider.program = request -> Json.write(result(List.of(label(reference("6233").toString(), "Papel A4")), List.of()));
+    worker.process(retry);
+    assertThat(names("invoice", id)).containsExactly("Material de escritório");
+  }
+
+  @Test void modelCannotUseHintsJoinedQuotesOrAnUnrelatedExpenseForPayroll() {
+    UUID id = invoice("Papel A4 e seguro multirriscos");
+    var state = store.all(Classification.class).stream().filter(s -> id.equals(s.invoiceId)).findFirst().orElseThrow();
+    state.hints = Json.write(List.of("Subsídio de férias"));
+    store.flush();
+    var snapshot = categories.snapshot("invoice", id);
+    assertThatThrownBy(() -> categories.apply(snapshot,
+        result(List.of(label(reference("632").toString(), "Subsídio de férias")), List.of()), UUID.randomUUID()))
+        .hasMessageContaining("sem evidência");
+    assertThatThrownBy(() -> categories.apply(snapshot,
+        result(List.of(label(reference("6233").toString(), "Papel A4; seguro multirriscos")), List.of()), UUID.randomUUID()))
+        .hasMessageContaining("sem evidência");
+    assertThatThrownBy(() -> categories.apply(snapshot,
+        result(List.of(label(reference("632").toString(), "Papel A4")), List.of()), UUID.randomUUID()))
+        .hasMessageContaining("evidência explícita");
+    assertThat(names("invoice", id)).isEmpty();
+  }
+
+  @Test void longOcrIsMarkedPartialAndSharedDocumentsDoNotSupplyUnscopedEvidence() {
+    var doc = new pt.conta.document.SourceDocument();
+    doc.filename = "receipt.pdf";
+    doc.kind = "INVOICE";
+    doc.text = "Papel A4 " + "t".repeat(16_000);
+    store.add(doc);
+    UUID id = invoice("Papel A4");
+    store.get(Invoice.class, id).documentId = doc.id;
+    store.flush();
+    var partial = Json.read(Json.write(categories.snapshot("invoice", id).input())).path("data");
+    assertThat(partial.path("sourceCoverage").asText()).isEqualTo("PARTIAL");
+    assertThat(partial.path("sourceText").asText()).isEqualTo(doc.text.substring(0, 16_000));
+    doc.draft = Json.write(map("invoices", List.of(map("id", id), map("id", UUID.randomUUID()))));
+    store.flush();
+    var shared = Json.read(Json.write(categories.snapshot("invoice", id).input())).path("data");
+    assertThat(shared.path("sourceCoverage").asText()).isEqualTo("SHARED_DOCUMENT");
+    assertThat(shared.path("sourceText").isNull()).isTrue();
   }
 }

@@ -91,12 +91,6 @@
               "null"
             ]
           },
-          "dueOn": {
-            "type": [
-              "string",
-              "null"
-            ]
-          },
           "number": {
             "type": [
               "string",
@@ -1384,12 +1378,16 @@
             "enum": [
               "PENDING",
               "WAITING",
+              "FAILED",
               "REVIEW",
               "CLASSIFIED",
               "MANUAL",
               "INHERITED",
               "PROVISIONAL"
             ]
+          },
+          "jobState": {
+            "enum": ["QUEUED", "RUNNING", "WAITING", "DONE", "FAILED", null]
           },
           "reason": {
             "type": [
@@ -4491,6 +4489,65 @@
                 }
               }
             }
+          }
+        }
+      }
+    },
+    "/invoices/{id}/categories/classify": {
+      "parameters": [
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string",
+            "format": "uuid"
+          }
+        }
+      ],
+      "post": {
+        "summary": "Agendar a classificação por IA de uma fatura sem categorias",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "version"
+                ],
+                "properties": {
+                  "version": {
+                    "type": "integer",
+                    "minimum": 0
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "Classificação agendada ou já em curso",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Classification"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Pedido inválido"
+          },
+          "401": {
+            "description": "Sessão necessária"
+          },
+          "404": {
+            "description": "Fatura não encontrada"
+          },
+          "409": {
+            "description": "Versão desatualizada ou fatura já categorizada"
           }
         }
       }

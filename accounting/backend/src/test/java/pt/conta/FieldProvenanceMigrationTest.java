@@ -23,7 +23,7 @@ class FieldProvenanceMigrationTest {
       jdbc.update("insert into invoice(id,created_at,updated_at,supplier,total,origin,review_status,manually_confirmed) values(?,now(),now(),'Automático',12.00,'AI','AUTOMATIC',false)",automatic);
       jdbc.update("insert into bank_movement(id,created_at,updated_at,description,amount,booked_on,direction,review_status,origin,manually_confirmed) values(?,now(),now(),'Movimento humano',25.00,'2026-01-02','DEBIT','MANUAL','MANUAL',true)",movement);
       jdbc.update("insert into ledger_entry(id,created_at,updated_at,source_type,source_id,effective_on,amount) values(?,now(),now(),'INVOICE',?,'2026-01-01',123.45)",UUID.randomUUID(),invoice);
-      var flyway=Flyway.configure().dataSource(source).load();assertThat(flyway.migrate().migrationsExecuted).isEqualTo(1);
+      var flyway=Flyway.configure().dataSource(source).target("4").load();assertThat(flyway.migrate().migrationsExecuted).isEqualTo(1);
       var ownership=Json.object(jdbc.queryForObject("select field_provenance from invoice where id=?",String.class,invoice));
       assertThat(ownership).containsKeys("supplier","total","issuedOn","description").doesNotContainKey("supplierTaxId");
       assertThat(Json.read(Json.write(ownership)).path("supplier").path("protected").asBoolean()).isTrue();

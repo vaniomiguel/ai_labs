@@ -110,7 +110,6 @@ public class BookkeepingService {
     var sourceEdit = human && !batching.get() ? sourceSync.prepare(invoice, input) : null;
     var previous = invoice.reviewStatus;
     invoice.issuedOn = date(input, "issuedOn");
-    invoice.dueOn = date(input, "dueOn");
     invoice.number = text(input, "number");
     invoice.supplier = text(input, "supplier");
     invoice.supplierTaxId = text(input, "supplierTaxId");
@@ -753,8 +752,6 @@ public class BookkeepingService {
         i.version,
         "issuedOn",
         i.issuedOn,
-        "dueOn",
-        i.dueOn,
         "number",
         i.number,
         "supplier",

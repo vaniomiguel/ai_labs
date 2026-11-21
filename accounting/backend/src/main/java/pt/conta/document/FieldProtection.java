@@ -12,7 +12,7 @@ import pt.conta.shared.*;
 /** Field ownership and identity-aware merges shared by every extraction and review path. */
 @Service
 public class FieldProtection {
-  public static final List<String> INVOICE=List.of("supplier","supplierTaxId","number","type","issuedOn","dueOn","total","net","tax","discount","description","currency","relatedInvoiceId","lines");
+  public static final List<String> INVOICE=List.of("supplier","supplierTaxId","number","type","issuedOn","total","net","tax","discount","description","currency","relatedInvoiceId","lines");
   public static final List<String> MOVEMENT=List.of("accountId","bankReference","bookedOn","valueOn","occurredAt","description","amount","currency","direction","kind");
   private static final Set<String> NUMBERS=Set.of("total","net","tax","discount","amount","quantity","unitPrice");
   private final AuditService audit;
@@ -84,7 +84,7 @@ public class FieldProtection {
   private boolean factMatch(String kind,Map<String,Object> a,Map<String,Object> b){try{String key=SourceIdentity.key(a,kind.equals("INVOICE")?"invoice":"movement");return key!=null&&key.equals(SourceIdentity.key(b,kind.equals("INVOICE")?"invoice":"movement"));}catch(RuntimeException e){return false;}}
   public DomainException ambiguous(){return new DomainException(409,"A análise não identifica inequivocamente os mesmos itens. Revê a estrutura do original; nenhum item existente foi substituído ou removido.");}
   public Map<String,Object> initialize(String kind,Map<String,Object> draft){
-    var result=copy(draft);if(!root(kind,result))for(var row:entries(kind,result))if(row.get("id")==null&&row.get("_itemId")==null)row.put("_itemId",UUID.randomUUID().toString());return result;
+    var result=kind.equals("INVOICE")?DraftSanitizer.withoutInvoiceDueDates(draft):copy(draft);if(!root(kind,result))for(var row:entries(kind,result))if(row.get("id")==null&&row.get("_itemId")==null)row.put("_itemId",UUID.randomUUID().toString());return result;
   }
   public Map<String,Object> automaticDocument(String kind,Map<String,Object> current,Map<String,Object> incoming,Map<String,Object> metadata) {
     if(current.isEmpty()||metadata.isEmpty()&&entries(kind,current).stream().noneMatch(r->fields(kind).stream().anyMatch(f->!empty(r.get(f)))))return initialize(kind,incoming);

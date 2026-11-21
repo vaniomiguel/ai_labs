@@ -1,14 +1,24 @@
 {
-  "version": "OCC-SNC-2019-02",
-  "source": "https://portal.occ.pt/fotos/editor2/taxonomiasplanocontas_fev2019.pdf",
+  "version": "OCC-SNC-2019-02-EXPENSES-2",
+  "source": "https://www.occ.pt/fotos/editor2/taxonomiasplanocontas_fev2019.pdf",
   "hierarchySource": "https://manual.toconline.pt/support/solutions/articles/3000110987-categorias-de-despesas",
   "hierarchySourceVersion": "2025-09-29",
   "purpose": "Referência de organização de despesas; sem enquadramento fiscal ou lançamentos contabilísticos.",
   "categories": [
     {
+      "code": "62",
+      "name": "Fornecimentos e serviços externos",
+      "parentCode": null
+    },
+    {
+      "code": "621",
+      "name": "Subcontratos",
+      "parentCode": "62"
+    },
+    {
       "code": "622",
       "name": "Serviços especializados",
-      "parentCode": null
+      "parentCode": "62"
     },
     {
       "code": "6221",
@@ -41,9 +51,15 @@
       "parentCode": "622"
     },
     {
+      "code": "6228",
+      "name": "Outros serviços especializados",
+      "parentCode": "622",
+      "referenceName": "Outros"
+    },
+    {
       "code": "623",
       "name": "Materiais",
-      "parentCode": null
+      "parentCode": "62"
     },
     {
       "code": "6231",
@@ -61,9 +77,20 @@
       "parentCode": "623"
     },
     {
+      "code": "6234",
+      "name": "Artigos para oferta",
+      "parentCode": "623"
+    },
+    {
+      "code": "6238",
+      "name": "Outros materiais",
+      "parentCode": "623",
+      "referenceName": "Outros"
+    },
+    {
       "code": "624",
       "name": "Energia e fluidos",
-      "parentCode": null
+      "parentCode": "62"
     },
     {
       "code": "6241",
@@ -81,9 +108,15 @@
       "parentCode": "624"
     },
     {
+      "code": "6248",
+      "name": "Outros gastos com energia e fluidos",
+      "parentCode": "624",
+      "referenceName": "Outros"
+    },
+    {
       "code": "625",
       "name": "Deslocações, estadas e transportes",
-      "parentCode": null
+      "parentCode": "62"
     },
     {
       "code": "6251",
@@ -101,9 +134,15 @@
       "parentCode": "625"
     },
     {
+      "code": "6258",
+      "name": "Outras despesas de deslocação e transporte",
+      "parentCode": "625",
+      "referenceName": "Outros"
+    },
+    {
       "code": "626",
       "name": "Serviços diversos",
-      "parentCode": null
+      "parentCode": "62"
     },
     {
       "code": "6261",
@@ -141,14 +180,81 @@
       "parentCode": "626"
     },
     {
+      "code": "6268",
+      "name": "Outros serviços diversos",
+      "parentCode": "626",
+      "referenceName": "Outros serviços"
+    },
+    {
       "code": "63",
       "name": "Gastos com o pessoal",
       "parentCode": null
     },
     {
+      "code": "631",
+      "name": "Remunerações dos órgãos sociais",
+      "parentCode": "63"
+    },
+    {
+      "code": "632",
+      "name": "Remunerações do pessoal",
+      "parentCode": "63"
+    },
+    {
+      "code": "633",
+      "name": "Benefícios pós-emprego",
+      "parentCode": "63"
+    },
+    {
+      "code": "6331",
+      "name": "Prémios para pensões",
+      "parentCode": "633"
+    },
+    {
+      "code": "6332",
+      "name": "Outros benefícios pós-emprego",
+      "parentCode": "633",
+      "referenceName": "Outros benefícios"
+    },
+    {
+      "code": "634",
+      "name": "Indemnizações",
+      "parentCode": "63"
+    },
+    {
+      "code": "635",
+      "name": "Encargos sobre remunerações",
+      "parentCode": "63"
+    },
+    {
+      "code": "636",
+      "name": "Seguros de acidentes no trabalho e doenças profissionais",
+      "parentCode": "63"
+    },
+    {
+      "code": "637",
+      "name": "Gastos de ação social",
+      "parentCode": "63"
+    },
+    {
+      "code": "638",
+      "name": "Outros gastos com o pessoal",
+      "parentCode": "63"
+    },
+    {
       "code": "681",
       "name": "Impostos",
       "parentCode": null
+    },
+    {
+      "code": "6811",
+      "name": "Impostos diretos",
+      "parentCode": "681"
+    },
+    {
+      "code": "6812",
+      "name": "Impostos indiretos",
+      "parentCode": "681"
     },
     {
       "code": "6813",
@@ -164,6 +270,52 @@
       "code": "691",
       "name": "Juros suportados",
       "parentCode": "69"
+    },
+    {
+      "code": "6911",
+      "name": "Juros de financiamentos obtidos",
+      "parentCode": "691"
+    },
+    {
+      "code": "6918",
+      "name": "Outros juros",
+      "parentCode": "691"
+    },
+    {
+      "code": "692",
+      "name": "Diferenças de câmbio desfavoráveis",
+      "parentCode": "69"
+    },
+    {
+      "code": "6921",
+      "name": "Diferenças de câmbio em financiamentos",
+      "parentCode": "692",
+      "referenceName": "Relativas a financiamentos obtidos"
+    },
+    {
+      "code": "6928",
+      "name": "Outras diferenças de câmbio desfavoráveis",
+      "parentCode": "692",
+      "referenceName": "Outras"
+    },
+    {
+      "code": "698",
+      "name": "Outros gastos de financiamento",
+      "parentCode": "69"
+    },
+    {
+      "code": "6981",
+      "name": "Outros encargos de financiamentos obtidos",
+      "parentCode": "698",
+      "referenceName": "Relativos a financiamentos obtidos"
+    },
+    {
+      "code": "6988",
+      "name": "Outros encargos financeiros",
+      "parentCode": "698",
+      "referenceName": "Outros"
     }
-  ]
+  ],
+  "officialSource": "https://diariodarepublica.pt/dr/detalhe/portaria/218-2015-69861874",
+  "officialCorrection": "https://diariodarepublica.pt/dr/detalhe/declaracao-retificacao/41-a-2015-70348600"
 }

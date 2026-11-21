@@ -151,7 +151,7 @@ export class RepairPanel implements OnChanges, OnDestroy {
   changes():FieldSuggestion[]{return this.preview()?.changes||this.baseChanges();}
   changesFor(id:string){return this.changes().filter(c=>c.itemId===id);}
   items(){return [...new Map(this.changes().map(c=>[c.itemId,{id:c.itemId,label:(this.document().kind==='STATEMENT'?'Movimento ':'Comprovativo ')+(c.itemIndex+1)}])).values()];}
-  fieldName(field:string){return ({supplier:'Fornecedor',supplierTaxId:'NIF do fornecedor',issuedOn:'Data de emissão',dueOn:'Vencimento',number:'Número da fatura',total:'Total',net:'Base sem IVA',tax:'IVA',discount:'Desconto',description:'Descrição',lines:'Artigos',currency:'Moeda',type:'Tipo',bookedOn:'Data do movimento',valueOn:'Data valor',amount:'Montante',direction:'Direção',bankReference:'Referência bancária',accountId:'Conta',kind:'Natureza do movimento'} as Record<string,string>)[field]||field;}
+  fieldName(field:string){return ({supplier:'Fornecedor',supplierTaxId:'NIF do fornecedor',issuedOn:'Data de emissão',number:'Número da fatura',total:'Total',net:'Base sem IVA',tax:'IVA',discount:'Desconto',description:'Descrição',lines:'Artigos',currency:'Moeda',type:'Tipo',bookedOn:'Data do movimento',valueOn:'Data valor',amount:'Montante',direction:'Direção',bankReference:'Referência bancária',accountId:'Conta',kind:'Natureza do movimento'} as Record<string,string>)[field]||field;}
   format(field:string,value:any):string{
     if(value===null||value===undefined||value==='')return 'Não preenchido';
     if(['total','net','tax','discount','amount'].includes(field))return euros(value);

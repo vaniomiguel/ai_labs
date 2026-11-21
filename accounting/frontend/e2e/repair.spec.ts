@@ -64,6 +64,39 @@ async function setup(page:Page,initial:any={supplier:"",issuedOn:null,total:null
   await open();return {state,open,dialog:page.getByRole("dialog",{name:"Rever extração",exact:true})};
 }
 
+  test('editing the invoice date reaches repair previews and validation requests', async ({page}) => {
+    const {state, dialog} = await setup(page, {...valid(), issuedOn: null});
+    await expect(dialog.getByLabel('Vencimento', {exact: true})).toHaveCount(0);
+    state.submitted = () => state.result({...valid(), issuedOn: null, supplier: 'Fornecedor corrigido'});
+    await dialog.getByRole('button', {name: '✧ Pedir tentativa de correção à IA', exact: true}).click();
+    await expect(dialog.getByText('Proposta disponível', {exact: true})).toBeVisible();
+    const date = dialog.getByLabel('Data de emissão', {exact: true});
+    await date.clear();
+    await date.press('ArrowLeft');
+    await date.press('ArrowLeft');
+    await date.pressSequentially('0129');
+    await date.pressSequentially('2016');
+    await expect(date).toHaveValue('2016-01-29');
+    await expect.poll(() => state.lastPreview?.draft.issuedOn).toBe('2016-01-29');
+    await dialog.getByLabel('Fornecedor', {exact: true}).click();
+    expect(state.lastPreview.draft).not.toHaveProperty('dueOn');
+    await date.clear();
+    await date.blur();
+    await expect(date).toHaveValue('');
+    await expect.poll(() => state.lastPreview?.draft.issuedOn).toBe('');
+    await expect(dialog.getByRole('button', {name: 'Aplicar proposta e validar', exact: true})).toBeDisabled();
+    await date.fill('2016-01-29');
+    await date.blur();
+    await dialog.getByRole('button', {name: 'Aplicar proposta e validar', exact: true}).click();
+    await expect.poll(() => state.applies).toBe(1);
+    expect(state.lastApply).toMatchObject({
+      validate: true, draft: {issuedOn: '2016-01-29'},
+    });
+    expect(state.lastApply.draft).not.toHaveProperty('dueOn');
+    await expect(dialog.getByLabel('Data de emissão', {exact: true})).toHaveValue('2016-01-29');
+    await expect(dialog.getByLabel('Vencimento', {exact: true})).toHaveCount(0);
+  });
+
 test("request shows a spinner immediately and the proposal arrives automatically without losing local edits",async({page},testInfo)=>{
   const {state,dialog}=await setup(page);let release!:()=>void;
   state.submitted=()=>new Promise<void>(resolve=>{release=resolve;});
@@ -225,11 +258,22 @@ test("a multi-invoice proposal only validates the checked item and preserves edi
   state.submitted=()=>state.result({invoices:[{...valid(),id:first},{...valid(),id:second}]});
   await dialog.getByRole('button',{name:'✧ Pedir tentativa de correção à IA',exact:true}).click();
   await expect(dialog.getByRole('checkbox',{name:'Comprovativo 2',exact:true})).toBeChecked();
+  await expect(dialog.getByLabel('Vencimento',{exact:true})).toHaveCount(0);
+  await dialog.getByLabel('Data de emissão',{exact:true}).nth(0).fill('2026-02-14');
+  await dialog.getByLabel('Data de emissão',{exact:true}).nth(0).blur();
+  await expect.poll(()=>state.lastPreview?.draft.invoices[0].issuedOn).toBe('2026-02-14');
+  await expect(dialog.getByLabel('Data de emissão',{exact:true}).nth(0)).toHaveValue('2026-02-14');
+  await expect(dialog.getByLabel('Data de emissão',{exact:true}).nth(1)).toHaveValue('');
   await dialog.getByLabel('Fornecedor',{exact:true}).nth(1).fill('Edição local do segundo comprovativo');
   await dialog.getByRole('checkbox',{name:'Comprovativo 2',exact:true}).uncheck();
   await expect(dialog.getByRole('button',{name:'Aplicar proposta e validar',exact:true})).toBeEnabled();
   await dialog.getByRole('button',{name:'Aplicar proposta e validar',exact:true}).click();
   await expect.poll(()=>state.applies).toBe(1);expect(state.lastApply.selectedItems).toEqual([first]);
+  expect(state.lastApply.draft.invoices[0]).toMatchObject({issuedOn:'2026-02-14'});
+  expect(state.lastApply.draft.invoices[0]).not.toHaveProperty('dueOn');
+  expect(state.lastApply.draft.invoices[1].issuedOn).toBeNull();
+  expect(state.lastApply.draft.invoices[1]).not.toHaveProperty('dueOn');
   await expect(dialog.getByLabel('Fornecedor',{exact:true}).nth(0)).toHaveValue('Fornecedor IA');
+  await expect(dialog.getByLabel('Data de emissão',{exact:true}).nth(0)).toHaveValue('2026-02-14');
   await expect(dialog.getByLabel('Fornecedor',{exact:true}).nth(1)).toHaveValue('Edição local do segundo comprovativo');
 });

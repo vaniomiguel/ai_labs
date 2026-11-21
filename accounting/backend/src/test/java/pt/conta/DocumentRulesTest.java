@@ -17,6 +17,17 @@ import pt.conta.shared.*;
 /** Tests parser uncertainty, temporal rules, Excel provenance and structured-output validation. */
 class DocumentRulesTest {
   @Test
+  void retiredDueDatesAreDiscardedWithoutCreatingIssuesOrInvoiceDates() {
+    var draft = pt.conta.document.DraftSanitizer.sanitize("INVOICE",
+        map("issuedOn", null, "dueOn", "unreadable", "invoices",
+            List.of(map("issuedOn", "2026-01-01", "due_on", "invalid"))));
+    assertThat(draft).containsEntry("issuedOn", null).doesNotContainKeys("dueOn", "due_on");
+    assertThat(Inputs.rows(draft, "invoices").getFirst()).containsEntry("issuedOn", "2026-01-01")
+        .doesNotContainKeys("dueOn", "due_on");
+    assertThat((List<?>) draft.get("issues")).isEmpty();
+  }
+
+  @Test
   void malformedFieldDoesNotDiscardReadableExtractedValues() {
     var draft =
         pt.conta.document.DraftSanitizer.sanitize(

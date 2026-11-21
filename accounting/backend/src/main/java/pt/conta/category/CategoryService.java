@@ -31,6 +31,16 @@ public class CategoryService {
   private final JdbcTemplate jdbc;
   private final PromptCatalog prompts;
   private final Map<String, Object> reference;
+  private static final int MAX_OCR_CHARACTERS = 16_000;
+  private static final Set<String> ACTIVE_CLASSIFICATION_JOBS = Set.of("QUEUED", "RUNNING", "WAITING");
+  private static final Set<String> GENERIC_EXPENSE_WORDS =
+      Set.of("COMPRA", "FATURA", "PAGAMENTO", "TRANSFERENCIA", "DESPESA", "PARA", "COM", "POR");
+  private static final Map<String, Pattern> EXPLICIT_EXPENSE_EVIDENCE = Map.of(
+      "63", Pattern.compile("\\b(?:PESSOAL|SALARIOS?|REMUNERACOES?|VENCIMENTOS?|PENSOES?|PENSAO|"
+          + "SEGURANCA SOCIAL|ACIDENTES? (?:NO|DE) TRABALHO|ACAO SOCIAL|POS EMPREGO|INDEMNIZACOES)\\b"),
+      "681", Pattern.compile("\\b(?:IMPOSTOS?|IUC|IMI|ISV|DERRAMA|TAXAS? (?:MUNICIPA(?:L|IS)|DE JUSTICA))\\b"),
+      "69", Pattern.compile("\\b(?:JUROS?|FINANCIAMENTOS?|EMPRESTIMOS?|ENCARGOS FINANCEIROS|"
+          + "DIFERENCAS? DE CAMBIO)\\b"));
 
   public CategoryService(Store store, AuditService audit, JobQueue jobs, JdbcTemplate jdbc, PromptCatalog prompts) {
     this.store = store; this.audit = audit; this.jobs = jobs; this.jdbc = jdbc;
@@ -181,30 +191,35 @@ public class CategoryService {
       return origins.contains("AI") && !origins.contains("MANUAL") && !origins.contains("LEGACY");
     });
     if (status.equals("CLASSIFIED") && provisional) status = "PROVISIONAL";
-    if (status.equals("PENDING")) {
-      var queue = store.memo(QueueStates.class, () -> {
-        var states = new HashMap<String, String>();
-        jdbc.query("select target_id,target_version,state from job where kind in ('CLASSIFY_INVOICE','CLASSIFY_MOVEMENT')",
-            rs -> { states.put(rs.getObject(1, UUID.class) + ":" + rs.getLong(2), rs.getString(3)); });
-        return new QueueStates(states);
-      });
-      String queuedState = queue.states().get(id + ":" + (s == null ? 0 : s.generation));
-      if ("WAITING".equals(queuedState)) status = "WAITING";
-      if ("FAILED".equals(queuedState)) status = "REVIEW";
-    }
+    var job = status.equals("PENDING") ? classificationJob(id, s == null ? 0 : s.generation) : null;
+    if (job != null && job.state().equals("WAITING")) status = "WAITING";
+    if (job != null && job.state().equals("FAILED")) status = type.equals("invoice") ? "FAILED" : "REVIEW";
+    String reason = s == null ? null : s.reason;
+    if (job != null && "WAITING".equals(job.state())) reason = "Modelo de categorias indisponível. A tarefa será retomada automaticamente.";
+    if (job != null && "FAILED".equals(job.state())) reason = Objects.requireNonNullElse(
+        job.error(), "Não foi possível classificar este registo. Podes tentar novamente.");
     return map("version", s == null ? 0L : s.version, "state", status,
         "reason", hasInherited ? "Categorias das faturas associadas" : provisional
-            ? "Classificação provisória pela descrição bancária. " + Objects.requireNonNullElse(s.reason, "") : s == null ? null : s.reason,
+            ? "Classificação provisória pela descrição bancária. " + Objects.requireNonNullElse(reason, "") : reason,
+        "jobState", job == null ? null : job.state(),
         "categories", tags, "rejectedCategoryIds", assignments(s).stream().filter(a -> a.rejected)
             .map(a -> canonical(a.categoryId).id).distinct().toList(), "catalogRevision", revision());
   }
 
-  private record QueueStates(Map<String, String> states) {}
+  private record ClassificationJob(String state, String error) {}
+  private record QueueStates(Map<String, ClassificationJob> states) {}
 
-  private String sourceText(UUID document) {
-    if (document == null) return null;
-    String text = Objects.requireNonNullElse(store.get(SourceDocument.class, document).text, "");
-    return text.substring(0, Math.min(text.length(), 16000));
+  private ClassificationJob classificationJob(UUID id, long generation) {
+    var queue = store.memo(QueueStates.class, () -> {
+      var states = new HashMap<String, ClassificationJob>();
+      jdbc.query("""
+          select target_id,target_version,state,error from job
+          where kind in ('CLASSIFY_INVOICE','CLASSIFY_MOVEMENT') order by created_at,id
+          """, rs -> { states.put(rs.getObject(1, UUID.class) + ":" + rs.getLong(2),
+              new ClassificationJob(rs.getString(3), rs.getString(4))); });
+      return new QueueStates(states);
+    });
+    return queue.states().get(id + ":" + generation);
   }
 
   public long revision() { return store.get(CategoryCatalog.class, CategoryCatalog.ID).revision; }
@@ -213,10 +228,11 @@ public class CategoryService {
   private Map<String, Object> source(String type, UUID id) {
     if (type.equals("invoice")) {
       var i = store.get(Invoice.class, id);
+      var ocr = invoiceOcr(i);
       return map("id", id, "type", type, "deleted", i.deleted, "supplier", i.supplier,
           "number", i.number, "description", i.description, "documentId", i.documentId,
           "issuedOn", i.issuedOn, "total", Money.text(i.total), "invoiceType", i.type,
-          "sourceText", i.documentId != null && store.all(Invoice.class).stream().filter(other -> i.documentId.equals(other.documentId) && !other.deleted).count() == 1 ? sourceText(i.documentId) : null,
+          "sourceText", ocr.text(), "sourceCoverage", ocr.coverage(),
           "lines", store.all(InvoiceLine.class).stream().filter(l -> id.equals(l.invoiceId))
               .sorted(Comparator.comparingInt(l -> l.position)).map(l -> map("description", l.description,
                   "total", Money.text(l.total))).toList());
@@ -225,6 +241,22 @@ public class CategoryService {
     return map("id", id, "type", type, "deleted", m.deleted, "description", m.description,
         "documentId", m.documentId, "bookedOn", m.bookedOn, "amount", Money.text(m.amount), "direction", m.direction,
         "sourceText", null);
+  }
+
+  private record InvoiceOcr(String text, String coverage) {}
+
+  private InvoiceOcr invoiceOcr(Invoice invoice) {
+    if (invoice.documentId == null) return new InvoiceOcr(null, "MISSING");
+    boolean shared = store.all(Invoice.class).stream().anyMatch(other -> !other.deleted
+        && !other.id.equals(invoice.id) && invoice.documentId.equals(other.documentId));
+    var document = store.get(SourceDocument.class, invoice.documentId);
+    if (shared || rows(Json.object(document.draft), "invoices").size() > 1)
+      return new InvoiceOcr(null, "SHARED_DOCUMENT");
+    if (document.deleted || document.text == null || document.text.isBlank()) return new InvoiceOcr(null, "MISSING");
+    int end = Math.min(document.text.length(), MAX_OCR_CHARACTERS);
+    if (end < document.text.length() && Character.isHighSurrogate(document.text.charAt(end - 1))) end--;
+    boolean partial = end < document.text.length() || Json.read(document.layout).hasNonNull("conversionError");
+    return new InvoiceOcr(document.text.substring(0, end), partial ? "PARTIAL" : "FULL");
   }
 
   /** Called by factual edits, never by category-only edits or the AI apply path. */
@@ -257,6 +289,31 @@ public class CategoryService {
   private void enqueue(String type, UUID id, Classification s) {
     jobs.enqueue(type.equals("invoice") ? "CLASSIFY_INVOICE" : "CLASSIFY_MOVEMENT", id, s.generation,
         Json.write(map("generation", s.generation)), s.contentHash + ":" + s.generation);
+  }
+
+  public Map<String, Object> requestInvoiceClassification(UUID id, long expectedVersion) {
+    store.lockFinancialWrites();
+    var invoice = store.get(Invoice.class, id);
+    if (invoice.deleted) throw new DomainException(404, "Fatura não encontrada");
+    var s = state("invoice", id, true);
+    if (!details("invoice", id).isEmpty())
+      throw new DomainException(409, "A fatura já tem categorias");
+    var active = jdbc.queryForList("""
+        select state from job where kind='CLASSIFY_INVOICE' and target_id=? and target_version=?
+        order by created_at desc,id desc
+        """, String.class, id, s.generation).stream().anyMatch(ACTIVE_CLASSIFICATION_JOBS::contains);
+    if (active) return view("invoice", id);
+    store.checkVersion(s, expectedVersion);
+    var before = view("invoice", id);
+    s.generation++;
+    s.status = "PENDING";
+    s.reason = "Classificação por IA agendada";
+    enqueue("invoice", id, s);
+    store.flush();
+    var after = view("invoice", id);
+    after.put("jobState", "QUEUED");
+    audit.record("REQUEST_AI_CLASSIFICATION", "invoice", id, before, after);
+    return after;
   }
 
   /** Inheritance is resolved from active allocations, so every undo/exclusion is reflected. */
@@ -470,8 +527,13 @@ public class CategoryService {
         "name", c.name, "aliases", aliases(c), "parentId", c.parentId, "mergedIntoId", c.mergedIntoId,
         "description", c.description == null ? null : c.description.substring(0, Math.min(300, c.description.length())),
         "origin", c.origin, "protected", c.protectedCategory, "archived", c.deleted, "referenceCode", c.referenceCode)).toList();
-    var examples = examples();
-    var input = map("data", data, "catalog", catalog, "reference", reference,
+    var examples = type.equals("catalog") ? examples() : relevantExamples(data, examples());
+    var referenceMetadata = new LinkedHashMap<>(reference);
+    referenceMetadata.remove("categories");
+    var input = map("data", data, "task", type.equals("catalog") ? "REVIEW_CATALOG" : "CLASSIFY_EXPENSE",
+        "catalog", catalog, "reference", referenceMetadata,
+        "currentAssignments", s == null ? List.of() : details(type, id).stream()
+            .map(c -> map("categoryId", c.get("id"), "origins", c.get("origins"))).toList(),
         "catalogRevision", revision(), "generation", s == null ? 0L : s.generation,
         "manualDecisions", assignments(s).stream().filter(a -> !a.origin.equals("AI"))
             .map(a -> map("categoryId", a.categoryId, "rejected", a.rejected, "origin", a.origin)).toList(),
@@ -508,13 +570,54 @@ public class CategoryService {
     return result;
   }
 
+  private List<Map<String, Object>> relevantExamples(Map<String, Object> current, List<Map<String, Object>> examples) {
+    var words = expenseWords(current);
+    String supplier = MatchingRules.normalize(text(current, "supplier"));
+    return examples.stream().filter(example -> {
+      var data = (Map<?, ?>) example.get("data");
+      if (Objects.equals(current.get("id"), data.get("id"))) return false;
+      return !supplier.isEmpty() && supplier.equals(MatchingRules.normalize(Objects.toString(data.get("supplier"), "")))
+          || expenseWords(data).stream().anyMatch(words::contains);
+    }).toList();
+  }
+
+  private Set<String> expenseWords(Map<?, ?> data) {
+    var descriptions = evidenceFields(data).stream().filter(value -> !value.equals(data.get("sourceText"))).toList();
+    String normalized = MatchingRules.normalize(String.join(" ", descriptions));
+    return Arrays.stream(normalized.split(" "))
+        .filter(word -> word.length() >= 3 && word.chars().anyMatch(Character::isLetter))
+        .filter(word -> !GENERIC_EXPENSE_WORDS.contains(word)).collect(Collectors.toSet());
+  }
+
   private boolean grounded(String quote, Snapshot snapshot, boolean operation) {
     if (quote == null || MatchingRules.normalize(quote).length() < 3) return false;
-    String text = textValues(snapshot.input().get("data")) + textValues(snapshot.input().get("hints"));
-    if (operation) text += textValues(snapshot.input().get("examples"));
-    String source = MatchingRules.normalize(text);
-    return Arrays.stream(quote.split(";", -1)).allMatch(part ->
-        MatchingRules.normalize(part).length() >= 3 && source.contains(MatchingRules.normalize(part)));
+    if (evidenceFields(snapshot.input().get("data")).stream().anyMatch(value -> value.contains(quote))) return true;
+    return operation && rows(snapshot.input(), "examples").stream().anyMatch(example ->
+        evidenceFields(example.get("data")).stream().anyMatch(value -> value.contains(quote)));
+  }
+
+  static List<String> evidenceFields(Object data) {
+    if (!(data instanceof Map<?, ?> record)) return List.of();
+    var values = new ArrayList<String>();
+    for (String key : List.of("description", "sourceText"))
+      if (record.get(key) instanceof String text && !text.isBlank()) values.add(text);
+    if (record.get("lines") instanceof List<?> lines)
+      for (Object line : lines)
+        if (line instanceof Map<?, ?> row && row.get("description") instanceof String description
+            && !description.isBlank()) values.add(description);
+    return values;
+  }
+
+  private void checkExplicitExpenseEvidence(Category category, String quote) {
+    for (var node = category; node != null; node = node.parentId == null ? null : store.get(Category.class, node.parentId)) {
+      String code = Objects.requireNonNullElse(node.referenceCode, "");
+      Pattern evidence = code.startsWith("681") ? EXPLICIT_EXPENSE_EVIDENCE.get("681")
+          : EXPLICIT_EXPENSE_EVIDENCE.get(code.substring(0, Math.min(2, code.length())));
+      if (evidence == null) continue;
+      if (!evidence.matcher(MatchingRules.normalize(quote)).find())
+        throw DomainException.invalid("A categoria exige evidência explícita da natureza da despesa: " + node.name);
+      return;
+    }
   }
 
   private static final Pattern VARIANT = Pattern.compile("(?iu)\\b([\\p{L}\\d]{2,})[-–]([\\p{L}\\d]+)\\b");
@@ -562,35 +665,59 @@ public class CategoryService {
         "explanation", "Descrição bancária genérica: falta informação sobre a natureza da despesa");
     if ("REVIEW".equals(result.get("status")) && (!rows(result, "categories").isEmpty() || !rows(result, "operations").isEmpty()))
       throw DomainException.invalid("Uma resposta incerta não pode alterar categorias");
+    if (snapshot.type().equals("catalog") && !rows(result, "categories").isEmpty())
+      throw DomainException.invalid("A revisão do catálogo não atribui categorias a registos");
     var keys = new HashMap<String, UUID>();
     var familyKeys = rows(result, "operations").stream().map(op -> text(op, "parentId")).filter(Objects::nonNull).collect(Collectors.toSet());
     for (var operation : rows(result, "operations")) operate(operation, keys, execution, snapshot, familyKeys);
     checkTree();
-    if (!snapshot.type().equals("catalog")) {
-      var s = state(snapshot.type(), snapshot.target(), true);
-      var desired = new LinkedHashMap<UUID, String>();
-      for (var assignment : rows(result, "categories")) {
-        String evidence = text(assignment, "evidence");
-        if (!grounded(evidence, snapshot, false)) throw DomainException.invalid("Categoria sem evidência nos dados do registo");
-        UUID id = resolve(text(assignment, "id"), keys);
-        var c = canonical(id); if (c.deleted) throw DomainException.invalid("Categoria arquivada");
-        checkVariant(c, snapshot);
-        if ("626".equals(c.referenceCode)) throw DomainException.invalid(
-            prompts.prompt(PromptCatalog.CATEGORY_GENERIC_FAMILY_INSTRUCTIONS).stripTrailing());
-        desired.put(c.id, evidence);
-      }
-      for (var a : assignments(s).stream().filter(a -> a.origin.equals("AI")).toList()) store.remove(a);
-      store.flush();
-      for (var a : desired.entrySet())
-        if (assignments(s).stream().noneMatch(rejection -> rejection.rejected && descendant(a.getKey(), rejection.categoryId)))
-          assign(s, a.getKey(), "AI", false, a.getValue(), execution);
-      s.status = details(snapshot.type(), snapshot.target()).isEmpty() ? "REVIEW" : "CLASSIFIED";
-      s.reason = Objects.requireNonNullElse(text(result, "explanation"), "Classificação por IA");
-      store.flush();
-      var updated = snapshot(snapshot.type(), snapshot.target());
-      s.appliedFingerprint = updated == null ? snapshot.fingerprint() : updated.fingerprint();
-    }
+    if (!snapshot.type().equals("catalog")) applyAssignments(snapshot, result, keys, execution);
     store.flush(); refreshInheritance(); store.flush(); return true;
+  }
+
+  private void applyAssignments(
+      Snapshot snapshot, Map<String, Object> result, Map<String, UUID> keys, UUID execution) {
+    var desired = validatedAssignments(snapshot, rows(result, "categories"), keys);
+    var state = state(snapshot.type(), snapshot.target(), true);
+    var existing = assignments(state);
+    var rejected = existing.stream().filter(a -> a.rejected).map(a -> a.categoryId).toList();
+    existing.stream().filter(a -> a.origin.equals("AI")).forEach(store::remove);
+    store.flush();
+    for (var assignment : desired.entrySet()) {
+      if (rejected.stream().noneMatch(category -> descendant(assignment.getKey(), category)))
+        assign(state, assignment.getKey(), "AI", false, assignment.getValue(), execution);
+    }
+    state.status = details(snapshot.type(), snapshot.target()).isEmpty() ? "REVIEW" : "CLASSIFIED";
+    state.reason = classificationReason(state.status, desired, result);
+    store.flush();
+    var updated = snapshot(snapshot.type(), snapshot.target());
+    state.appliedFingerprint = updated == null ? snapshot.fingerprint() : updated.fingerprint();
+  }
+
+  private Map<UUID, String> validatedAssignments(
+      Snapshot snapshot, List<Map<String, Object>> assignments, Map<String, UUID> keys) {
+    var desired = new LinkedHashMap<UUID, String>();
+    for (var assignment : assignments) {
+      String evidence = (String) assignment.get("evidence");
+      if (!grounded(evidence, snapshot, false))
+        throw DomainException.invalid("Categoria sem evidência nos dados do registo");
+      var category = canonical(resolve(text(assignment, "id"), keys));
+      if (category.deleted) throw DomainException.invalid("Categoria arquivada");
+      checkVariant(category, snapshot);
+      checkExplicitExpenseEvidence(category, evidence);
+      if ("626".equals(category.referenceCode) || "62".equals(category.referenceCode))
+        throw DomainException.invalid(prompts.prompt(PromptCatalog.CATEGORY_GENERIC_FAMILY_INSTRUCTIONS).stripTrailing());
+      desired.put(category.id, evidence);
+    }
+    return desired;
+  }
+
+  private String classificationReason(String status, Map<UUID, String> desired, Map<String, Object> result) {
+    if (!status.equals("REVIEW")) return Objects.requireNonNullElse(text(result, "explanation"), "Classificação por IA");
+    if (!desired.isEmpty()) return "As categorias encontradas foram removidas manualmente.";
+    if ("REVIEW".equals(result.get("status")) && text(result, "explanation") != null)
+      return text(result, "explanation");
+    return "Não foi encontrada uma categoria sustentada pelos dados deste registo.";
   }
 
   private UUID resolve(String key, Map<String, UUID> keys) {
@@ -602,7 +729,7 @@ public class CategoryService {
 
   @SuppressWarnings("unchecked")
   private void operate(Map<String, Object> op, Map<String, UUID> keys, UUID execution, Snapshot snapshot, Set<String> familyKeys) {
-    if (execution != null && !grounded(text(op, "evidence"), snapshot, true))
+    if (execution != null && !grounded((String) op.get("evidence"), snapshot, true))
       throw DomainException.invalid("Evolução de categorias sem evidência");
     String kind = text(op, "kind");
     if (!Set.of("CREATE", "GENERALIZE", "MERGE", "MOVE").contains(Objects.toString(kind, "")))
@@ -698,11 +825,12 @@ public class CategoryService {
     if (pending == 0) requestReview();
   }
 
-  public void retryStale(String type, UUID id) {
+  public void retryStale(String type, UUID id, long generation) {
     if (type.equals("catalog")) return;
     store.lockFinancialWrites();
     var s = state(type, id, false);
-    if (s != null && s.status.equals("PENDING") && !Boolean.TRUE.equals(source(type, id).get("deleted"))) {
+    if (s != null && s.generation == generation && s.status.equals("PENDING")
+        && !Boolean.TRUE.equals(source(type, id).get("deleted"))) {
       s.generation++; enqueue(type, id, s);
     }
   }

@@ -3,9 +3,10 @@ import { FormsModule } from "@angular/forms";
 import { MatButtonModule } from "@angular/material/button";
 import { A11yModule } from "@angular/cdk/a11y";
 import { Api, ExpenseCategory, errorMessage } from "./api";
+import { InvoiceCategoryAction } from "./invoice-category-action";
 
 @Component({
-  selector: "category-editor", standalone: true, imports: [FormsModule, MatButtonModule, A11yModule],
+  selector: "category-editor", standalone: true, imports: [FormsModule, MatButtonModule, A11yModule, InvoiceCategoryAction],
   template: `
     <div class="modal-backdrop" (keydown.escape)="!saving() && closed.emit()">
       <section class="dialog compact" role="dialog" aria-modal="true" aria-labelledby="category-editor-title" cdkTrapFocus [cdkTrapFocusAutoCapture]="true">
@@ -13,6 +14,10 @@ import { Api, ExpenseCategory, errorMessage } from "./api";
         <div class="dialog-body">
           <p>{{record().number || record().supplier || record().description}}</p>
           <p class="hint">As escolhas manuais prevalecem sobre a IA e a herança das faturas.</p>
+          @if (type() === "invoice" && !(record().categoryDetails?.length)) {
+            <invoice-category-action [invoiceId]="record().id" [classification]="record().classification"
+              [disabled]="saving() || selected().size > 0" (queued)="requestedClassification()" />
+          }
           <details class="details-panel category-evidence"><summary>Origem e justificação das categorias</summary>
             @if(record().classification?.reason){<p>{{record().classification.reason}}</p>}
             @for(c of record().categoryDetails || [];track c.id){
@@ -52,6 +57,10 @@ export class CategoryEditor implements OnInit {
   readonly error = signal("");
   query = ""; newName = ""; newParent = "";
   origin(value: string) { return value === "AI" ? "IA" : value === "INHERITED" ? "Herdada da fatura" : value === "LEGACY" ? "Categoria migrada" : "Escolha manual"; }
+  requestedClassification() {
+    this.changed.emit();
+    this.closed.emit();
+  }
   async ngOnInit() {
     this.selected.set(new Set((this.record().categoryDetails ?? []).map((c: any) => c.id)));
     try { this.catalog.set(await this.api.get<ExpenseCategory[]>("/categories", { archived: true })); }

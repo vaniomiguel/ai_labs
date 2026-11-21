@@ -97,7 +97,7 @@ public class SourceRecordSync {
     edit.document.draft=Json.write(edit.draft);edit.document.status=complete?"DONE":"OPEN";
     store.flush();
   }
-  private Map<String,Object> invoiceFields(Invoice i){return map("id",i.id.toString(),"issuedOn",i.issuedOn,"dueOn",i.dueOn,
+  private Map<String,Object> invoiceFields(Invoice i){return map("id",i.id.toString(),"issuedOn",i.issuedOn,
       "number",i.number,"supplier",i.supplier,"supplierTaxId",i.supplierTaxId,"description",i.description,"currency",i.currency,
       "total",Money.text(i.total),"net",Money.text(i.net),"tax",Money.text(i.tax),"discount",Money.text(i.discount),
       "type",i.type,"relatedInvoiceId",i.relatedInvoiceId);}

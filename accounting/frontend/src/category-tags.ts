@@ -1,8 +1,10 @@
 import { Component, input, output } from "@angular/core";
 import { CategoryDetail, Classification } from "./api";
+import { InvoiceCategoryAction } from "./invoice-category-action";
 
 @Component({
   selector: "category-tags", standalone: true,
+  imports: [InvoiceCategoryAction],
   template: `
     <div class="category-tags">
       @for(c of categories().slice(0,2); track c.id) {
@@ -13,7 +15,13 @@ import { CategoryDetail, Classification } from "./api";
           @for(c of categories().slice(2);track c.id){<button type="button" class="tag" [title]="explain(c)" (click)="filter.emit(c.id)">{{c.name}}{{c.archived?' · arquivada':''}}</button>}
         </div></details>
       }
-      @if(!categories().length){<small [title]="classification()?.reason || ''">{{status()}}</small>}
+      @if (!categories().length) {
+        @if (invoiceId(); as id) {
+          <invoice-category-action [invoiceId]="id" [classification]="classification()" (queued)="classificationRequested.emit()" />
+        } @else {
+          <small [title]="classification()?.reason || ''">{{status()}}</small>
+        }
+      }
       @if(categories().length && ['PENDING','WAITING','REVIEW','PROVISIONAL'].includes(classification()?.state || '')){<small [title]="classification()?.reason || ''">{{status()}}</small>}
       @if(editable()){<button type="button" class="text-button category-edit" (click)="manage.emit()">Editar categorias</button>}
     </div>
@@ -23,6 +31,8 @@ export class CategoryTags {
   readonly categories = input<CategoryDetail[]>([]);
   readonly classification = input<Classification | null>(null);
   readonly editable = input(false);
+  readonly invoiceId = input<string | null>(null);
+  readonly classificationRequested = output<void>();
   readonly manage = output<void>();
   readonly filter = output<string>();
   explain(c: CategoryDetail) {

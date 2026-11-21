@@ -62,7 +62,6 @@ class FinancialIntegrationTest {
   @Autowired pt.conta.api.ProgressController progress;
   @Autowired JdbcTemplate jdbc;
   @Autowired DocumentPublisher publisher;
-  @Autowired pt.conta.ai.AiResults aiResults;
   @Autowired pt.conta.api.FinanceController finance;
   @Autowired pt.conta.history.ZipImporter zipImporter;
 
@@ -622,36 +621,6 @@ class FinancialIntegrationTest {
   }
 
   @Test
-  void quotedAiConcernCannotOverrideAnOwnerDecisionOrAStaleRevision() {
-    var invoice = invoice("100.00", "2026-01-01", "AI-GUARD");
-    var i = store.get(Invoice.class, (UUID) invoice.get("id"));
-    var result =
-        map(
-            "verdict",
-            "CONCERN",
-            "summary",
-            "Total diferente",
-            "concerns",
-            List.of(map("field", "total", "quote", "Total: 120,00", "reason", "Verificar total")));
-    aiResults.reviewed(
-        new JobQueue.Claim(UUID.randomUUID(), "REVIEW_INVOICE", i.id, i.version, "{}", 0),
-        result,
-        "Total: 120,00");
-    assertThat(closing(2026, 1)).isEqualTo("100.00");
-    assertThat(i.manuallyConfirmed).isTrue();
-    var input = new LinkedHashMap<>(book.invoiceView(i));
-    input.put("total", "120.00");
-    input.put("validate", true);
-    long old = i.version;
-    book.saveInvoice(i.id, input);
-    aiResults.reviewed(
-        new JobQueue.Claim(UUID.randomUUID(), "REVIEW_INVOICE", i.id, old, "{}", 0),
-        result,
-        "Total: 120,00");
-    assertThat(closing(2026, 1)).isEqualTo("120.00");
-  }
-
-  @Test
   void postgresSearchFindsInvoiceAndBankDescription() {
     invoice("5.00", "2026-01-01", "SEARCH-LISBOA");
     movement("5.00", "2026-01-02", "Compra em Lisboa", "UNCLASSIFIED", "DEBIT");
@@ -955,53 +924,6 @@ class FinancialIntegrationTest {
         .containsEntry("total", "37.82")
         .containsEntry("number", "FT-KEEP-1");
     assertThat(store.all(Invoice.class).getFirst().total).isEqualByComparingTo("37.82");
-  }
-
-  @Test
-  void bankBalanceConcernsCannotSuspendValidMovementFacts() {
-    var data =
-        map(
-            "accountId",
-            account.toString(),
-            "bookedOn",
-            "2026-01-02",
-            "description",
-            "Compra de teste",
-            "amount",
-            "7.00",
-            "direction",
-            "DEBIT",
-            "validate",
-            true);
-    var view = book.saveMovement(null, data, "RULES", false);
-    var m = store.get(pt.conta.bank.BankMovement.class, (UUID) view.get("id"));
-    var claim = new JobQueue.Claim(UUID.randomUUID(), "REVIEW_MOVEMENT", m.id, m.version, "{}", 0);
-    aiResults.reviewed(
-        claim,
-        map(
-            "verdict",
-            "CONCERN",
-            "summary",
-            "Saldo divergente",
-            "concerns",
-            List.of(map("field", "openingBalance", "quote", "Saldo inicial 999,00"))),
-        "Saldo inicial 999,00");
-    assertThat(m.reviewStatus).isEqualTo(pt.conta.shared.Types.ReviewStatus.AUTOMATIC);
-    assertThat(
-            store.all(pt.conta.review.Alert.class).stream()
-                .filter(a -> a.code.equals("AI_CONCERN")))
-        .isEmpty();
-    aiResults.reviewed(
-        claim,
-        map(
-            "verdict",
-            "CONCERN",
-            "summary",
-            "Montante divergente",
-            "concerns",
-            List.of(map("field", "amount", "quote", "Montante -8,00 EUR"))),
-        "Montante -8,00 EUR");
-    assertThat(m.reviewStatus).isEqualTo(pt.conta.shared.Types.ReviewStatus.OPEN);
   }
 
   private ExclusionRequest.Item selection(String type, Map<String, Object> row) {

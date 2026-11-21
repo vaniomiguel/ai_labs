@@ -55,7 +55,9 @@ public final class CategoryModelEvaluation {
     try {
       String kind=type.equals("catalog")?"REFINE_CATEGORIES":type.equals("invoice")?"CLASSIFY_INVOICE":"CLASSIFY_MOVEMENT";
       UUID job=jdbc.queryForList("select id from job where target_id=? and kind=? order by created_at desc limit 1",UUID.class,id,kind).stream().findFirst().orElse(UUID.randomUUID());
-      worker.process(new JobQueue.Claim(job,kind,id,0,"{}",0));
+      long revision = jdbc.queryForList("select target_version from job where id=?", Long.class, job)
+          .stream().findFirst().orElseGet(categories::revision);
+      worker.process(new JobQueue.Claim(job,kind,id,revision,"{}",0));
       jdbc.update("update job set state='DONE' where target_id=? and kind=?",id,kind);
       var view=type.equals("catalog")?map("catalog",categories.catalog(true)):categories.view(type,id);
       passed=check.test(view)&&before.equals(ledger());

@@ -277,9 +277,12 @@
                   ><small
                     >{{i.number||'Sem número'}} ·
                     {{labels[i.origin]||i.author||i.origin}}</small
-                  >@if(i.aiReview?.state==='REVIEWED'){<small
-                    >✧ Revisto por IA · {{i.aiReview.model}}</small
-                  >}@else if(i.aiReview?.state==='PENDING'){<small
+                  >@if (i.aiReview?.state === 'REVIEWED') {
+                    <small>
+                      ✧ {{ i.aiReview.verdict === 'SUGGESTION' ? 'Revisão inconclusiva' : 'Revisto por IA' }}
+                      @if (i.aiReview.model) { · {{ i.aiReview.model }} }
+                    </small>
+                  }@else if(i.aiReview?.state==='PENDING'){<small
                     >✧ Revisão de IA agendada</small
                   >}@else if(i.aiReview?.state==='FAILED'){<small
                     >Revisão de IA com falha</small
@@ -287,6 +290,7 @@
                 </td>
                 <td>
                   <category-tags [categories]="i.categoryDetails || []" [classification]="i.classification" [editable]="true"
+                    [invoiceId]="i.id" (classificationRequested)="refresh()"
                     (manage)="categoryTarget.set({type:'invoice',record:i})" (filter)="filters.category=$event;refresh()" />
                 </td>
                 <td class="number">{{money(i.total)}}@if(i.reviewStatus==='OPEN'){<small>Provisório · por validar</small>}</td>
@@ -400,9 +404,12 @@
                   <button class="row-title" (click)="editRecord('MOVEMENT',m)">
                     {{recordTitle('MOVEMENT',m)}}</button
                   ><small>{{m.bankReference}}</small
-                  >@if(m.aiReview?.state==='REVIEWED'){<small
-                    >✧ Revisto por IA · {{m.aiReview.model}}</small
-                  >}@else if(m.aiReview?.state==='PENDING'){<small
+                  >@if (m.aiReview?.state === 'REVIEWED') {
+                    <small>
+                      ✧ {{ m.aiReview.verdict === 'SUGGESTION' ? 'Revisão inconclusiva' : 'Revisto por IA' }}
+                      @if (m.aiReview.model) { · {{ m.aiReview.model }} }
+                    </small>
+                  }@else if(m.aiReview?.state==='PENDING'){<small
                     >✧ Revisão de IA agendada</small
                   >}
                 </td>
@@ -1206,7 +1213,7 @@
         Guardar sem resolver</button
       ><button
         mat-flat-button
-        [disabled]="doc.kind==='ARCHIVE'||doc.kind==='SUPPORT'"
+        [disabled]="working()||doc.kind==='ARCHIVE'||doc.kind==='SUPPORT'"
         (click)="saveDraft(true)"
       >
         Validar e resolver

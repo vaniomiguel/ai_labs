@@ -40,7 +40,8 @@ class InvoiceExtractionTest {
     var properties = mock(AccountingProperties.class);
     when(properties.promptDirectory()).thenReturn(overrides.toString());
     prompts = new PromptCatalog(properties);
-    requests = new InvoiceExtractionRequests(prompts);
+    requests = new InvoiceExtractionRequests(prompts,
+        new InvoiceRepairContext(new FieldProtection(mock(pt.conta.audit.AuditService.class))));
     var settings = mock(Settings.class);
     when(settings.get(anyString(), anyString())).thenAnswer(call -> call.getArgument(1));
     when(provider.models()).thenReturn(List.of(
@@ -55,8 +56,9 @@ class InvoiceExtractionTest {
     doc.sha256 = "original-document-hash";
     doc.text = SOURCE;
     when(store.get(SourceDocument.class, doc.id)).thenReturn(doc);
-    orchestrator = new AiOrchestrator(store, provider, prompts, settings, results, publisher, storage,
-        mock(BookkeepingService.class), mock(CategoryAiWorker.class), mock(RepairAiWorker.class), requests);
+    orchestrator = new AiOrchestrator(store, new AiModelExecution(store, provider, results, settings),
+        prompts, settings, publisher, storage, mock(BookkeepingService.class), mock(CategoryAiWorker.class),
+        mock(RepairAiWorker.class), requests, null);
   }
 
   private Map<String, Object> invoice() {
@@ -103,12 +105,32 @@ class InvoiceExtractionTest {
     assertThat(Json.read(request.input()).path("fields").asText())
         .isEqualTo(prompts.prompt(PromptCatalog.INVOICE_EXTRACTION_FIELD_INSTRUCTIONS));
     assertThat(request.instructions())
-        .isEqualTo(prompts.prompt(PromptCatalog.INVOICE_EXTRACTION_SYSTEM_INSTRUCTIONS));
+        .isEqualTo(prompts.prompt(PromptCatalog.INVOICE_EXTRACTION_SYSTEM_INSTRUCTIONS))
+        .containsSubsequence("look first to the text surrounding each of those dates",
+            "same month and year", "pick the earliest one", "Otherwise, if the invoice date remains uncertain, use null")
+        .contains("Explicitly identified non-invoice dates are not candidates");
+    assertThat(Json.read(request.input()).path("fields").asText()).doesNotContain("dueOn");
+    assertThat(Json.write(request.schema())).doesNotContain("dueOn");
     assertThat(request.schema()).isEqualTo(prompts.schema("extract-invoice"));
     assertThat(request.requireFullContext()).isTrue();
     assertThat(request.images()).isEmpty();
     verifyNoInteractions(storage);
     assertThat(publishedDraft()).containsEntry("validate", true);
+  }
+
+  @Test
+  void modelOutputWithRetiredDueDateIsRejectedForRootAndIndependentReceipts() {
+    var draft = invoice();
+    draft.put("dueOn", "2026-02-01");
+    var schema = prompts.schema(PromptCatalog.INVOICE_EXTRACTION_SYSTEM_INSTRUCTIONS);
+    assertThatThrownBy(() -> StructuredOutput.parse(Json.write(
+        map("draft", draft, "evidence", List.of(), "issues", List.of())), schema))
+        .isInstanceOf(IllegalArgumentException.class).hasMessageContaining("dueOn");
+    var outer = invoice();
+    outer.put("invoices", List.of(draft));
+    assertThatThrownBy(() -> StructuredOutput.parse(Json.write(
+        map("draft", outer, "evidence", List.of(), "issues", List.of())), schema))
+        .isInstanceOf(IllegalArgumentException.class).hasMessageContaining("dueOn");
   }
 
   @Test
@@ -197,7 +219,7 @@ class InvoiceExtractionTest {
 
   @Test
   void repairLimitCountsSystemInputAndSchemaAndUsesTheSameOverrides() throws Exception {
-    Files.writeString(overrides.resolve("extract-invoice.md"), "Custom system\n");
+    Files.writeString(overrides.resolve("repair-invoice.md"), "Custom system\n");
     Files.writeString(overrides.resolve("extract-invoice-fields.md"), "Custom fields\n");
     var context = map("data", map("supplier", "Human supplier"), "alert", "Review this invoice");
     var request = requests.repair("test", SOURCE, context, 50000);
@@ -206,6 +228,14 @@ class InvoiceExtractionTest {
     assertThatThrownBy(() -> requests.repair("test", SOURCE, context, size - 1))
         .isInstanceOf(AiProvider.ContextExceeded.class);
     assertThat(request.instructions()).isEqualTo("Custom system\n");
+    var input = Json.read(request.input());
+    assertThat(input.path("responseSchema")).isEqualTo(Json.read(Json.write(request.schema())));
+    assertThat(input.path("responseTemplate").path("draft").path("supplier").asText())
+        .isEqualTo("Human supplier");
+    assertThatCode(() -> StructuredOutput.parse(input.path("responseTemplate").toString(), request.schema()))
+        .doesNotThrowAnyException();
+    assertThat(requests.automatic("test", SOURCE).instructions())
+        .isEqualTo(prompts.prompt(PromptCatalog.INVOICE_EXTRACTION_SYSTEM_INSTRUCTIONS));
     assertThat(Json.read(request.input()).path("fields").asText()).isEqualTo("Custom fields\n");
     assertThat(Json.read(request.input()).path("sourceText").asText()).isEqualTo(SOURCE);
     assertThat(request.images()).isEmpty();

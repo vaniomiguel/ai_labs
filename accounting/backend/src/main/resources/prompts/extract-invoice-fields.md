@@ -2,7 +2,6 @@ Identify the following fields in the complete sourceText. Use these exact JSON n
 
 INVOICE FIELDS
 - issuedOn: the printed invoice/receipt issue date, normalized to YYYY-MM-DD. Interpret clearly identified Portuguese day/month/year dates accordingly. Do not substitute a payment, service, travel or print date, invent a year, or resolve a genuinely ambiguous date by guessing. Use null when it cannot be identified.
-- dueOn: an explicitly printed payment due date, normalized to YYYY-MM-DD. Do not calculate it from payment terms or issuedOn. If absent, use null.
 - number: the invoice/receipt identifier. Preserve meaningful prefixes, letters, punctuation and leading zeros. Do not substitute an order, booking, customer-account or payment reference. If absent, use null.
 - supplier: the issuer's business or personal name as printed, not the customer's name. Join clearly associated wrapped name lines only; use null when the issuer cannot be identified.
 - supplierTaxId: the issuer's printed tax identification number, including its country prefix when present. Do not substitute the customer's NIF, an account number or another registration identifier. Use null when absent or uncertain.

@@ -12,9 +12,18 @@ import pt.conta.shared.*;
 public class PromptCatalog {
   public static final String INVOICE_EXTRACTION_SYSTEM_INSTRUCTIONS = "extract-invoice";
   public static final String INVOICE_EXTRACTION_FIELD_INSTRUCTIONS = "extract-invoice-fields";
+  public static final String INVOICE_REPAIR_SYSTEM_INSTRUCTIONS = "repair-invoice";
+  public static final String AUTOMATIC_REVIEW_SYSTEM_INSTRUCTIONS = "automatic-review";
+  public static final String AUTOMATIC_INVOICE_REVIEW_CHECKLIST = "automatic-review-invoice";
+  public static final String AUTOMATIC_MOVEMENT_REVIEW_CHECKLIST = "automatic-review-movement";
+  public static final String AUTOMATIC_DOCUMENT_REVIEW_CHECKLIST = "automatic-review-document";
+  public static final String AUTOMATIC_ALLOCATION_REVIEW_CHECKLIST = "automatic-review-allocation";
+  public static final String AUTOMATIC_REVIEW_RESPONSE_EXAMPLE = "automatic-review-example";
   public static final String REPAIR_ANALYSIS_INSTRUCTIONS = "repair-analysis-instructions";
   public static final String HUMAN_FIELD_AUTHORITY_INSTRUCTIONS = "human-field-authority-instructions";
   public static final String CATEGORY_VALIDATION_RETRY_INSTRUCTIONS = "category-validation-retry-instructions";
+  public static final String EXPENSE_CLASSIFICATION_SYSTEM_INSTRUCTIONS = "categories";
+  public static final String CATEGORY_CATALOG_REVIEW_SYSTEM_INSTRUCTIONS = "category-catalog-review";
   public static final String CATEGORY_VARIANT_MISMATCH_INSTRUCTIONS = "category-variant-mismatch-instructions";
   public static final String CATEGORY_PROTECTED_VARIANT_INSTRUCTIONS = "category-protected-variant-instructions";
   public static final String CATEGORY_GENERALIZE_VARIANT_INSTRUCTIONS = "category-generalize-variant-instructions";

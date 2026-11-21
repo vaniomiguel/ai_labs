@@ -1,0 +1,27 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["verdict", "concerns", "summary", "suggestions"],
+  "properties": {
+    "verdict": {"enum": ["PASS", "CONCERN", "SUGGESTION"]},
+    "concerns": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["field", "recordedValue", "sourceValue", "sourceId", "quote", "page", "reason"],
+        "properties": {
+          "field": {"type": "string"},
+          "recordedValue": {"type": "string"},
+          "sourceValue": {"type": "string"},
+          "sourceId": {"type": "string"},
+          "quote": {"type": "string"},
+          "page": {"type": ["integer", "null"]},
+          "reason": {"type": "string"}
+        }
+      }
+    },
+    "summary": {"type": "string"},
+    "suggestions": {"type": "array", "items": {"type": "string"}}
+  }
+}

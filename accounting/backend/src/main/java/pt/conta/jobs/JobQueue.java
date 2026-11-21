@@ -5,6 +5,7 @@ import java.util.*;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import pt.conta.shared.Json;
 
 /** PostgreSQL-backed queue with atomic claims, leases and idempotent enqueue operations. */
 @Service
@@ -91,6 +92,18 @@ public class JobQueue {
             + " state='RUNNING'",
         job.id(),
         job.token());
+  }
+
+  /** Saves the aggregate once, in the same transaction as its accounting effects. */
+  public boolean saveAutomaticReview(Claim job, Map<String, Object> report) {
+    return jdbc.update(
+            """
+            update job set payload=jsonb_set(payload::jsonb, '{reviewResult}', cast(? as jsonb))::text
+            where id=? and kind=? and target_id=? and target_version=? and state='RUNNING'
+              and lease_token=? and leased_until>clock_timestamp() and payload::jsonb->'reviewResult' is null
+            """,
+            Json.write(report), job.id(), job.kind(), job.target(), job.revision(), job.token())
+        == 1;
   }
 
   /** Restarts a failed task explicitly, retaining its audit history in the database. */

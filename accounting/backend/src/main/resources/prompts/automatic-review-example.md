@@ -1,0 +1,1 @@
+{"verdict":"CONCERN","concerns":[{"field":"total","recordedValue":"100.00","sourceValue":"123.00","sourceId":"invoice","quote":"TOTAL A PAGAR 123,00","page":null,"reason":"O total final impresso é 123,00."}],"summary":"O total registado diverge do total final.","suggestions":[]}

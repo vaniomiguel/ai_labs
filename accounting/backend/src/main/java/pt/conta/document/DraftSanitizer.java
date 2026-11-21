@@ -11,11 +11,23 @@ import pt.conta.shared.*;
 public final class DraftSanitizer {
   private DraftSanitizer() {}
 
+  /** Discards retired fields from invoice writes without changing other draft values. */
+  public static Map<String, Object> withoutInvoiceDueDates(Map<String, Object> input) {
+    var draft = Json.object(Json.write(input));
+    draft.remove("dueOn");
+    draft.remove("due_on");
+    for (var invoice : Inputs.rows(draft, "invoices")) {
+      invoice.remove("dueOn");
+      invoice.remove("due_on");
+    }
+    return draft;
+  }
+
   /**
    * Copies an automatic extraction, blanks only malformed typed fields and records review reasons.
    */
   public static Map<String, Object> sanitize(String kind, Map<String, Object> input) {
-    var draft = Json.object(Json.write(input));
+    var draft = kind.equals("INVOICE") ? withoutInvoiceDueDates(input) : Json.object(Json.write(input));
     var issues = new ArrayList<String>();
     if (draft.get("issues") instanceof List<?> list)
       list.forEach(issue -> issues.add(Objects.toString(issue)));
@@ -24,7 +36,7 @@ public final class DraftSanitizer {
         draft.put(
             "invoices",
             Inputs.rows(draft, "invoices").stream().map(r -> sanitize("INVOICE", r)).toList());
-      dates(draft, List.of("issuedOn", "dueOn"), issues, "");
+      dates(draft, List.of("issuedOn"), issues, "");
       money(draft, List.of("total", "net", "tax", "discount"), issues, "");
       if (Inputs.text(draft, "relatedInvoiceId") != null)
         try {

@@ -15,7 +15,6 @@ public class Invoice extends BaseEntity {
   public String fieldProvenance = "{}";
 
   public LocalDate issuedOn;
-  public LocalDate dueOn;
   public String number;
   public String supplier;
   public String supplierTaxId;

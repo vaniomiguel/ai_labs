@@ -150,22 +150,39 @@ class OllamaContractTest {
       var complete=Json.read(request.get());
       assertThat(complete.path("truncate").asBoolean(true)).isFalse();
       assertThat(complete.path("shift").asBoolean(true)).isFalse();
-      var invoice = new InvoiceExtractionRequests(new PromptCatalog(properties))
-          .automatic("vision:test", "Complete invoice OCR text");
-      provider.complete(invoice);
-      var invoiceBody = Json.read(request.get());
-      var messages = invoiceBody.path("messages");
-      assertThat(messages.size()).isEqualTo(2);
-      assertThat(messages.get(0).path("role").asText()).isEqualTo("system");
-      assertThat(messages.get(0).path("content").asText()).isEqualTo(invoice.instructions());
-      assertThat(messages.get(1).path("role").asText()).isEqualTo("user");
-      assertThat(messages.get(1).path("content").asText()).isEqualTo(invoice.input());
-      assertThat(messages.get(1).has("images")).isFalse();
-      assertThat(invoiceBody.path("format")).isEqualTo(Json.read(Json.write(invoice.schema())));
-      assertThat(invoiceBody.path("truncate").asBoolean(true)).isFalse();
-      assertThat(invoiceBody.path("shift").asBoolean(true)).isFalse();
+      assertInvoiceMessages(provider, properties, request);
     } finally {
       server.stop(0);
     }
   }
+  private void assertInvoiceMessages(
+      OllamaProvider provider, AccountingProperties properties, AtomicReference<String> rawRequest) {
+    var requests = new InvoiceExtractionRequests(new PromptCatalog(properties),
+        new InvoiceRepairContext(new pt.conta.document.FieldProtection(
+            org.mockito.Mockito.mock(pt.conta.audit.AuditService.class))));
+    var invoice = requests.automatic("vision:test", "Complete invoice OCR text");
+    provider.complete(invoice);
+    var invoiceBody = Json.read(rawRequest.get());
+    var messages = invoiceBody.path("messages");
+    assertThat(messages.size()).isEqualTo(2);
+    assertThat(messages.get(0).path("role").asText()).isEqualTo("system");
+    assertThat(messages.get(0).path("content").asText()).isEqualTo(invoice.instructions());
+    assertThat(messages.get(1).path("role").asText()).isEqualTo("user");
+    assertThat(messages.get(1).path("content").asText()).isEqualTo(invoice.input());
+    assertThat(messages.get(1).has("images")).isFalse();
+    assertThat(invoiceBody.path("format")).isEqualTo(Json.read(Json.write(invoice.schema())));
+    assertThat(invoiceBody.path("truncate").asBoolean(true)).isFalse();
+    assertThat(invoiceBody.path("shift").asBoolean(true)).isFalse();
+
+    var repair = requests.repair("vision:test", "Saved OCR text", map("data", map("supplier", "Known supplier")), 50000);
+    provider.complete(repair);
+    var repaired = Json.read(rawRequest.get());
+    assertThat(repaired.path("messages").get(0).path("content").asText())
+        .startsWith("You are an expert accountant");
+    var input = Json.read(repaired.path("messages").get(1).path("content").asText());
+    assertThat(input.path("responseSchema")).isEqualTo(repaired.path("format"));
+    assertThat(input.path("responseTemplate").path("draft").path("supplier").asText()).isEqualTo("Known supplier");
+    assertThat(repaired.path("messages").get(1).has("images")).isFalse();
+  }
+
 }

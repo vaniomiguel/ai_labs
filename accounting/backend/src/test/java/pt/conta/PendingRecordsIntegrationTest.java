@@ -69,6 +69,42 @@ class PendingRecordsIntegrationTest {
   private Map<String,Object> edit(Invoice i,boolean validate){var input=new LinkedHashMap<>(book.invoiceView(i));input.put("validate",validate);return input;}
   private Map<String,Object> edit(BankMovement m,boolean validate){var input=new LinkedHashMap<>(book.movementView(m));input.put("validate",validate);return input;}
 
+  @Test
+  void legacyDueDateWritesAreIgnoredAndNeverSupplyTheInvoiceDate() {
+    var pending = finance.createInvoice(map("supplier", "Legacy caller", "total", "100.00",
+        "dueOn", "not a date", "validate", false));
+    UUID id = (UUID) pending.get("id");
+    assertThat(pending).containsEntry("issuedOn", null).doesNotContainKey("dueOn");
+    assertThat(finance.invoice(id)).doesNotContainKey("dueOn");
+    assertThat(rows(finance.invoices(Map.of()), "items")).allSatisfy(row -> assertThat(row).doesNotContainKey("dueOn"));
+    var invoice = store.get(Invoice.class, id);
+    assertThat(Json.object(invoice.fieldProvenance)).doesNotContainKey("dueOn");
+    var update = edit(invoice, true);
+    update.put("dueOn", "2026-02-01");
+    assertThatThrownBy(() -> finance.editInvoice(id, update)).isInstanceOf(DomainException.class)
+        .hasMessageContaining("data");
+  }
+
+  @Test
+  void rawDraftWritesDiscardDueDatesForRootAndIndependentReceipts() {
+    var doc = source("INVOICE", "Legacy due dates.pdf");
+    store.flush();
+    var first = receipt("FIRST", "2026-01-01", "10.00");
+    first.put("dueOn", "2026-02-01");
+    var second = receipt("SECOND", null, "20.00");
+    second.put("due_on", "2026-02-02");
+    publisher.edit(doc.id, map("version", doc.version, "draft",
+        map("issuedOn", null, "dueOn", "2026-02-03", "invoices", List.of(first, second))), documents);
+    var draft = Json.object(doc.draft);
+    assertThat(draft).containsEntry("issuedOn", null).doesNotContainKeys("dueOn", "due_on");
+    assertThat(rows(draft, "invoices")).hasSize(2).allSatisfy(
+        row -> assertThat(row).doesNotContainKeys("dueOn", "due_on"));
+    assertThat(rows(draft, "invoices").getFirst()).containsEntry("issuedOn", "2026-01-01");
+    assertThat(rows(draft, "invoices").getLast()).containsEntry("issuedOn", null);
+    assertThat(doc.fieldProvenance).doesNotContain("dueOn", "due_on");
+    assertThat(first).containsKey("dueOn");
+  }
+
   @Test void undatedPendingRecordsSurviveEveryPeriodFilterAndSortBeforeDatedRecords() {
     var pending=invoice(null,"UNDATED-I","100.00",false);var bank=movement(null,"UNDATED-M","60.00",false);
     invoice("2026-01-02","DATED-I","25.00",true);movement("2026-01-02","DATED-M","25.00",true);
