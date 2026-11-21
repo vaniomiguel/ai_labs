@@ -919,7 +919,8 @@ class FinancialIntegrationTest {
             List.of(),
             "validate",
             false),
-        "[]");
+        "[]",
+        List.of());
     assertThat(Json.object(source.draft))
         .containsEntry("total", "37.82")
         .containsEntry("number", "FT-KEEP-1");

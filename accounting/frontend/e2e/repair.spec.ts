@@ -10,7 +10,7 @@ async function setup(page:Page,initial:any={supplier:"",issuedOn:null,total:null
   const reply=(route:any,value:any,status=200)=>route.fulfill({status,contentType:"application/json",body:JSON.stringify(value)});
   await page.route("**/api/v1/alerts",route=>reply(route,[state.alert]));
   await page.route("**/api/v1/documents/"+docId,route=>reply(route,document));
-  await page.route("**/api/v1/documents/"+docId+"/attempts",route=>reply(route,[]));
+  await page.route("**/api/v1/documents/"+docId+"/attempts",route=>reply(route,state.attempts ?? []));
   await page.route("**/api/v1/alerts/"+alertId,route=>{state.gets++;return reply(route,state.alert);});
   state.task=(status:string,outcome:string|null=null,extra:any={})=>{
     state.alert={...state.alert,repair:{jobId,state:status,outcome,sourceVersion:0,error:null,attempts:0,canApply:outcome==="READY",blockingIssues:[],context:null,...extra}};
@@ -117,6 +117,27 @@ test("request shows a spinner immediately and the proposal arrives automatically
   await page.screenshot({path:testInfo.outputPath("repair-result.png"),fullPage:true});
   await dialog.getByRole("button",{name:"Aplicar proposta e validar",exact:true}).click();
   await expect.poll(()=>state.applies).toBe(1);
+});
+
+test("the prompt appears in attempt evidence when an AI repair completes", async ({page}) => {
+  const {state, dialog} = await setup(page);
+  const system = "Instruções de teste\nSegunda linha";
+  const user = '{"sourceText":"Documento sintético <b>completo</b>"}';
+  state.submitted = () => {
+    state.attempts = [
+      {id: "ocr", engine: "PDFBOX", evidence: {text: "Texto OCR"}},
+      {id: "repair", engine: "IA · Modelo de teste", evidence: {quote: "Fornecedor IA"}, prompts: [{system, user}]},
+    ];
+    state.result();
+  };
+  await dialog.getByRole("button", {name: "✧ Pedir tentativa de correção à IA", exact: true}).click();
+  await dialog.getByText("Tentativas e evidências", {exact: true}).click();
+  const prompt = dialog.getByText("Prompt da IA", {exact: true});
+  await expect(prompt).toHaveCount(1);
+  await prompt.click();
+  await expect(dialog.getByText("Mensagem de sistema", {exact: true})).toBeVisible();
+  expect(await prompt.locator("..").locator("pre").allTextContents()).toEqual([system, user]);
+  await expect(dialog.getByText(/Texto OCR/)).toBeVisible();
 });
 
 test("closing stops polling and reopening restores the completed proposal",async({page})=>{

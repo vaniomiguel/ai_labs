@@ -326,14 +326,17 @@ nav button.active {
   height: 36px !important;
 }
 .filter-bar {
-  display: flex;
-  gap: 14px;
-  align-items: end;
   padding: 16px 19px;
   background: #fff;
   border: 1px solid var(--line);
   border-radius: 8px;
   margin-bottom: 23px;
+}
+.filter-controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 14px;
+  align-items: end;
   position: relative;
 }
 .filter-bar label {
@@ -343,15 +346,68 @@ nav button.active {
 .filter-bar select {
   height: 34px;
 }
-.filter-bar label:first-child {
+.filter-year {
   width: 90px;
 }
-.filter-bar label:nth-child(2) {
+.filter-month {
   width: 140px;
+}
+.filter-controls .search-field {
+  min-width: min(100%, 175px);
 }
 .search-field {
   flex: 1;
   max-width: 400px;
+}
+.applied-filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 12px;
+  align-items: center;
+  margin-top: 12px;
+}
+.panel-filters {
+  display: block;
+  padding: 0 22px 12px;
+}
+.panel-filters .applied-filters {
+  margin-top: 0;
+}
+.filter-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.filter-chips li {
+  min-width: 0;
+  max-width: 100%;
+}
+.filter-chip {
+  display: inline-block;
+  max-width: 100%;
+  padding: 5px 9px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: var(--pale);
+  color: var(--ink);
+  font-size: 12px;
+  text-align: start;
+  overflow-wrap: anywhere;
+}
+button.filter-chip:hover {
+  border-color: var(--green);
+}
+.applied-filters button[aria-disabled="true"] {
+  cursor: default;
+  opacity: .6;
+}
+.applied-filters button:focus-visible,
+.advanced-filters button:focus-visible {
+  outline: 2px solid var(--green);
 }
 label {
   display: block;
@@ -388,23 +444,30 @@ textarea {
 summary {
   cursor: pointer;
 }
-.advanced-filters summary {
-  padding: 10px 2px;
-  color: #6c7c6d;
-  font-size: 11px;
-  white-space: nowrap;
-}
 .filter-popover {
   position: absolute;
   right: 0;
-  top: 100%;
+  top: calc(100% + 6px);
   z-index: 8;
   padding: 23px;
   background: white;
   border: 1px solid var(--line);
   border-radius: 8px;
   box-shadow: 0 12px 35px #142f2d18;
-  width: min(700px, 95vw);
+  width: min(700px, 100%);
+}
+.filter-popover .form-grid {
+  row-gap: 9px;
+}
+.filter-popover label {
+  min-width: 0;
+}
+.filter-popover-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 14px;
 }
 .summary-grid {
   display: grid;
@@ -1302,13 +1365,20 @@ source-pdf {
     flex-direction: row;
   }
   .filter-bar {
-    gap: 10px;
-    flex-wrap: wrap;
     padding: 13px;
   }
-  .filter-bar .search-field {
+  .filter-controls {
+    gap: 10px;
+  }
+  .filter-controls .search-field {
     flex-basis: 100%;
     max-width: unset;
+  }
+  .filter-popover {
+    padding: 12px;
+  }
+  .filter-popover .form-grid {
+    grid-template-columns: minmax(0, 1fr);
   }
   .summary-grid {
     gap: 10px;

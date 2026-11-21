@@ -87,7 +87,7 @@ class InvoiceExtractionTest {
   private Map<String, Object> publishedDraft() {
     @SuppressWarnings("unchecked")
     ArgumentCaptor<Map<String, Object>> draft = ArgumentCaptor.forClass(Map.class);
-    verify(publisher).aiExtracted(eq(doc.id), eq(doc.version), draft.capture(), anyString());
+    verify(publisher).aiExtracted(eq(doc.id), eq(doc.version), draft.capture(), anyString(), anyList());
     return draft.getValue();
   }
 
@@ -148,6 +148,11 @@ class InvoiceExtractionTest {
     assertThat(latest.instructions()).isEqualTo("Custom system instructions\n");
     assertThat(Json.read(latest.input()).path("fields").asText()).isEqualTo("Custom requested fields\n");
     assertThat(executions).extracting(e -> e.inputHash).doesNotHaveDuplicates();
+    var sent = captured.getAllValues();
+    verify(publisher, times(2)).aiExtracted(eq(doc.id), eq(doc.version), anyMap(), anyString(),
+        eq(List.of(new ExtractionAttempt.Prompt(sent.getFirst().instructions(), sent.getFirst().input()))));
+    verify(publisher).aiExtracted(eq(doc.id), eq(doc.version), anyMap(), anyString(),
+        eq(List.of(new ExtractionAttempt.Prompt(latest.instructions(), latest.input()))));
   }
 
   @Test
@@ -157,6 +162,23 @@ class InvoiceExtractionTest {
     when(provider.complete(any())).thenReturn(Json.write(response));
     process();
     assertThat(publishedDraft()).containsEntry("validate", false);
+  }
+
+  @Test
+  void unknownInvoiceDescriptionDoesNotPreventAutomaticValidation() throws Exception {
+    doc.text = "Emissão 2026-01-01\nFornecedor de teste\nTOTAL A PAGAR 100,00\n";
+    var draft = invoice();
+    draft.put("description", null);
+    draft.put("lines", List.of());
+    var headerEvidence = evidence().subList(0, 3);
+    when(provider.complete(any())).thenReturn(Json.write(
+        map("draft", draft, "evidence", headerEvidence, "issues", List.of())));
+
+    process();
+
+    var published = publishedDraft();
+    assertThat(published.get("description")).isNull();
+    assertThat(published).containsEntry("validate", true).containsEntry("issues", List.of());
   }
 
   @Test

@@ -93,7 +93,7 @@ public class PortugueseDocumentParser {
         "number",
         number,
         "description",
-        text,
+        null,
         "total",
         total == null ? null : amount(total),
         "type",

@@ -18,9 +18,17 @@ async function assign(page:Page,type:"invoices"|"movements",record:any,categoryI
   const current=await get(page,`/${type}/${record.id}`);
   return write(page,`/${type}/${record.id}/categories`,{version:current.classification.version,categoryIds,allowAi:false},"PUT");
 }
-async function open(page:Page,view:string,year:number) {
-  await page.goto("/");if(view)await page.getByRole("button",{name:view,exact:true}).click();
-  await page.getByLabel("Ano",{exact:true}).fill(String(year));await page.getByLabel("Ano",{exact:true}).press("Tab");
+async function open(page: Page, view: string, year: number) {
+  await page.goto("/");
+  if (view) {
+    const section = page.getByRole("navigation").getByRole("button", { name: view, exact: true });
+    await section.click();
+    await expect(section).toHaveAttribute("aria-current", "page");
+  }
+  const field = page.getByLabel("Ano", { exact: true });
+  await field.fill(String(year));
+  await field.press("Tab");
+  await expect(page.getByRole("group", { name: "Filtros aplicados" })).toContainText(`Ano: ${year}`);
 }
 test.beforeEach(async({page})=>{
   const csrf=await(await page.request.get("/api/v1/csrf")).json();

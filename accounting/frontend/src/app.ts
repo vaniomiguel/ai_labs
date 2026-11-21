@@ -6,7 +6,11 @@ import { FormsModule } from "@angular/forms";
 import { MatButtonModule } from "@angular/material/button";
 import { MatSnackBar, MatSnackBarModule } from "@angular/material/snack-bar";
 import { A11yModule } from "@angular/cdk/a11y";
-import { AlertView, Api, euros, errorMessage, labels, JobCounts, JobItem, JobPage, ReconciliationEntry, ReviewableRecord } from "./api";
+import { AlertView, Api, DocumentAttempt, euros, errorMessage, labels, JobCounts, JobItem, JobPage, ReconciliationEntry, ReconciliationPage, ReviewableRecord } from "./api";
+import { AppliedFilters } from "./applied-filters";
+import { FinancialFilterBar } from "./financial-filters";
+import { DEFAULT_CATALOG_FILTERS, defaultFinancialFilters, financialQuery, initialFinancialFilters, isFinancialFilterView } from "./workspace-filters";
+import type { FinancialFilters } from "./workspace-filters";
 import { FieldsEditor } from "./fields-editor";
 import { PdfViewer } from "./pdf-viewer";
 import { ReconciliationTable } from "./reconciliation";
@@ -19,6 +23,7 @@ import { DEFAULT_WORKSPACE_URL, RecordKind, recordView, WORKSPACE_PATHS, Workspa
 interface WorkspaceOrigin { url: string; view: WorkspaceView }
 interface SuspendedEditor { url: string; draft: ReviewableRecord }
 const UUID = /^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/i;
+const EMPTY_RECONCILIATION_PAGE: ReconciliationPage = { items: [], total: 0, page: 0, size: 100 };
 
 /** Owner workspace joining reconciliation, document review and auditable financial records. */
 @Component({
@@ -33,7 +38,7 @@ const UUID = /^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/i;
     A11yModule,
     FieldsEditor,
     PdfViewer,
-    ReconciliationTable, CategoryTags, CategoryEditor, CategoryManager, RepairPanel,
+    ReconciliationTable, CategoryTags, CategoryEditor, CategoryManager, RepairPanel, AppliedFilters, FinancialFilterBar,
   ],
   templateUrl: "./app.html",
 })
@@ -65,7 +70,6 @@ export class AppComponent implements OnDestroy {
     movements: [],
     allocations: [],
     candidates: [],
-    months: [],
     years: [],
     accounts: [],
     categories: [],
@@ -76,7 +80,7 @@ export class AppComponent implements OnDestroy {
     imports: [],
     summary: {},
     aiSuggestions: [],
-    reconciliation: { items: [], total: 0, page: 0, size: 100 },
+    reconciliation: EMPTY_RECONCILIATION_PAGE,
   });
   readonly assistant = signal<any>(null);
   readonly executions = signal<any[]>([]);
@@ -94,7 +98,12 @@ export class AppComponent implements OnDestroy {
     { value: "FAILED", label: "Falhadas" },
     { value: "all", label: "Todas" },
   ];
-  processingState = "active";
+  readonly processingState = signal("active");
+  readonly processingFilterChips = computed(() => {
+    const state = this.processingState();
+    const filter = this.processingFilters.find(filter => filter.value === state);
+    return filter && state !== "all" ? [{ key: "state", label: `Estado: ${filter.label}` }] : [];
+  });
   processingPage = 0;
   private processingRequest = 0;
   readonly editor = signal<any>(null);
@@ -104,6 +113,7 @@ export class AppComponent implements OnDestroy {
   readonly activeAlert = signal<any>(null);
   readonly repairProgress = signal("");
   private documentRequest=0;
+  readonly documentAttempts = signal<DocumentAttempt[]>([]);
   readonly timeline = signal<any[]>([]);
   readonly assignment = signal<any>(null);
   readonly assignmentMovements = signal<any[]>([]);
@@ -129,21 +139,22 @@ export class AppComponent implements OnDestroy {
     credit: "Crédito",
     amount: "Montante",
   };
-  filters: any = {
-    year: new Date().getFullYear(),
-    month: "",
-    day: "",
-    q: "",
-    from: "",
-    to: "",
-    category: "",
-    status: "",
-    direction: "",
-    min: "",
-    max: "",
-    time: "",
-    page: 0,
-  };
+  private readonly financialFilters = signal(initialFinancialFilters());
+  readonly filterViews = computed(() => {
+    const view = this.view();
+    return isFinancialFilterView(view) ? [view] : [];
+  });
+  readonly filters = computed(() => this.financialFilters()[this.filterViews()[0] ?? "reconciliation"]);
+  readonly recordsCurrent = computed(() => this.state().resultFilters?.[this.view()] === this.filters());
+  readonly reconciliationPage = computed<ReconciliationPage>(() =>
+    this.recordsCurrent() ? this.state().reconciliation : EMPTY_RECONCILIATION_PAGE,
+  );
+  readonly documentQuery = signal("");
+  readonly documentFilterChips = computed(() => {
+    const query = this.documentQuery().trim();
+    return query ? [{ key: "query", label: `Ficheiro: ${query}` }] : [];
+  });
+  readonly catalogFilters = signal(DEFAULT_CATALOG_FILTERS);
   readonly months = [
     "Janeiro",
     "Fevereiro",
@@ -207,17 +218,39 @@ export class AppComponent implements OnDestroy {
       await this.api.post("/logout");
       this.events?.close();
       clearTimeout(this.refreshTimer);
+      ++this.financialRequest;
+      ++this.processingRequest;
+      this.financialFilters.set(initialFinancialFilters());
+      this.documentQuery.set("");
+      this.catalogFilters.set(DEFAULT_CATALOG_FILTERS);
+      this.processingState.set("active");
+      this.processingPage = 0;
+      this.processing.set(null);
       this.user.set("");
       await this.router.navigateByUrl("/login", { replaceUrl: true });
     });
   }
   navigate(view: WorkspaceView) {
-    if (view !== this.view()) this.filters.page = 0;
-    if (view === "processing" && view !== this.view()) {
-      this.processingState = "active";
-      this.processingPage = 0;
-    }
     void this.router.navigate(["/", WORKSPACE_PATHS[view]]);
+  }
+
+  applyFilters(changes: Partial<FinancialFilters>) {
+    this.updateFinancialFilters({ ...this.filters(), ...changes, page: 0 });
+  }
+
+  clearFilters() {
+    this.updateFinancialFilters(defaultFinancialFilters());
+  }
+
+  changeFinancialPage(page: number) {
+    this.updateFinancialFilters({ ...this.filters(), page });
+  }
+
+  private updateFinancialFilters(filters: FinancialFilters) {
+    const view = this.view();
+    if (!isFinancialFilterView(view)) return;
+    this.financialFilters.update(previous => ({ ...previous, [view]: filters }));
+    if (view !== "history") void this.refresh();
   }
 
   private signInDestination() {
@@ -306,6 +339,7 @@ export class AppComponent implements OnDestroy {
     this.selectedJobId.set(null);
     this.jobDetail.set(null);
     this.timeline.set([]);
+    this.documentAttempts.set([]);
     return ++this.routeRequest;
   }
 
@@ -342,91 +376,81 @@ export class AppComponent implements OnDestroy {
   /** Reloads server-derived amounts; the browser never calculates financial balances. */
   async refresh(refreshGroup = true) {
     if (refreshGroup && this.routeKind() === "group") void this.refreshGroup();
-    if (this.view() === "processing") return this.loadProcessing();
-    if (this.view() === "assistant") return this.loadAssistant();
-    const request = ++this.financialRequest;
     const view = this.view();
+    if (view === "processing") return this.loadProcessing();
+    if (view === "assistant") return this.loadAssistant();
+
+    const request = ++this.financialRequest;
     this.loading.set(true);
     try {
-      const [
-        invoices,
-        movements,
-        allocations,
-        candidates,
-        months,
-        years,
-        accounts,
-        categories,
-        documents,
-        alerts,
-        jobs,
-        history,
-        imports,
-        summary,
-        aiSuggestions,
-        reconciliation,
-      ] = await Promise.all([
-        this.api.get("/invoices", this.filters),
-        this.api.get("/movements", this.filters),
-        this.api.get("/allocations"),
-        this.api.get("/reconciliation/candidates"),
-        this.api.get("/balances/" + this.filters.year),
-        this.api.get("/balances"),
-        this.api.get("/accounts"),
-        this.api.get("/categories"),
-        this.api.get("/documents"),
-        this.api.get("/alerts"),
-        this.api.get("/jobs"),
-        this.api.get("/history"),
-        this.api.get("/imports"),
-        this.api.get("/reconciliation/summary", {
-          year: this.filters.year,
-          month: this.filters.month,
-        }),
-        this.api.get("/reconciliation/ai-suggestions"),
-        this.view() === "reconciliation" ? this.api.get("/reconciliation/entries", this.filters) : Promise.resolve(this.state().reconciliation),
+      const [shared, records, summary] = await Promise.all([
+        this.loadWorkspaceData(view),
+        this.loadActiveRecords(view),
+        this.loadFinancialSummary(view),
       ]);
       if (request !== this.financialRequest || this.view() !== view) return;
-      this.state.set({
-        invoices: invoices.items,
-        invoiceTotal: invoices.total,
-        movements: movements.items,
-        movementTotal: movements.total,
-        allocations,
-        candidates,
-        months,
-        years,
-        accounts,
-        categories,
-        documents,
-        alerts,
-        jobs,
-        history,
-        imports,
-        summary,
-        aiSuggestions,
-        reconciliation,
-      });
-      this.counts.update((previous) => ({
-        ...previous,
-        alerts: alerts.filter((a: any) => a.status === "OPEN").length,
-      }));
-      if (!this.uploadAccount && accounts.length)
-        this.uploadAccount = accounts[0].id;
-    } catch (e) {
-      if (request === this.financialRequest) this.error.set(errorMessage(e));
+      const previous = this.state();
+      const resultFilters = records ? { ...previous.resultFilters, [view]: records.filters } : previous.resultFilters;
+      this.state.set({ ...previous, ...shared, ...records?.data, ...summary, resultFilters });
+      this.counts.update(counts => ({ ...counts, alerts: shared.alerts.filter(alert => alert.status === "OPEN").length }));
+      if (!this.uploadAccount && shared.accounts.length) this.uploadAccount = shared.accounts[0].id;
+    } catch (error) {
+      if (request === this.financialRequest) this.error.set(errorMessage(error));
     } finally {
       if (request === this.financialRequest) this.loading.set(false);
     }
   }
-  /** Queue filters are global and do not reuse the financial year/month filters. */
+
+  private async loadWorkspaceData(view: WorkspaceView) {
+    const includeArchived = view === "invoices" || view === "movements" || view === "reconciliation";
+    const [
+      allocations, candidates, years, accounts, categories,
+      documents, alerts, jobs, history, imports, aiSuggestions,
+    ] = await Promise.all([
+      this.api.get("/allocations"),
+      this.api.get("/reconciliation/candidates"),
+      this.api.get("/balances"),
+      this.api.get<{ id: string }[]>("/accounts"),
+      this.api.get("/categories", includeArchived ? { archived: true } : {}),
+      this.api.get("/documents"),
+      this.api.get<AlertView[]>("/alerts"),
+      this.api.get("/jobs"),
+      this.api.get("/history"),
+      this.api.get("/imports"),
+      this.api.get("/reconciliation/ai-suggestions"),
+    ]);
+    return { allocations, candidates, years, accounts, categories, documents, alerts, jobs, history, imports, aiSuggestions };
+  }
+
+  private async loadActiveRecords(view: WorkspaceView) {
+    if (view === "reconciliation") {
+      const filters = this.financialFilters().reconciliation;
+      const reconciliation = await this.api.get<ReconciliationPage>("/reconciliation/entries", financialQuery(view, filters));
+      return { filters, data: { reconciliation } };
+    }
+    if (view !== "invoices" && view !== "movements") return null;
+    const filters = this.financialFilters()[view];
+    const page = await this.api.get<{ items: ReviewableRecord[]; total: number }>("/" + view, financialQuery(view, filters));
+    const totalKey = view === "invoices" ? "invoiceTotal" : "movementTotal";
+    return { filters, data: { [view]: page.items, [totalKey]: page.total } };
+  }
+
+  private async loadFinancialSummary(view: WorkspaceView) {
+    if (view !== "reconciliation" && view !== "balances") return { summary: null, summaryPeriod: null };
+    const { year, month } = this.financialFilters()[view];
+    const summaryPeriod = { year, month };
+    const summary = await this.api.get("/reconciliation/summary", summaryPeriod);
+    return { summary, summaryPeriod };
+  }
+
+  /** Loads the processing page using its own task status and pagination. */
   async loadProcessing() {
     const request = ++this.processingRequest;
     const selectedId = this.selectedJobId();
     this.jobsLoading.set(true);
     try {
       const [page, detail] = await Promise.allSettled([
-        this.api.get<JobPage>("/jobs/page", { state: this.processingState, page: this.processingPage, size: 50 }),
+        this.api.get<JobPage>("/jobs/page", { state: this.processingState(), page: this.processingPage, size: 50 }),
         selectedId ? this.api.get<JobItem>("/jobs/" + selectedId) : Promise.resolve(null),
       ]);
       if (request !== this.processingRequest || this.view() !== "processing") return;
@@ -441,7 +465,7 @@ export class AppComponent implements OnDestroy {
       const counts = page.value.counts;
       this.counts.update((previous) => ({ ...previous, jobs: counts.active, jobStates: counts }));
     } catch (error) {
-      if (request === this.processingRequest) this.error.set(errorMessage(error));
+      if (request === this.processingRequest && this.view() === "processing") this.error.set(errorMessage(error));
     } finally {
       if (request === this.processingRequest) this.jobsLoading.set(false);
     }
@@ -462,7 +486,8 @@ export class AppComponent implements OnDestroy {
     });
   }
   filterJobs(state: string) {
-    this.processingState = state;
+    if (state !== this.processingState()) this.processing.set(null);
+    this.processingState.set(state);
     this.processingPage = 0;
     void this.loadProcessing();
   }
@@ -602,10 +627,16 @@ export class AppComponent implements OnDestroy {
     const record = await this.fetchRecord(kind, id);
     if (request === this.routeRequest) this.categoryTarget.set({ type: WORKSPACE_PATHS[recordView(kind)], record });
   }
-  private inCurrentPeriod(date:string|null) {
-    if(!date)return false;const [year,month,day]=date.split('-').map(Number);
-    return (!this.filters.year||year===Number(this.filters.year))&&(!this.filters.month||month===Number(this.filters.month))
-      &&(!this.filters.day||day===Number(this.filters.day))&&(!this.filters.from||date>=this.filters.from)&&(!this.filters.to||date<=this.filters.to);
+  private inCurrentPeriod(date: string | null) {
+    if (!isFinancialFilterView(this.view())) return true;
+    if (!date) return false;
+    const filters = this.filters();
+    const [year, month, day] = date.split("-").map(Number);
+    return (filters.year === null || year === filters.year)
+      && (!filters.month || month === Number(filters.month))
+      && (filters.day === null || day === filters.day)
+      && (!filters.from || date >= filters.from)
+      && (!filters.to || date <= filters.to);
   }
   async saveRecord(validate: boolean) {
     if (this.working() || !this.editor()) return;
@@ -669,15 +700,19 @@ export class AppComponent implements OnDestroy {
   }
   openDocument(id: string) { this.openRoute(["document", id, "review"]); }
 
+  private fetchDocumentAttempts(id: string) {
+    return this.api.get<DocumentAttempt[]>(`/documents/${id}/attempts`);
+  }
+
   private async loadDocument(id: string, request: number, alert: AlertView | null = null) {
-    const [source, timeline] = await Promise.all([
-      this.api.get("/documents/" + id), this.api.get<any[]>(`/documents/${id}/attempts`),
+    const [source, attempts] = await Promise.all([
+      this.api.get("/documents/" + id), this.fetchDocumentAttempts(id),
     ]);
     if (source.kind === "STATEMENT" || source.kind === "MOVEMENT") await this.loadEditorAccounts(request);
     if (request !== this.routeRequest) return;
     this.activeAlert.set(alert);
     this.reviewDocument.set(source);
-    this.timeline.set(timeline);
+    this.documentAttempts.set(attempts);
   }
   async saveDraft(resolve: boolean) {
     const doc = this.reviewDocument();
@@ -719,6 +754,22 @@ export class AppComponent implements OnDestroy {
   }
   reviewEdits=signal(0);
   draftEdited(){this.reviewEdits.update(n=>n+1);}
+  async repairUpdated(alert: AlertView) {
+    const previous = this.activeAlert()?.repair;
+    this.activeAlert.set(alert);
+    const repair = alert.repair;
+    if (!alert.documentId || !repair?.outcome) return;
+    if (repair.jobId === previous?.jobId && repair.outcome === previous.outcome) return;
+
+    const request = this.documentRequest;
+    const documentId = alert.documentId;
+    await this.run(async () => {
+      const attempts = await this.fetchDocumentAttempts(documentId);
+      if (request === this.documentRequest && this.activeAlert()?.repair?.jobId === repair.jobId) {
+        this.documentAttempts.set(attempts);
+      }
+    });
+  }
   async applyProposal(choices:any) {
     await this.run(async () => {
       const request=this.documentRequest;
@@ -971,27 +1022,27 @@ export class AppComponent implements OnDestroy {
     return this.state().aiSuggestions.find((s: any) => s.invoiceId === id);
   }
   currentMonth() {
-    return this.state().summary;
+    const { summary, summaryPeriod } = this.state();
+    const { year, month } = this.filters();
+    return summaryPeriod?.year === year && summaryPeriod?.month === month ? summary : null;
   }
   title() {
     return this.navigation.find((v) => v[0] === this.view())?.[2] ?? "Conta";
   }
   filteredHistory() {
+    const { year, month, q } = this.financialFilters().history;
+    const query = q.toLowerCase();
     return this.state().history.filter(
       (r: any) =>
-        (!this.filters.year || r.year === +this.filters.year) &&
-        (!this.filters.month || r.month === +this.filters.month) &&
-        (!this.filters.q ||
-          String(r.description)
-            .toLowerCase()
-            .includes(this.filters.q.toLowerCase())),
+        (year === null || r.year === year) &&
+        (!month || r.month === Number(month)) &&
+        (!query || String(r.description).toLowerCase().includes(query)),
     );
   }
   filteredDocuments() {
+    const query = this.documentQuery().trim().toLowerCase();
     return this.state().documents.filter(
-      (d: any) =>
-        !this.filters.q ||
-        d.filename.toLowerCase().includes(this.filters.q.toLowerCase()),
+      (d: any) => !query || d.filename.toLowerCase().includes(query),
     );
   }
   /** Keeps review drafts untouched when background progress updates the surrounding lists. */

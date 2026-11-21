@@ -17,6 +17,7 @@ import { RecordKind } from "./workspace-routes";
 export class ReconciliationTable {
   private readonly api = inject(Api);
   readonly data = input.required<ReconciliationPage>();
+  readonly resultsCurrent = input(true);
   readonly loading = input(false);
   readonly working = input(false);
   readonly candidates = input<any[]>([]);

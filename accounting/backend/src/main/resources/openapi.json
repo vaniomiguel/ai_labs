@@ -3332,6 +3332,7 @@
     "/documents/{id}/attempts": {
       "get": {
         "summary": "Tentativas e evidências",
+        "description": "Cada tentativa inclui prompts com as mensagens de sistema e do utilizador (system e user), pela ordem dos pedidos à IA. Quando não existe um prompt guardado, a lista está vazia.",
         "responses": {
           "200": {
             "description": "Operação concluída"

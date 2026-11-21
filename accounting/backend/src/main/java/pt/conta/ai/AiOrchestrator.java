@@ -89,23 +89,32 @@ public class AiOrchestrator {
       String task = PromptCatalog.INVOICE_EXTRACTION_SYSTEM_INSTRUCTIONS;
       var model = models.select(task);
       var request = invoiceRequests.automatic(model.name(), doc.text);
-      var response = models.execute(job, model, task, doc.sha256, request);
-      publishExtraction(job, doc, List.of(response), doc.text);
+      var response = executeRequest(job, model, task, doc.sha256, request);
+      publishExtraction(job, doc, List.of(response));
       return;
     }
     if (!doc.kind.equals("STATEMENT")) return;
     var input = new ChunkedInput("extract-statement", doc, Json.read(doc.draft), true, List.of(), null);
-    publishExtraction(job, doc, executeByChunk(job, models.select(input.task()), input), doc.text);
+    publishExtraction(job, doc, executeByChunk(job, models.select(input.task()), input));
   }
 
   private record ChunkedInput(
       String task, SourceDocument document, Object subject, boolean headerOnly,
       List<Map<String, Object>> candidates, String candidateFingerprint) {}
 
-  private List<Map<String, Object>> executeByChunk(
+  private record CompletedRequest(Map<String, Object> response, ExtractionAttempt.Prompt prompt) {}
+
+  private CompletedRequest executeRequest(
+      JobQueue.Claim job, AiProvider.Model model, String task, String documentHash,
+      AiProvider.Request request) {
+    var response = models.execute(job, model, task, documentHash, request);
+    return new CompletedRequest(response, new ExtractionAttempt.Prompt(request.instructions(), request.input()));
+  }
+
+  private List<CompletedRequest> executeByChunk(
       JobQueue.Claim job, AiProvider.Model model, ChunkedInput input) throws Exception {
     var doc = input.document();
-    var responses = new ArrayList<Map<String, Object>>();
+    var responses = new ArrayList<CompletedRequest>();
     var chunks = chunks(doc, doc == null ? "" : doc.text);
     int chunkNumber = 0;
     for (var chunk : chunks) {
@@ -148,9 +157,9 @@ public class AiOrchestrator {
         throw DomainException.invalid(
             "O conteúdo excede o contexto seguro; revê este documento manualmente");
       var request = new AiProvider.Request(model.name(), prompt, serialized, prompts.schema(input.task()), images);
-      var response = models.execute(job, model, input.task(), doc == null ? "" : doc.sha256, request);
-      responses.add(response);
-      if (input.candidateFingerprint() != null) validateCandidateIds(response, input.candidates());
+      var completed = executeRequest(job, model, input.task(), doc == null ? "" : doc.sha256, request);
+      responses.add(completed);
+      if (input.candidateFingerprint() != null) validateCandidateIds(completed.response(), input.candidates());
     }
     return responses;
   }
@@ -165,8 +174,9 @@ public class AiOrchestrator {
   }
 
   private void publishExtraction(
-      JobQueue.Claim job, SourceDocument doc, List<Map<String, Object>> responses, String source) {
-    var merged = merge(responses, doc.kind);
+      JobQueue.Claim job, SourceDocument doc, List<CompletedRequest> requests) {
+    var merged = merge(requests.stream().map(CompletedRequest::response).toList(), doc.kind);
+    String source = doc.text;
     var draft = Json.object(Json.write(merged.get("draft")));
     draft.put("issues", merged.get("issues"));
     boolean safe =
@@ -198,7 +208,8 @@ public class AiOrchestrator {
       }
       draft.put("validate", ((List<?>) merged.get("issues")).isEmpty());
     }
-    publisher.aiExtracted(doc.id, job.revision(), draft, Json.write(merged.get("evidence")));
+    var requestPrompts = requests.stream().map(CompletedRequest::prompt).toList();
+    publisher.aiExtracted(doc.id, job.revision(), draft, Json.write(merged.get("evidence")), requestPrompts);
   }
 
   /**

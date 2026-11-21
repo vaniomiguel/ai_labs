@@ -7,7 +7,19 @@ async function write(page:Page,path:string,body:any={},method='POST'){
   const text=await r.text();expect(r.ok(),text).toBeTruthy();return text?JSON.parse(text):null;
 }
 async function create(page:Page,resource:string,body:any){const row=await write(page,'/'+resource,body);created.push({resource,id:row.id});return row;}
-async function open(page:Page,view:string,year:number){await page.goto('/');if(view)await page.getByRole('button',{name:view,exact:true}).click();await page.getByLabel('Ano',{exact:true}).fill(String(year));await page.getByLabel('Ano',{exact:true}).press('Tab');}
+async function setYear(page: Page, year: number) {
+  const field = page.getByLabel('Ano', { exact: true });
+  await field.fill(String(year));
+  await field.press('Tab');
+  const filters = page.getByRole('group', { name: 'Filtros aplicados' });
+  await expect(filters).toContainText(`Ano: ${year}`);
+}
+async function openSection(page: Page, name: string) {
+  const section = page.getByRole('navigation').getByRole('button', { name, exact: true });
+  await section.click();
+  await expect(section).toHaveAttribute('aria-current', 'page');
+}
+async function open(page:Page,view:string,year:number){await page.goto('/');if(view)await openSection(page,view);await setYear(page,year);}
 function pdf(){
   const objects=['<< /Type /Catalog /Pages 2 0 R >>','<< /Type /Pages /Kids [3 0 R] /Count 1 >>','<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Resources << >> >>'];
   let text='%PDF-1.4\n';const offsets=[0];objects.forEach((object,n)=>{offsets.push(Buffer.byteLength(text));text+=`${n+1} 0 obj\n${object}\nendobj\n`;});
@@ -79,7 +91,7 @@ test('undated pending invoices are visible in both lists and validate without lo
   await page.screenshot({path:testInfo.outputPath('pending-reconciliation.png'),fullPage:true});
   await expect(entry).toContainText('100,00 €');await entry.getByRole('button',{name:'Rever e validar',exact:true}).click();
   let dialog=page.getByRole('dialog',{name:'Editar registo',exact:true});await expect(dialog).toContainText('fora dos cálculos');await dialog.getByRole('button',{name:'Fechar editor',exact:true}).click();
-  await page.getByRole('button',{name:'▤ Faturas',exact:true}).click();const invoice=page.locator('tr').filter({hasText:'E2E-UNDATED-INVOICE'});
+  await openSection(page,'▤ Faturas');await setYear(page,2070);const invoice=page.locator('tr').filter({hasText:'E2E-UNDATED-INVOICE'});
   await expect(invoice).toContainText('Provisório');await invoice.getByRole('button',{name:'Rever e validar',exact:true}).click();
   dialog=page.getByRole('dialog',{name:'Editar registo',exact:true});await dialog.getByLabel('Data de emissão',{exact:true}).fill('2070-01-01');
   await dialog.getByLabel('Data de emissão',{exact:true}).blur();
@@ -109,7 +121,7 @@ test('pending movements show missing amount and direction without inventing a cr
   const row=await create(page,'movements',{accountId:account.id,bookedOn:null,description:'E2E-UNDATED-MOVEMENT',amount:null,direction:null,validate:false});
   await open(page,'↗ Movimentos',2072);const movement=page.locator('tr').filter({hasText:'E2E-UNDATED-MOVEMENT'});
   await expect(movement).toContainText('Por validar');await expect(movement).toContainText('Direção em falta');await expect(movement).not.toContainText('0,00 €');
-  await page.getByRole('button',{name:'⇄ Reconciliação',exact:true}).click();const entry=page.locator('tr.reconciliation-entry').filter({hasText:'E2E-UNDATED-MOVEMENT'});
+  await openSection(page,'⇄ Reconciliação');await setYear(page,2072);const entry=page.locator('tr.reconciliation-entry').filter({hasText:'E2E-UNDATED-MOVEMENT'});
   await expect(entry).toContainText('Direção em falta');await expect(entry).not.toContainText('0,00 €');await entry.getByRole('button',{name:'Rever e validar',exact:true}).click();
   const dialog=page.getByRole('dialog',{name:'Editar registo',exact:true});await dialog.getByLabel('Data do movimento',{exact:true}).fill('2072-01-01');await dialog.getByLabel('Montante positivo',{exact:true}).fill('60.00');await dialog.getByLabel('Direção',{exact:true}).selectOption('DEBIT');
   await dialog.getByRole('button',{name:'Validar e guardar',exact:true}).click();await expect(dialog).not.toBeVisible();

@@ -3,12 +3,16 @@ package pt.conta.document;
 import java.time.Instant;
 import java.util.*;
 import org.springframework.data.jpa.repository.*;
+import org.springframework.data.repository.query.Param;
 
 /** Reads hashes and metadata without loading every historical PDF's text and layout into memory. */
 public interface DocumentRepository extends JpaRepository<SourceDocument, UUID> {
   /** Finds an exact upload duplicate, including the intended bank-account scope. */
   Optional<SourceDocument> findFirstBySha256AndKindAndAccountId(
       String sha256, String kind, UUID accountId);
+
+  @Query("select a from ExtractionAttempt a where a.documentId = :documentId order by a.createdAt, a.id")
+  List<ExtractionAttempt> attempts(@Param("documentId") UUID documentId);
 
   /** Projects the lightweight columns needed by the extraction list. */
   @Query(

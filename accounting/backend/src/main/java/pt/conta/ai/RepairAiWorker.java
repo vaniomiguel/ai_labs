@@ -10,6 +10,7 @@ import org.apache.pdfbox.rendering.PDFRenderer;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import pt.conta.document.DocumentStorage;
+import pt.conta.document.ExtractionAttempt;
 import pt.conta.jobs.JobQueue;
 import pt.conta.review.RepairService;
 import pt.conta.shared.*;
@@ -151,7 +152,9 @@ public class RepairAiWorker {
       throw e;
     }
     results.record(execution);
-    if (!repairs.complete(job, source, parsed, prepared.context())) results.categoryOutcome(execution.id, "STALE");
+    var prompt = new ExtractionAttempt.Prompt(request.instructions(), request.input());
+    if (!repairs.complete(job, source, parsed, prepared.context(), prompt))
+      results.categoryOutcome(execution.id, "STALE");
   }
 
   private void checkSize(String input, String prompt, String task) {

@@ -104,7 +104,9 @@ public class DocumentPublisher {
    * Applies a proposed AI extraction only when it targets the same still-current draft revision.
    */
   @Transactional
-  public void aiExtracted(UUID id, long version, Map<String, Object> draft, String evidence) {
+  public void aiExtracted(
+      UUID id, long version, Map<String, Object> draft, String evidence,
+      List<ExtractionAttempt.Prompt> prompts) {
     store.lockFinancialWrites();
     var doc = store.get(SourceDocument.class, id);
     if (doc.version != version || doc.deleted) return;
@@ -118,6 +120,7 @@ public class DocumentPublisher {
     attempt.outcome = "COMPLETE";
     attempt.result = rawDraft;
     attempt.evidence = evidence;
+    attempt.prompts = prompts.isEmpty() ? null : Json.write(prompts);
     store.add(attempt);
     publish(doc, draft, "AI", false);
     store.flush();

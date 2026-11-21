@@ -31,6 +31,14 @@ export interface AlertView {
   proposal: any; repair: RepairTask | null;
 }
 
+export interface DocumentAttempt {
+  id: string;
+  createdAt: string;
+  engine: string;
+  evidence: unknown;
+  prompts?: { system: string; user: string }[];
+}
+
 export interface ExpenseCategory {
   id: string; version: number; name: string; path: string; aliases: string[];
   parentId: string | null; mergedIntoId: string | null; description: string | null;

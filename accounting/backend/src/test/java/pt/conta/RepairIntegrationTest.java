@@ -108,12 +108,65 @@ class RepairIntegrationTest {
   }
 
   @Test void humanFieldProvenanceAndComplementOnlyInstructionsReachTheModel()throws Exception {
-    var f=fixture();var doc=store.get(SourceDocument.class,f.doc);
-    doc.draft=Json.write(map("supplier","Nome humano","issuedOn",null,"total",null));
-    doc.fieldProvenance=Json.write(map("root",map("supplier",map("origin","HUMAN_EDIT","protected",true,"actor","gestor"))));store.flush();
-    provider.program=request->{assertThat(Json.read(request.input()).path("fieldProvenance").path("root").path("supplier").path("protected").asBoolean()).isTrue();
-      assertThat(request.instructions()).contains("Human-entered values are authoritative","only suggestions");return Json.write(response(valid(),List.of()));};
-    process(request(f));assertThat(Json.object(doc.draft)).containsEntry("supplier","Nome humano");assertNoMoney();
+    var f = fixture();
+    var doc = store.get(SourceDocument.class, f.doc);
+    doc.draft = Json.write(map("supplier", "Nome humano", "issuedOn", null, "total", null,
+        "description", "Descrição humana"));
+    var human = map("origin", "HUMAN_EDIT", "protected", true, "actor", "gestor");
+    doc.fieldProvenance = Json.write(map("root", map("supplier", human, "description", human)));
+    store.flush();
+    provider.program = request -> {
+      var input = Json.read(request.input());
+      assertThat(input.path("fieldProvenance").path("root").path("supplier").path("protected").asBoolean())
+          .isTrue();
+      assertThat(rows(Json.object(request.input()), "filledFields")).anySatisfy(field ->
+          assertThat(field).containsEntry("path", "description").containsEntry("correctionAllowed", false));
+      assertThat(request.instructions()).contains("Human-entered values are authoritative", "only suggestions",
+          "Preserve human and unknown-origin descriptions");
+      var draft = valid();
+      draft.put("description", "Descrição humana");
+      return Json.write(response(draft, List.of()));
+    };
+    process(request(f));
+    assertThat(Json.object(doc.draft)).containsEntry("supplier", "Nome humano")
+        .containsEntry("description", "Descrição humana");
+    assertThat(Json.read(store.get(Alert.class, f.alert).proposal).path("draft").path("description").asText())
+        .isEqualTo("Descrição humana");
+    assertNoMoney();
+  }
+
+  @Test void copiedOcrInAnAutomaticDescriptionCanReceiveAnEvidenceBackedRepairSuggestion() throws Exception {
+    String product = "Tuxera NTFS for Mac";
+    String source = "Emissão 2026-01-01\nFornecedor de teste\n" + product + "\nTotal 100,00";
+    String summary = "Software " + product;
+    var f = fixture(source, 1, "{}");
+    var doc = store.get(SourceDocument.class, f.doc);
+    var saved = valid();
+    saved.put("description", source);
+    doc.draft = Json.write(saved);
+    doc.fieldProvenance = Json.write(map("root", map(
+        "description", map("origin", "AUTOMATIC", "protected", false))));
+    store.flush();
+    provider.program = request -> {
+      var input = Json.object(request.input());
+      assertThat(rows(input, "filledFields")).anySatisfy(field -> assertThat(field)
+          .containsEntry("path", "description").containsEntry("value", source)
+          .containsEntry("correctionAllowed", true));
+      assertThat(request.instructions()).contains("Replace copied OCR or invoice boilerplate");
+      var draft = valid();
+      draft.put("description", summary);
+      return Json.write(map("draft", draft, "issues", List.of(), "evidence",
+          List.of(map("field", "description", "quote", product, "page", null))));
+    };
+
+    process(request(f));
+
+    var proposal = Json.object(Json.write(repairs.view(f.alert).get("proposal")));
+    assertThat(rows(proposal, "changes")).singleElement().satisfies(change -> assertThat(change)
+        .containsEntry("field", "description").containsEntry("proposed", summary));
+    assertThat(rows(proposal, "evidence")).singleElement().satisfies(evidence -> assertThat(evidence)
+        .containsEntry("field", "description").containsEntry("quote", product));
+    assertThat(Json.object(doc.draft)).containsEntry("description", source);
   }
 
   @Test void savedHumanValuesAndAutomaticCorrectionsHaveExplicitModelContext() throws Exception {
@@ -155,13 +208,43 @@ class RepairIntegrationTest {
 
   @Test void aStatementVisualModelReceivesEveryRealPdfPageWithoutLayoutMetadata()throws Exception {
     var f=statementFixture("Texto de todas as páginas",4,"{}");provider.vision=true;
+    var sent = new ArrayList<AiProvider.Request>();
     provider.program=request->{assertThat(request.images()).hasSize(4);
       for(var encoded:request.images())assertThat(Base64.getDecoder().decode(encoded)).startsWith((byte)137,(byte)80,(byte)78,(byte)71);
       assertThat(Json.read(request.input()).path("sourcePages").toString()).isEqualTo("[1,2,3,4]");
+      sent.add(request);
       return Json.write(statementResponse());};
     process(request(f));var context=(Map<?,?>)task(repairs.view(f.alert)).get("context");
     assertThat(context.get("textComplete")).isEqualTo(true);assertThat((List<?>)context.get("pages")).hasSize(4);assertNoMoney();
-    assertThat(controller.attempts(f.doc).getFirst().get("engine").toString()).contains("qwen3.5:9b");
+    var attempt = controller.attempts(f.doc).getFirst();
+    assertThat(attempt.get("engine").toString()).contains("qwen3.5:9b");
+    assertThat(attempt.get("prompts")).isEqualTo(List.of(promptMessages(sent.getFirst())));
+  }
+
+  @Test void automaticStatementAttemptIncludesEachPromptInRequestOrder() throws Exception {
+    String source = "A".repeat(32000) + "B";
+    var f = statementFixture(source, 1, "{}");
+    var doc = store.get(SourceDocument.class, f.doc);
+    var historicalAttempt = new ExtractionAttempt();
+    historicalAttempt.documentId = doc.id;
+    historicalAttempt.engine = "PDFBOX";
+    store.add(historicalAttempt);
+    var sent = new ArrayList<AiProvider.Request>();
+    provider.program = request -> {
+      sent.add(request);
+      return Json.write(statementResponse());
+    };
+    orchestrator.process(new JobQueue.Claim(UUID.randomUUID(), "AI_EXTRACT_DOCUMENT", doc.id, doc.version, "{}", 0));
+
+    assertThat(sent).hasSize(2);
+    var attempts = controller.attempts(doc.id);
+    assertThat(attempts).hasSize(2);
+    assertThat(attempts.getFirst()).containsEntry("prompts", List.of());
+    assertThat(attempts.getLast()).containsEntry("prompts", sent.stream().map(this::promptMessages).toList());
+  }
+
+  private Map<String, Object> promptMessages(AiProvider.Request request) {
+    return map("system", request.instructions(), "user", request.input());
   }
 
   @Test void incompleteStatementLayoutCannotOmitOtherPdfPages()throws Exception {

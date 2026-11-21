@@ -118,7 +118,15 @@
               }
             </td></tr>
           }
-        } @empty { <tr><td colspan="7" class="empty-state">Sem faturas ou movimentos neste período.</td></tr> }
+        } @empty {
+          <tr><td colspan="7" class="empty-state">
+            @if (resultsCurrent()) {
+              Sem faturas ou movimentos neste período.
+            } @else {
+              <span role="status">{{loading() ? 'A carregar reconciliação…' : 'Não foi possível carregar a reconciliação.'}}</span>
+            }
+          </td></tr>
+        }
       </tbody>
     </table>
   </div>

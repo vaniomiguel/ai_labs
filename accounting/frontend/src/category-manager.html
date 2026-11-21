@@ -4,7 +4,17 @@
   </div></div>
   <div class="settings-body">
     @if(error()){<p class="error" role="alert">{{error()}}</p>}@if(notice()){<p class="notice" role="status">{{notice()}}</p>}
-    <div class="category-toolbar"><label>Pesquisar catálogo<input [(ngModel)]="query" /></label><label class="category-choice"><input type="checkbox" [(ngModel)]="showArchived" />Mostrar arquivadas</label></div>
+    <div class="category-toolbar">
+      <label>Pesquisar catálogo
+        <input type="search" [ngModel]="filters().query" (ngModelChange)="updateFilters({ query: $event })" />
+      </label>
+      <label class="category-choice">
+        <input type="checkbox" [ngModel]="filters().showArchived" (ngModelChange)="updateFilters({ showArchived: $event })" />
+        Mostrar arquivadas
+      </label>
+    </div>
+    <applied-filters [items]="filterChips()" [canClear]="filters().query !== '' || filters().showArchived"
+      (removed)="removeFilter($event)" (cleared)="clearFilters()" />
     @if(selected().size){<div class="category-bulk"><strong>{{selected().size}} selecionadas</strong>
       <button mat-stroked-button [disabled]="saving()" (click)="protect(false)">Permitir evolução automática</button><button class="text-button" [disabled]="saving()" (click)="protect(true)">Proteger</button>
       <label>Destino da fusão<select aria-label="Destino da fusão" [(ngModel)]="mergeTarget"><option value="">Selecionar categoria</option>@for(c of catalog();track c.id){@if(!c.archived){<option [value]="c.id">{{c.path}}</option>}}</select></label>

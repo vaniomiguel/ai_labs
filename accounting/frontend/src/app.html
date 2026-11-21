@@ -130,109 +130,32 @@
         </button>
       </div>
       }
-      @if(['reconciliation','invoices','movements','balances','history'].includes(view())){
-      <section class="filter-bar" aria-label="Filtros">
-        <label
-          >Ano<input
-            type="number"
-            min="2016"
-            max="2100"
-            [(ngModel)]="filters.year"
-            (change)="filters.page=0;refresh()" /></label
-        ><label
-          >Mês<select
-            aria-label="Mês"
-            [(ngModel)]="filters.month"
-            (change)="filters.page=0;refresh()"
-          >
-            <option value="">Todo o ano</option>
-            @for(month of months;track $index){
-            <option [value]="$index+1">{{month}}</option>
-            }
-          </select></label
-        ><label class="search-field"
-          >Pesquisar<input
-            [(ngModel)]="filters.q"
-            (keyup.enter)="filters.page=0;refresh()"
-            placeholder="Fornecedor, descrição, texto…" /></label
-        ><button mat-stroked-button (click)="filters.page=0;refresh()">
-          Pesquisar
-        </button>
-        <details class="advanced-filters">
-          <summary>Mais filtros</summary>
-          <div class="filter-popover form-grid">
-            @if(view()==='reconciliation'){
-            <label>Participação no saldo<select [(ngModel)]="filters.participation">
-              <option value="">Todos, incluindo excluídos</option><option value="active">Incluídos</option><option value="excluded">Excluídos</option>
-            </select></label>
-            }
-            <label
-              >Dia<input
-                type="number"
-                [(ngModel)]="filters.day"
-                min="1"
-                max="31" /></label
-            ><label>Desde<input type="date" [(ngModel)]="filters.from" /></label
-            ><label>Até<input type="date" [(ngModel)]="filters.to" /></label
-            ><label
-              >Categoria<select [(ngModel)]="filters.category">
-                <option value="">Todas</option>
-                @for(c of state().categories;track c.id){
-                <option [value]="c.id">{{c.path || c.name}}</option>
-                }
-              </select></label
-            ><label
-              >Revisão<select [(ngModel)]="filters.status">
-                <option value="">Todos</option>
-                @for(s of
-                ['OPEN','AUTOMATIC','MANUAL','CORRECTED','EDITED'];track s){
-                <option [value]="s">{{labels[s]}}</option>
-                }
-              </select></label
-            ><label
-              >Direção<select [(ngModel)]="filters.direction">
-                <option value="">Ambas</option>
-                <option value="DEBIT">Débito</option>
-                <option value="CREDIT">Crédito</option>
-              </select></label
-            ><label
-              >Montante mínimo<input
-                [(ngModel)]="filters.min"
-                inputmode="decimal" /></label
-            ><label
-              >Montante máximo<input
-                [(ngModel)]="filters.max"
-                inputmode="decimal" /></label
-            ><label>Hora<input type="time" [(ngModel)]="filters.time" /></label
-            ><button mat-flat-button (click)="filters.page=0;refresh()">
-              Aplicar filtros
-            </button>
-          </div>
-        </details>
-      </section>
+      @for (filterView of filterViews(); track filterView) {
+      <financial-filters [view]="filterView" [filters]="filters()" [months]="months"
+        [categories]="state().categories" (changed)="applyFilters($event)" (cleared)="clearFilters()" />
       } @if(view()==='reconciliation'||view()==='balances'){
       <section class="summary-grid">
         <article class="summary-card featured">
-          <span>{{filters.month?'Saldo no fim do mês':'Saldo do ano'}}</span
-          ><strong>{{money(currentMonth()?.closing??'0.00')}}</strong
+          <span>{{filters().month?'Saldo no fim do mês':'Saldo do ano'}}</span
+          ><strong>{{money(currentMonth()?.closing)}}</strong
           ><small
-            >{{filters.month?months[+filters.month-1]:filters.year}} ·
-            {{filters.month?'Acumulado dentro do ano':'Cada ano começa em
+            >{{filters().month?months[+filters().month-1]:filters().year}} ·
+            {{filters().month?'Acumulado dentro do ano':'Cada ano começa em
             zero'}}</small
           >
         </article>
         <article class="summary-card">
           <span
-            >{{filters.month?'Saldo transitado':'Saldo inicial do ano'}}</span
-          ><strong>{{money(currentMonth()?.opening??'0.00')}}</strong
+            >{{filters().month?'Saldo transitado':'Saldo inicial do ano'}}</span
+          ><strong>{{money(currentMonth()?.opening)}}</strong
           ><small
-            >{{filters.month?'Do mês anterior, no mesmo ano':'Sem transporte
+            >{{filters().month?'Do mês anterior, no mesmo ano':'Sem transporte
             entre anos'}}</small
           >
         </article>
         <article class="summary-card">
           <span>Faturas por reconciliar</span
-          ><strong>{{money(currentMonth()?.outstanding??'0.00')}}</strong
+          ><strong>{{money(currentMonth()?.outstanding)}}</strong
           ><small>Faturas validadas emitidas neste período</small>
         </article>
         <article class="summary-card">
@@ -244,14 +167,14 @@
         </article>
       </section>
       } @if(view()==='reconciliation'){
-      <reconciliation-table [data]="state().reconciliation" [loading]="loading()" [working]="working()"
+      <reconciliation-table [data]="reconciliationPage()" [resultsCurrent]="recordsCurrent()" [loading]="loading()" [working]="working()"
         [candidates]="state().candidates" [aiSuggestions]="state().aiSuggestions" [sources]="state().documents"
         [focusedGroup]="routedGroup()" [exclusionGroup]="exclusionGroup()" (openGroup)="openGroup($event)"
         (openExclusion)="openExclusion($event)" (closed)="closeRoute()"
-        (reconcile)="reconcile()" (changed)="refresh()" (pageChange)="filters.page=$event;refresh()"
+        (reconcile)="reconcile()" (changed)="refresh()" (pageChange)="changeFinancialPage($event)"
         (edit)="editRecord($event.kind,$event.record)" (original)="openDocument($event)"
         (remove)="requestRemoval($event.kind,$event.record)"
-        (categories)="openCategories($event.type,$event.record.id)" (categoryFilter)="filters.category=$event;refresh()"
+        (categories)="openCategories($event.type,$event.record.id)" (categoryFilter)="applyFilters({ category: $event })"
         (assign)="assign($event.invoice.id,$event.candidate?.movementId)" (assignMovement)="assign($event.id)"
         (undo)="undo($event)" (reverse)="reverse($event)" />
       } @if(view()==='invoices'){
@@ -259,7 +182,7 @@
         <div class="section-heading">
           <div>
             <h2>
-              Todas as faturas <span class="count">{{state().invoiceTotal}}</span>
+              Todas as faturas <span class="count">{{recordsCurrent() ? state().invoiceTotal : '—'}}</span>
             </h2>
             <p>O valor por reconciliar é independente do saldo anual. Pendentes sem data aparecem em qualquer período e ficam fora dos cálculos.</p>
           </div>
@@ -278,7 +201,7 @@
               </tr>
             </thead>
             <tbody>
-              @for(i of state().invoices;track i.id){
+              @for(i of recordsCurrent() ? state().invoices : [];track i.id){
               <tr [class.pending]="i.reviewStatus==='OPEN'">
                 <td class="nowrap">{{i.issuedOn||'Em falta'}}</td>
                 <td>
@@ -301,7 +224,7 @@
                 <td>
                   <category-tags [categories]="i.categoryDetails || []" [classification]="i.classification" [editable]="true"
                     [invoiceId]="i.id" (classificationRequested)="refresh()"
-                    (manage)="openCategories('invoice',i.id)" (filter)="filters.category=$event;refresh()" />
+                    (manage)="openCategories('invoice',i.id)" (filter)="applyFilters({ category: $event })" />
                 </td>
                 <td class="number">{{money(i.total)}}@if(i.reviewStatus==='OPEN'){<small>Provisório · por validar</small>}</td>
                 <td class="number">{{i.reviewStatus==='OPEN'?'—':i.excluded?'—':money(i.remaining)}}</td>
@@ -337,6 +260,9 @@
               }@empty{
               <tr>
                 <td colspan="7">
+                  @if (!recordsCurrent()) {
+                  <p class="empty-state" role="status">{{loading() ? 'A carregar faturas…' : 'Não foi possível carregar as faturas.'}}</p>
+                  } @else {
                   <div class="empty-state">
                     <span>▤</span>
                     <h3>Ainda não há faturas neste período</h3>
@@ -348,6 +274,7 @@
                       Importar documentos
                     </button>
                   </div>
+                  }
                 </td>
               </tr>
               }
@@ -362,15 +289,15 @@
           <div>
             <button
               class="text-button"
-              [disabled]="filters.page===0"
-              (click)="filters.page=filters.page-1;refresh()"
+              [disabled]="!recordsCurrent() || filters().page===0"
+              (click)="changeFinancialPage(filters().page-1)"
             >
               ← Anterior</button
-            ><span>Página {{filters.page+1}}</span
+            ><span>Página {{filters().page+1}}</span
             ><button
               class="text-button"
-              [disabled]="(filters.page+1)*100>=state().invoiceTotal"
-              (click)="filters.page=filters.page+1;refresh()"
+              [disabled]="!recordsCurrent() || (filters().page+1)*100>=state().invoiceTotal"
+              (click)="changeFinancialPage(filters().page+1)"
             >
               Seguinte →
             </button>
@@ -382,7 +309,7 @@
         <div class="section-heading">
           <h2>
             Movimentos bancários
-            <span class="count">{{state().movementTotal}}</span>
+            <span class="count">{{recordsCurrent() ? state().movementTotal : '—'}}</span>
           </h2>
           <button
             mat-stroked-button
@@ -405,7 +332,7 @@
               </tr>
             </thead>
             <tbody>
-              @for(m of state().movements;track m.id){
+              @for(m of recordsCurrent() ? state().movements : [];track m.id){
               <tr [class.pending]="m.reviewStatus==='OPEN'">
                 <td>
                   {{m.bookedOn||'Em falta'}}<small>{{m.occurredAt||''}}</small>
@@ -430,7 +357,7 @@
                   >
                 </td>
                 <td><category-tags [categories]="m.categoryDetails || []" [classification]="m.classification" [editable]="true"
-                  (manage)="openCategories('movement',m.id)" (filter)="filters.category=$event;refresh()" />
+                  (manage)="openCategories('movement',m.id)" (filter)="applyFilters({ category: $event })" />
                   <small>Natureza: {{labels[m.kind]}}</small></td>
                 <td class="number">
                   {{money(m.amount)}}<small
@@ -467,7 +394,11 @@
               }@empty{
               <tr>
                 <td colspan="7" class="empty-state">
-                  Sem movimentos neste período.
+                  @if (recordsCurrent()) {
+                    Sem movimentos neste período.
+                  } @else {
+                    <span role="status">{{loading() ? 'A carregar movimentos…' : 'Não foi possível carregar os movimentos.'}}</span>
+                  }
                 </td>
               </tr>
               }
@@ -481,14 +412,14 @@
           <div>
             <button
               class="text-button"
-              [disabled]="filters.page===0"
-              (click)="filters.page=filters.page-1;refresh()"
+              [disabled]="!recordsCurrent() || filters().page===0"
+              (click)="changeFinancialPage(filters().page-1)"
             >
               ← Anterior</button
             ><button
               class="text-button"
-              [disabled]="(filters.page+1)*100>=state().movementTotal"
-              (click)="filters.page=filters.page+1;refresh()"
+              [disabled]="!recordsCurrent() || (filters().page+1)*100>=state().movementTotal"
+              (click)="changeFinancialPage(filters().page+1)"
             >
               Seguinte →
             </button>
@@ -538,10 +469,12 @@
       <section class="panel">
         <div class="section-heading">
           <h2>Extrações e originais</h2>
-          <label class="search-field"
-            ><input [(ngModel)]="filters.q" placeholder="Procurar ficheiro"
-          /></label>
+          <label class="search-field">Procurar ficheiro
+            <input type="search" [ngModel]="documentQuery()" (ngModelChange)="documentQuery.set($event)" />
+          </label>
         </div>
+        <applied-filters class="panel-filters" [items]="documentFilterChips()" [canClear]="documentQuery() !== ''"
+          (removed)="documentQuery.set('')" (cleared)="documentQuery.set('')" />
         <div class="table-scroll">
           <table>
             <thead>
@@ -577,7 +510,7 @@
               }@empty{
               <tr>
                 <td colspan="5" class="empty-state">
-                  Importa o primeiro documento para começar.
+                  {{documentQuery().trim() ? 'Nenhum ficheiro corresponde à pesquisa.' : 'Importa o primeiro documento para começar.'}}
                 </td>
               </tr>
               }
@@ -596,11 +529,13 @@
         </div>
         <div class="processing-filters">
           @for(filter of processingFilters;track filter.value){
-          <button [class.selected]="processingState===filter.value" [attr.aria-pressed]="processingState===filter.value" (click)="filterJobs(filter.value)">
+          <button [class.selected]="processingState()===filter.value" [attr.aria-pressed]="processingState()===filter.value" (click)="filterJobs(filter.value)">
             {{filter.label}} <strong>{{jobCount(filter.value)}}</strong>
           </button>
           }
         </div>
+        <applied-filters class="panel-filters" [items]="processingFilterChips()" [canClear]="processingState() !== 'all'"
+          (removed)="filterJobs('all')" (cleared)="filterJobs('all')" />
       </section>
       @if(selectedJobId() && !jobDetail() && jobsLoading()){
       <p role="status">A carregar o detalhe da tarefa…</p>
@@ -724,7 +659,7 @@
           <span class="hint">Sem transporte automático entre anos</span>
         </div>
         @for(year of state().years;track year.year){
-        <details class="year-detail" [open]="year.year===+filters.year">
+        <details class="year-detail" [open]="year.year===filters().year">
           <summary>
             <strong>{{year.year}}</strong
             ><span>Saldo final <b>{{money(year.months[11].closing)}}</b></span>
@@ -923,7 +858,7 @@
             </button>
           </div>
         </section>
-        <category-manager [catalogUpdates]="state().categories" (changed)="refresh()" />
+        <category-manager [catalogUpdates]="state().categories" [(filters)]="catalogFilters" (changed)="refresh()" />
       </div>
       } @if(view()==='assistant'){ @if(assistant();as ai){
       <section class="panel">
@@ -1178,7 +1113,7 @@
       <div class="editable-fields">
         @if(activeAlert();as alert){
         <repair-panel [alert]="alert" [document]="doc" [progress]="repairProgress()" [edits]="reviewEdits()"
-          (updated)="activeAlert.set($event)" (apply)="applyProposal($event)" (inspect)="inspectRepair($event)" />
+          (updated)="repairUpdated($event)" (apply)="applyProposal($event)" (inspect)="inspectRepair($event)" />
         } @if(doc.draft?.issues?.length){
         <details class="notice" open>
           <summary>Verificações da extração</summary>
@@ -1200,10 +1135,19 @@
         </details>
         <details class="details-panel">
           <summary>Tentativas e evidências</summary>
-          @for(attempt of timeline();track attempt.id){
+          @for(attempt of documentAttempts();track attempt.id){
           <h4>
             {{attempt.engine}} · {{attempt.createdAt|date:'dd/MM/yyyy HH:mm'}}
           </h4>
+          @for(prompt of attempt.prompts ?? [];track $index){
+          <details>
+            <summary>Prompt da IA@if($count > 1){ · Pedido {{$index + 1}}}</summary>
+            <h5>Mensagem de sistema</h5>
+            <pre>{{prompt.system}}</pre>
+            <h5>Mensagem do utilizador</h5>
+            <pre>{{prompt.user}}</pre>
+          </details>
+          }
           <pre>{{attempt.evidence|json}}</pre>
           }
         </details>

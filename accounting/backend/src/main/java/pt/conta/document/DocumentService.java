@@ -34,6 +34,10 @@ public class DocumentService {
     this.repository = repository;
   }
 
+  public List<ExtractionAttempt> attempts(UUID documentId) {
+    return repository.attempts(documentId);
+  }
+
   /** Archives a document, reuses exact duplicates and never trusts a filename as a storage path. */
   @Transactional
   public Map<String, Object> upload(

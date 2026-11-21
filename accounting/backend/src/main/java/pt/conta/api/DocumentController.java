@@ -156,8 +156,7 @@ public class DocumentController {
   @GetMapping("/documents/{id}/attempts")
   @Transactional(readOnly = true)
   public List<Map<String, Object>> attempts(@PathVariable UUID id) {
-    return store.all(ExtractionAttempt.class).stream()
-        .filter(a -> a.documentId.equals(id))
+    return documents.attempts(id).stream()
         .map(
             a ->
                 map(
@@ -172,7 +171,9 @@ public class DocumentController {
                     "result",
                     Json.value(a.result),
                     "evidence",
-                    Json.value(a.evidence)))
+                    Json.value(a.evidence),
+                    "prompts",
+                    a.prompts == null ? List.of() : Json.value(a.prompts)))
         .toList();
   }
 

@@ -32,10 +32,13 @@ class FieldProtectionIntegrationTest {
   @Autowired DocumentService documents;@Autowired RepairService repairs;@Autowired ReviewService review;@Autowired FieldProtection protection;
   private Map<String,Object> invoice(String number){return map("supplier","Fornecedor original","number",number,"issuedOn","2026-01-01","total","100.00","currency","EUR","type","INVOICE","lines",List.of(),"validate",false);}
   private SourceDocument document(String kind,Map<String,Object> draft) {
+    return document(kind, draft, "Texto integral");
+  }
+  private SourceDocument document(String kind, Map<String, Object> draft, String source) {
     var doc=new SourceDocument();doc.kind=kind;doc.filename="original.pdf";doc.mediaType="application/pdf";doc.storageKey="test";doc.sha256=UUID.randomUUID().toString();
     if(kind.equals("STATEMENT")){var account=new BankAccount();account.name="Conta";doc.accountId=store.add(account).id;}
     store.add(doc);store.flush();
-    publisher.extracted(doc.id,doc.version,new DocumentConverter.Converted("Texto integral",1,map("pages",List.of()),"TEST"),draft);store.flush();return doc;
+    publisher.extracted(doc.id,doc.version,new DocumentConverter.Converted(source,1,map("pages",List.of()),"TEST"),draft);store.flush();return doc;
   }
   private Invoice record(SourceDocument doc){return store.all(Invoice.class).stream().filter(i->doc.id.equals(i.documentId)&&!i.deleted).findFirst().orElseThrow();}
   private Alert proposal(SourceDocument doc,Map<String,Object> draft) {
@@ -78,7 +81,7 @@ class FieldProtectionIntegrationTest {
     var doc=document("INVOICE",invoice("REPROCESS"));var draft=Json.object(doc.draft);draft.put("supplier","Nome humano");draft.put("description","");
     publisher.edit(doc.id,map("version",doc.version,"draft",draft,"resolve",false),documents);
     var ai=invoice("REPROCESS");ai.put("supplier","Nome alternativo");ai.put("description","Descrição IA");ai.put("supplierTaxId","123456789");
-    publisher.aiExtracted(doc.id,doc.version,ai,"[]");
+    publisher.aiExtracted(doc.id,doc.version,ai,"[]",List.of());
     assertThat(Json.object(doc.draft)).containsEntry("supplier","Nome humano");
     // A deliberately cleared nonempty field is protected; an untouched blank remains fillable.
     assertThat(Json.object(doc.draft)).containsEntry("supplierTaxId","123456789");
@@ -87,8 +90,25 @@ class FieldProtectionIntegrationTest {
   }
 
   @Test void missingAiValuesNeverEraseExistingValues() {
-    var doc=document("INVOICE",invoice("MISSING"));publisher.aiExtracted(doc.id,doc.version,map("supplier",null,"total",null,"issuedOn",null,"number",null),"[]");
+    var doc=document("INVOICE",invoice("MISSING"));publisher.aiExtracted(doc.id,doc.version,map("supplier",null,"total",null,"issuedOn",null,"number",null),"[]",List.of());
     assertThat(Json.object(doc.draft)).containsEntry("supplier","Fornecedor original").containsEntry("total","100.00").containsEntry("number","MISSING");
+  }
+
+  @Test void automaticInvoiceDescriptionFillsBlankWithoutReplacingExtractedText() {
+    String source = "Data: 01/01/2026\nProvided by: Test supplier\nTuxera NTFS for Mac\nTotal: 20,33\n";
+    var parsed = new PortugueseDocumentParser().invoice(source, "original.pdf");
+    assertThat(parsed).containsEntry("description", null);
+    var doc = document("INVOICE", parsed, source);
+    assertThat(Json.object(doc.draft)).containsEntry("description", null);
+    assertThat(doc.text).isEqualTo(source);
+
+    var extracted = map("supplier", "Test supplier", "issuedOn", "2026-01-01", "total", "20.33",
+        "description", "Software Tuxera NTFS for Mac", "validate", true);
+    publisher.aiExtracted(doc.id, doc.version, extracted, "[]", List.of());
+
+    assertThat(Json.object(doc.draft)).containsEntry("description", "Software Tuxera NTFS for Mac");
+    assertThat(record(doc).description).isEqualTo("Software Tuxera NTFS for Mac");
+    assertThat(doc.text).isEqualTo(source);
   }
 
   @Test void incompleteComplementsCanBeSavedWithoutValidatingOrPostingMoney() {
@@ -114,7 +134,7 @@ class FieldProtectionIntegrationTest {
     var alert=proposal(doc,ai);repairs.apply(alert.id,request(doc,alert,List.of("root:supplier"),List.of("root"),false),documents);
     var i=record(doc);assertThat(i.supplier).isEqualTo("Nome IA");assertThat(i.number).isEqualTo("CONFLICT");
     assertThat(owner(i,"supplier")).containsEntry("origin","HUMAN_ACCEPTED_AI").containsEntry("proposalId",Json.object(alert.proposal).get("jobId"));
-    publisher.aiExtracted(doc.id,doc.version,invoice("LATER"),"[]");assertThat(Json.object(doc.draft)).containsEntry("supplier","Nome IA");
+    publisher.aiExtracted(doc.id,doc.version,invoice("LATER"),"[]",List.of());assertThat(Json.object(doc.draft)).containsEntry("supplier","Nome IA");
   }
 
   @Test void localEditsWhileAiRunsWinOverComplementsUnlessExplicitlyAccepted() {
@@ -157,7 +177,7 @@ class FieldProtectionIntegrationTest {
     repairs.apply(alert.id,request(doc,alert,List.of("root:total"),List.of("root"),false),documents);
     assertThat(i.total).isEqualByComparingTo("100.00");assertThat(i.reviewStatus.name()).isNotEqualTo("OPEN");
     assertThat(Json.object(doc.draft)).containsEntry("total","150.00").containsEntry("validate",false);assertThat(store.all(LedgerEntry.class)).hasSize(postings);
-    publisher.aiExtracted(doc.id,doc.version,invoice("PUBLISHED"),"[]");
+    publisher.aiExtracted(doc.id,doc.version,invoice("PUBLISHED"),"[]",List.of());
     assertThat(doc.status).isEqualTo("OPEN");assertThat(Json.object(doc.draft)).containsEntry("total","150.00").containsEntry("validate",false);
     assertThat(i.total).isEqualByComparingTo("100.00");assertThat(store.all(LedgerEntry.class)).hasSize(postings);
   }
@@ -175,7 +195,7 @@ class FieldProtectionIntegrationTest {
   @Test void ambiguousReprocessingKeepsAllExistingChildrenAndRaisesReview() {
     var doc=document("INVOICE",map("invoices",List.of(invoice("OLD-A"),invoice("OLD-B")),"validate",false));
     String before=doc.draft;var replacement=map("invoices",List.of(invoice("NEW-A"),invoice("NEW-B")),"validate",false);
-    publisher.aiExtracted(doc.id,doc.version,replacement,"[]");
+    publisher.aiExtracted(doc.id,doc.version,replacement,"[]",List.of());
     assertThat(rows(Json.object(doc.draft),"invoices")).extracting(r->r.get("number")).containsExactly("OLD-A","OLD-B");
     assertThat(store.all(Invoice.class)).hasSize(2);assertThat(store.all(Alert.class)).anySatisfy(a->assertThat(a.code).isEqualTo("AI_STRUCTURE_REVIEW"));
   }
@@ -203,7 +223,7 @@ class FieldProtectionIntegrationTest {
   @Test void deliberatelyClearingADocumentFieldProtectsItsBlankValueFromReExtraction() {
     var initial=invoice("CLEAR");initial.put("description","Valor anteriormente extraído");var doc=document("INVOICE",initial);
     var human=Json.object(doc.draft);human.put("description",null);publisher.edit(doc.id,map("version",doc.version,"draft",human,"resolve",false),documents);
-    var ai=invoice("CLEAR");ai.put("description","Texto recuperado pela IA");publisher.aiExtracted(doc.id,doc.version,ai,"[]");
+    var ai=invoice("CLEAR");ai.put("description","Texto recuperado pela IA");publisher.aiExtracted(doc.id,doc.version,ai,"[]",List.of());
     assertThat(Json.object(doc.draft).get("description")).isNull();
     var alert=store.all(Alert.class).stream().filter(x->x.code.equals("AI_FIELD_SUGGESTIONS")).findFirst().orElseThrow();
     assertThat(repairs.view(alert.id).get("proposal").toString()).contains("protected=true","Texto recuperado pela IA");

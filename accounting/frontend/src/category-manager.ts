@@ -1,11 +1,15 @@
-import { Component, signal, inject, input, effect, output } from "@angular/core";
+import { Component, computed, signal, inject, input, effect, model, output } from "@angular/core";
 import { CommonModule } from "@angular/common";
 import { FormsModule } from "@angular/forms";
 import { MatButtonModule } from "@angular/material/button";
 import { Api, ExpenseCategory, errorMessage } from "./api";
+import { AppliedFilters } from "./applied-filters";
+import type { AppliedFilter } from "./applied-filters";
+import { DEFAULT_CATALOG_FILTERS } from "./workspace-filters";
+import type { CatalogFilters } from "./workspace-filters";
 
 @Component({
-  selector: "category-manager", standalone: true, imports: [CommonModule, FormsModule, MatButtonModule],
+  selector: "category-manager", standalone: true, imports: [CommonModule, FormsModule, MatButtonModule, AppliedFilters],
   templateUrl: "./category-manager.html",
 })
 export class CategoryManager {
@@ -17,13 +21,34 @@ export class CategoryManager {
   readonly edit = signal<any>(null);
   readonly error = signal(""); readonly notice = signal(""); readonly saving = signal(false);
   readonly selected = signal(new Set<string>());
-  query=""; showArchived=false; mergeTarget="";
+  readonly filters = model.required<CatalogFilters>();
+  readonly filterChips = computed(() => {
+    const { query, showArchived } = this.filters();
+    const chips: AppliedFilter[] = [];
+    if (query.trim()) chips.push({ key: "query", label: `Pesquisa: ${query.trim()}` });
+    if (showArchived) chips.push({ key: "showArchived", label: "Inclui categorias arquivadas" });
+    return chips;
+  });
+  mergeTarget="";
   constructor() { effect(()=>{this.catalogUpdates();void this.load();}); }
   async load() {
     try { const [catalog,changes] = await Promise.all([this.api.get<ExpenseCategory[]>("/categories",{archived:true}),this.api.get<any[]>("/categories/changes")]);this.catalog.set(catalog);this.changes.set(changes); }
     catch(e) { this.error.set(errorMessage(e)); }
   }
-  visible() { return this.catalog().filter(c => (this.showArchived||!c.archived)&&c.path.toLowerCase().includes(this.query.toLowerCase())); }
+  visible() {
+    const { query, showArchived } = this.filters();
+    const search = query.trim().toLowerCase();
+    return this.catalog().filter(c => (showArchived || !c.archived) && c.path.toLowerCase().includes(search));
+  }
+  updateFilters(changes: Partial<CatalogFilters>) {
+    this.filters.update(filters => ({ ...filters, ...changes }));
+  }
+  removeFilter(key: string) {
+    this.updateFilters(key === "query" ? { query: "" } : { showArchived: false });
+  }
+  clearFilters() {
+    this.filters.set(DEFAULT_CATALOG_FILTERS);
+  }
   categoryName(id:string) { return this.catalog().find(c=>c.id===id)?.name || "Categoria de destino"; }
   changeLabel(kind:string) { return ({EDIT:"Edição",CREATE:"Criação",GENERALIZE:"Generalização",MERGE:"Fusão",MOVE:"Mudança de família",ARCHIVE:"Arquivo",DELETE_UNUSED:"Eliminação"} as Record<string,string>)[kind] || kind; }
   changeNames(rows:any[]) { return [...new Set(rows.map(row=>row.mergedIntoId?this.categoryName(row.mergedIntoId):row.name))].join(", ") || "Sem categoria"; }

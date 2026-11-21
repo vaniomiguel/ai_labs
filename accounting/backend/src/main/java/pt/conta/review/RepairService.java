@@ -119,14 +119,19 @@ public class RepairService {
   }
 
   /** Atomically links a result to the exact live request; stale results never replace proposals. */
-  public boolean complete(JobQueue.Claim claim,Snapshot snapshot,Map<String,Object> response,Map<String,Object> context) {
+  public boolean complete(JobQueue.Claim claim, Snapshot snapshot, Map<String, Object> response,
+      Map<String, Object> context, ExtractionAttempt.Prompt prompt) {
     store.lockFinancialWrites();
     var current=latest(claim.target());
     if(current!=null&&current.get("id").equals(claim.id())&&metadata(current).get("outcome")!=null) return false;
     var alert=store.get(Alert.class,claim.target());var doc=store.get(SourceDocument.class,snapshot.documentId());
     if(current==null||!current.get("id").equals(claim.id())||!ownsLease(claim)||!alert.status.equals("OPEN")
         ||alert.version!=claim.revision()||doc.deleted||doc.version!=snapshot.sourceVersion()) {
-      if(ownsLease(claim)){mark(claim,"STALE",context);attempt(snapshot,response,context,"STALE");}return false;
+      if (ownsLease(claim)) {
+        mark(claim, "STALE", context);
+        attempt(snapshot, response, context, "STALE", prompt);
+      }
+      return false;
     }
     var proposal=new LinkedHashMap<>(response);
     if(response.get("draft") instanceof Map<?,?> raw) {
@@ -138,13 +143,21 @@ public class RepairService {
     }
     proposal.put("documentVersion",snapshot.sourceVersion());proposal.put("jobId",claim.id().toString());
     var errors=previewErrors(doc,proposal);String outcome=outcome(doc,proposal,errors);
-    alert.proposal=Json.write(proposal);mark(claim,outcome,context);attempt(snapshot,proposal,context,outcome);return true;
+    alert.proposal = Json.write(proposal);
+    mark(claim, outcome, context);
+    attempt(snapshot, proposal, context, outcome, prompt);
+    return true;
   }
 
-  private void attempt(Snapshot snapshot,Map<String,Object> result,Map<String,Object> context,String outcome) {
-    var attempt=new ExtractionAttempt();attempt.documentId=snapshot.documentId();
-    attempt.engine="IA · "+Objects.toString(context==null?null:context.get("model"),"Correção");attempt.outcome=outcome;
-    attempt.result=Json.write(result);attempt.evidence=Json.write(map("context",context,"evidence",result.get("evidence")));
+  private void attempt(Snapshot snapshot, Map<String, Object> result, Map<String, Object> context,
+      String outcome, ExtractionAttempt.Prompt prompt) {
+    var attempt = new ExtractionAttempt();
+    attempt.documentId = snapshot.documentId();
+    attempt.engine = "IA · " + Objects.toString(context == null ? null : context.get("model"), "Correção");
+    attempt.outcome = outcome;
+    attempt.result = Json.write(result);
+    attempt.evidence = Json.write(map("context", context, "evidence", result.get("evidence")));
+    attempt.prompts = Json.write(List.of(prompt));
     store.add(attempt);
   }
 

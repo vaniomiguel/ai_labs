@@ -47,7 +47,7 @@ class CategoryMigrationTest {
       jdbc.update("update category set name='Serviços da empresa',version=1 where id=?", edited);
       jdbc.update("insert into category(id,created_at,updated_at,name,aliases) values(?,now(),now(),?,?)",
           UUID.randomUUID(), "Contratação externa", "[\"Subcontratos\"]");
-      var expanded = Flyway.configure().dataSource(source).load();
+      var expanded = Flyway.configure().dataSource(source).target("6").load();
       assertThat(expanded.migrate().migrationsExecuted).isEqualTo(1);
       assertThat(expanded.migrate().migrationsExecuted).isZero();
       assertExpandedReference(jdbc, edited);
