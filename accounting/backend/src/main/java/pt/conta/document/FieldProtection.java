@@ -92,6 +92,9 @@ public class FieldProtection {
     for(int n=0;n<previous.size();n++) {
       var row=previous.get(n);var merged=automatic(kind,row,proposed.get(n),rowMetadata(metadata,rowKey(row,root(kind,result))));
       row.putAll(merged);
+      if (!root(kind, result)) {
+        if (proposed.get(n).containsKey("issues")) row.put("issues", proposed.get(n).get("issues"));
+      }
     }
     // Processing flags describe the merged values, never erase existing human decisions.
     if(incoming.containsKey("issues"))result.put("issues",incoming.get("issues"));

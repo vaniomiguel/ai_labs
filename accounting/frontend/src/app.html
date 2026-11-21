@@ -1,4 +1,12 @@
 <router-outlet />
+<ng-template #processingAlertDetails>
+  @if(processingAlert(); as alert){
+    <span>{{alert.message}}</span>
+    @if(alert.jobId){
+      <button class="text-button" (click)="openJob(alert.jobId)">Consultar tarefa</button>
+    }
+  }
+</ng-template>
 @if(!user()){
 <main class="login-page">
   <section class="login-intro">
@@ -109,8 +117,11 @@
         </div>
       </div>
       @if(routeLoading()){<p role="status">A carregar…</p>}
-      @if(routeMessage()){
+      @if(routeMessage() || (processingAlert() && !editor())){
       <div class="notice banner" role="status">
+        @if(!editor()){
+          <ng-container *ngTemplateOutlet="processingAlertDetails" />
+        }
         {{routeMessage()}} <button class="text-button" (click)="closeRoute()">Voltar</button>
       </div>
       }
@@ -659,7 +670,7 @@
             <span class="alert-icon">{{a.status==='OPEN'?'!':'✓'}}</span>
             <div>
               <strong>{{a.message}}</strong
-              ><small
+              >@if((a.concerns?.length ?? 0) > 1){<small>{{a.concerns?.length}} questões</small>}<small
                 >{{a.documentId?sourceName(a.documentId):'Registo manual ou
                 tarefa'}} · {{labels[a.status]}}</small
               >@if(a.resolvedAt){<small
@@ -1032,7 +1043,7 @@
     class="dialog wide"
     role="dialog"
     aria-modal="true"
-    aria-label="Editar registo"
+    [attr.aria-label]="activeAlert()?.status === 'OPEN' ? 'Rever alerta' : 'Editar registo'"
     cdkTrapFocus [cdkTrapFocusAutoCapture]="true"
   >
     <header class="dialog-heading">
@@ -1051,7 +1062,24 @@
     </header>
     <div class="dialog-body" [class.split-editor]="data.documentId">
       <div class="editable-fields">
-        @if(data.reviewStatus==='OPEN'){<div class="notice" role="status"><strong>Este registo fica fora dos cálculos até ser validado.</strong>
+        @if(processingAlert()){
+          <section class="notice" aria-label="Alerta de processamento">
+            <ng-container *ngTemplateOutlet="processingAlertDetails" />
+          </section>
+        }
+        @if(activeAlert();as alert){
+          <section class="notice" aria-label="Questões do alerta">
+            <strong>Questões do alerta</strong>
+            @if(alert.concerns?.length){
+              <ul>@for(concern of alert.concerns;track $index){<li>{{concern.message}}</li>}</ul>
+            }@else{<p>{{alert.message}}</p>}
+          </section>
+          @if(alert.status==='OPEN' && recordAlertDocument();as source){
+            <repair-panel [alert]="alert" [document]="source" [progress]="repairProgress()" [edits]="reviewEdits()"
+              [stageOnly]="true" (updated)="updateRecordAlert($event)" (apply)="stageRecordRepair($event)"
+              (newAnalysis)="startNewRecordAnalysis()" (inspect)="inspectRepair($event)" />
+          }
+        }@else if(data.reviewStatus==='OPEN'){<div class="notice" role="status"><strong>Este registo fica fora dos cálculos até ser validado.</strong>
           @if(data.reviewIssues?.length){<ul>@for(issue of data.reviewIssues;track $index){<li>{{issue}}</li>}</ul>}@else{<p>Confirma os dados e escolhe Validar e guardar.</p>}
           @if(data.documentId){<small>{{sourceName(data.documentId)}} · A validação aplica-se apenas a este item.</small>}
         </div>}
@@ -1059,17 +1087,18 @@
           [kind]="recordKind"
           [data]="data"
           [accounts]="state().accounts"
+          (changed)="draftEdited()"
         />
-        @if(data.id){<section class="record-categories"><h3>Categorias</h3>
+        @if(data.id && activeAlert()?.status!=='OPEN'){<section class="record-categories"><h3>Categorias</h3>
           <category-tags [categories]="data.categoryDetails || []" [classification]="data.classification" [editable]="true"
             (manage)="openCategories(recordKind==='INVOICE'?'invoice':'movement',data.id)" />
         </section>}
-        <label
+        @if(activeAlert()?.status!=='OPEN'){<label
           >Documento de suporte · opcional<input
             type="file"
             accept=".pdf,.xls,.xlsx"
             (change)="attach($event)"
-        /></label>
+        /></label>}
         <details class="details-panel">
           <summary>Histórico de alterações</summary>
           @for(event of timeline();track event.id){
@@ -1081,21 +1110,30 @@
           }
         </details>
       </div>
-      @if(data.documentId){<source-pdf [documentId]="data.documentId" />}
+      @if(data.documentId){
+        @if(alertSource();as source){
+          @if(source.mediaType==='application/pdf'){<source-pdf [documentId]="data.documentId" />}
+          @else{<a class="text-button" [href]="'/api/v1/documents/'+data.documentId+'/original'" target="_blank">Descarregar original ↗</a>}
+        }@else{<source-pdf [documentId]="data.documentId" />}
+      }
     </div>
     <footer class="dialog-footer">
-      @if(error()){<span class="error">{{error()}}</span>}<button
+      @if(error()){<span class="error">{{error()}}</span>}
+      @if(activeAlert()?.status==='OPEN'){
+        <button class="text-button" [disabled]="working()" (click)="closeRoute()">Descartar alterações</button>
+      }
+      @if(!data.manuallyConfirmed){<button
         mat-stroked-button
         [disabled]="working()"
         (click)="saveRecord(false)"
       >
-        Guardar rascunho</button
-      ><button
+        {{activeAlert()?.status==='OPEN'?'Guardar sem resolver':'Guardar rascunho'}}</button>
+      }<button
         mat-flat-button
         [disabled]="working()"
         (click)="saveRecord(true)"
       >
-        Validar e guardar
+        {{activeAlert()?.status==='OPEN'?'Validar e resolver':'Validar e guardar'}}
       </button>
     </footer>
   </section>

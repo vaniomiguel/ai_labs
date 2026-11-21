@@ -90,8 +90,11 @@ test("grouped payments occupy one row and support selecting individual records",
   const dialog = page.getByRole("dialog", { name: "Excluir do saldo", exact: true });
   await dialog.getByLabel("Fatura · E2E-GROUP-1001", { exact: true }).check();
   await dialog.getByRole("button", { name: "Excluir selecionados" }).click();
+  await expect(dialog).not.toBeVisible();
   await expect(rows(page)).toHaveCount(2);
-  await expect(rows(page).filter({ hasNotText: "Excluído do saldo" })).toContainText("-60,00 €");
+  const included = rows(page).filter({ hasNotText: "Excluído do saldo" });
+  await expect(included).toHaveCount(1);
+  await expect(included).toContainText("-60,00 €");
 });
 
 test("cross-year group shows full balance and filtered-period impact separately", async ({ page }) => {

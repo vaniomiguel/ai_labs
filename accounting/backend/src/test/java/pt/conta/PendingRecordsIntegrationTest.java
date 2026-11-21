@@ -33,6 +33,7 @@ class PendingRecordsIntegrationTest {
   }
   @Autowired Store store;@Autowired BookkeepingService book;@Autowired DocumentPublisher publisher;
   @Autowired DocumentService documents;@Autowired ReviewService review;@Autowired LedgerService ledger;
+  @Autowired RepairService repairs;
   @Autowired pt.conta.api.FinanceController finance;
   @Autowired ReconciliationService reconciliation;
   UUID account;
@@ -177,6 +178,8 @@ class PendingRecordsIntegrationTest {
     assertThat(a.reviewStatus).isEqualTo(ReviewStatus.CORRECTED);assertThat(store.all(LedgerEntry.class)).hasSize(1);
     assertThat(book.invoiceView(a).get("documentVersion")).isEqualTo(d.version);
     var inputB=edit(b,true);inputB.put("issuedOn","2026-01-02");book.saveInvoice(b.id,inputB);
+    assertThat(d.status).isEqualTo("OPEN");assertThat(documentAlert.status).isEqualTo("OPEN");
+    publisher.edit(d.id, map("version", d.version, "draft", Json.object(d.draft), "resolve", true), documents);
     assertThat(d.status).isEqualTo("DONE");assertThat(documentAlert.status).isEqualTo("RESOLVED");
     assertThat(rows(Json.object(d.draft),"invoices")).hasSize(2);assertThat(invoices(d).stream().map(i->i.id)).containsExactly(a.id,b.id);
   }
@@ -248,6 +251,69 @@ class PendingRecordsIntegrationTest {
     var input=edit(a,true);input.put("issuedOn","2026-01-01");book.saveInvoice(a.id,input);book.synchronize();book.automatic();
     assertThat(store.all(Allocation.class).stream().filter(link->link.active&&link.invoiceId.equals(a.id))).hasSize(1);
     int entries=store.all(LedgerEntry.class).size();book.synchronize();book.automatic();assertThat(store.all(LedgerEntry.class)).hasSize(entries);
+  }
+
+  @Test void recordAlertKeepsItsConcernsAndOnlyValidatingPublishesTheItem() {
+    var doc = invoiceSource();
+    var item = invoices(doc).getFirst();
+    var sibling = invoices(doc).getLast();
+    var alert = review.openFor("invoice", item.id).orElseThrow();
+    review.open(doc.id, "invoice", item.id, "AI_CONCERN", "Confirma a data no original");
+    review.open(doc.id, "invoice", item.id, "AI_CONCERN", "Confirma a data no original");
+    store.flush();
+    assertThat(alert.concerns()).extracting(Alert.Concern::code).containsExactly("INVALID_INVOICE", "AI_CONCERN");
+    var draft = edit(item, false);
+    draft.put("issuedOn", "2026-01-01");
+    draft.put("description", "Corrigido no rascunho");
+    repairs.saveRecordDraft(alert.id, alertSave(doc, item, alert, draft, false));
+    assertThat(item.description).isEqualTo("Corrigido no rascunho");
+    assertThat(alert.status).isEqualTo("OPEN");
+    assertThat(store.all(LedgerEntry.class)).isEmpty();
+
+    movement("2026-01-02", item.number, "100.00", true);
+    repairs.saveRecordDraft(alert.id, alertSave(doc, item, alert, draft, true));
+    assertThat(alert.status).isEqualTo("RESOLVED");
+    assertThat(sibling.reviewStatus).isEqualTo(ReviewStatus.OPEN);
+    assertThat(book.remaining(item)).isEqualByComparingTo("0.00");
+    assertThat(review.open(doc.id, "invoice", item.id, "AI_CONCERN", "Novo alerta")).isNull();
+
+    var revision = edit(item, true);
+    revision.put("total", "120.00");
+    book.saveInvoice(item.id, revision);
+    assertThat(item.manuallyConfirmed).isTrue();
+    assertThat(book.remaining(item)).isEqualByComparingTo("20.00");
+    var effects = store.all(LedgerEntry.class).stream().filter(entry -> item.id.equals(entry.sourceId))
+        .map(entry -> entry.amount).reduce(Money.ZERO, java.math.BigDecimal::add);
+    assertThat(effects).isEqualByComparingTo("120.00");
+    assertThat(review.openFor("invoice", item.id)).isEmpty();
+  }
+
+  private Map<String, Object> alertSave(SourceDocument doc, Invoice invoice, Alert alert,
+      Map<String, Object> draft, boolean resolve) {
+    return map("alertVersion", alert.version, "recordVersion", invoice.version,
+        "documentVersion", doc.version, "draft", draft, "resolve", resolve);
+  }
+
+  @Test void movementExtractionGroupsMissingFieldsAndDuplicateWarningsByItem() {
+    movement("2026-01-01", "Sobreposição", "42.00", true);
+    var doc = source("STATEMENT", "Overlap.pdf");
+    var repeat = map("bookedOn", "2026-01-01", "description", "Sobreposição", "amount", "42.00",
+        "direction", null, "issues", List.of("Débito ou crédito incerto"));
+    var clean = map("bookedOn", "2026-01-02", "description", "Outro pagamento", "amount", "9.00", "direction", "DEBIT");
+    var draft = map("movements", List.of(repeat, clean), "validate", true);
+    store.flush();
+    var source = new DocumentConverter.Converted("Extrato", 1, Map.of(), "TEST");
+    publisher.extracted(doc.id, doc.version, source, draft);
+    var overlap = movements(doc).stream().filter(item -> "Sobreposição".equals(item.description)).findFirst().orElseThrow();
+    var alert = review.openFor("movement", overlap.id).orElseThrow();
+    assertThat(alert.concerns()).extracting(Alert.Concern::code)
+        .containsExactly("INVALID_MOVEMENT", "EXTRACTION_REVIEW", "POSSIBLE_DUPLICATE");
+    assertThat(review.openFor("document", doc.id)).isEmpty();
+    assertThat(movements(doc)).filteredOn(item -> !item.id.equals(overlap.id))
+        .singleElement().satisfies(item -> assertThat(item.reviewStatus).isEqualTo(ReviewStatus.AUTOMATIC));
+    publisher.extracted(doc.id, doc.version, source, draft);
+    assertThat(review.openFor("movement", overlap.id)).contains(alert);
+    assertThat(alert.concerns()).hasSize(3);
   }
 
   @Test void individualValidationPreservesCategoriesAndExclusion() {

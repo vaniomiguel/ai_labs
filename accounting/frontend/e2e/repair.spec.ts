@@ -1,19 +1,41 @@
 import { expect, test, Page } from "@playwright/test";
 
 const docId="e245b1ab-5314-4ad8-a91f-c75510592001",alertId="e245b1ab-5314-4ad8-a91f-c75510592002",jobId="e245b1ab-5314-4ad8-a91f-c75510592003";
+const recordId = "e245b1ab-5314-4ad8-a91f-c75510592004";
+const siblingId = "e245b1ab-5314-4ad8-a91f-c75510592005";
 const valid=()=>({supplier:"Fornecedor IA",issuedOn:"2026-01-01",total:"100.00",currency:"EUR",type:"INVOICE",lines:[],categories:[]});
-async function setup(page:Page,initial:any={supplier:"",issuedOn:null,total:null,currency:"EUR",type:"INVOICE",lines:[],categories:[]}) {
+async function setup(page:Page,initial:any={supplier:"",issuedOn:null,total:null,currency:"EUR",type:"INVOICE",lines:[],categories:[]}, itemReview = false) {
   const csrf=await(await page.request.get("/api/v1/csrf")).json();
   expect((await page.request.post("/api/v1/session",{form:{username:"gestor",password:"conta-e2e-dev"},headers:{"X-XSRF-TOKEN":csrf.token}})).ok()).toBeTruthy();
   const document={id:docId,version:0,filename:"Fatura-correção.pdf",kind:"INVOICE",status:"OPEN",mediaType:"text/plain",text:"Documento sintético completo",pages:1,layout:{},draft:initial};
   const state:any={alert:{id:alertId,version:0,documentId:docId,entityType:"document",entityId:docId,code:"INVALID_INVOICE",message:"Falta a data da fatura; Falta o fornecedor",status:"OPEN",proposal:null,repair:null},posts:0,gets:0,applies:0};
   const reply=(route:any,value:any,status=200)=>route.fulfill({status,contentType:"application/json",body:JSON.stringify(value)});
+  if (itemReview) {
+    Object.assign(state.alert, {
+      entityType: "invoice", entityId: recordId,
+      concerns: [{code: "INVALID_INVOICE", message: "Falta a data da fatura"},
+        {code: "AI_CONCERN", message: "Confirma o fornecedor no original"}],
+    });
+    state.saves = [];
+    await page.route("**/api/v1/invoices/" + recordId, route => reply(route, {
+      ...document.draft.invoices[0], version: 0, documentId: docId, documentVersion: document.version,
+      reviewStatus: "OPEN",
+    }));
+    await page.route("**/api/v1/audit/invoices/" + recordId, route => reply(route, []));
+    await page.route("**/api/v1/alerts/" + alertId + "/draft", async route => {
+      const write = route.request().postDataJSON();
+      state.saves.push(write);
+      if (write.resolve && !write.draft.issuedOn) return reply(route, {detail: "Falta a data da fatura."}, 422);
+      document.draft.invoices[0] = write.draft;
+      return reply(route, write.draft);
+    });
+  }
   await page.route("**/api/v1/alerts",route=>reply(route,[state.alert]));
   await page.route("**/api/v1/documents/"+docId,route=>reply(route,document));
   await page.route("**/api/v1/documents/"+docId+"/attempts",route=>reply(route,state.attempts ?? []));
   await page.route("**/api/v1/alerts/"+alertId,route=>{state.gets++;return reply(route,state.alert);});
   state.task=(status:string,outcome:string|null=null,extra:any={})=>{
-    state.alert={...state.alert,repair:{jobId,state:status,outcome,sourceVersion:0,error:null,attempts:0,canApply:outcome==="READY",blockingIssues:[],context:null,...extra}};
+    state.alert={...state.alert,repair:{jobId:state.jobId ?? jobId,state:status,outcome,sourceVersion:0,error:null,attempts:0,canApply:outcome==="READY",blockingIssues:[],context:null,...extra}};
   };
   const fields=['supplier','issuedOn','total','currency','type','supplierTaxId','number','description','lines'];
   const blank=(v:any)=>v===null||v===undefined||v===''||Array.isArray(v)&&!v.length;
@@ -26,8 +48,8 @@ async function setup(page:Page,initial:any={supplier:"",issuedOn:null,total:null
   });
   state.result=(draft:any=valid(),outcome="READY",issues:string[]=[])=>{
     state.task("DONE",outcome,{canApply:outcome==="READY",blockingIssues:outcome==="REVIEW_REQUIRED"?["Falta a data da fatura"]:[],context:{model:"Modelo de teste",vision:true,textComplete:true,textCharacters:100,pages:[1]}});
-    state.alert={...state.alert,proposal:{draft,issues,documentVersion:document.version,jobId,evidence:[{field:'supplier',quote:'Fornecedor IA no original'}]}};
-    state.alert.proposal.changes=suggestions(document.draft);
+    state.alert={...state.alert,proposal:{draft,issues,documentVersion:document.version,jobId:state.jobId ?? jobId,evidence:[{field:'supplier',quote:'Fornecedor IA no original'}]}};
+    state.alert.proposal.changes=suggestions(document.draft).filter(change => !itemReview || change.itemId === recordId);
   };
   await page.route("**/api/v1/alerts/"+alertId+"/ai",async route=>{
     state.posts++;
@@ -41,13 +63,15 @@ async function setup(page:Page,initial:any={supplier:"",issuedOn:null,total:null
       const id=key(row,!!draft.invoices);if(!body.selectedItems.includes(id))continue;
       Object.assign(row,rows(local).find((candidate:any)=>key(candidate,!!draft.invoices)===id));
     }
-    const changes=suggestions(draft);
-    for(const change of changes)if(body.selectedItems.includes(change.itemId)&&(change.kind==='COMPLEMENT'||body.acceptedFields.includes(change.key))) {
+    const changes=suggestions(draft).filter(change => !itemReview || change.itemId === recordId);
+    const accepted = changes.filter(change => body.selectedItems.includes(change.itemId)
+      && (change.kind === "COMPLEMENT" || body.acceptedFields.includes(change.key)));
+    for(const change of accepted) {
       const row=rows(draft).find((r:any)=>key(r,!!draft.invoices)===change.itemId);row[change.field]=change.proposed;
     }
     const touched=JSON.stringify(draft)!==JSON.stringify(document.draft);
     const blockingIssues=rows(draft).filter((row:any)=>body.selectedItems.includes(key(row,!!draft.invoices))).flatMap((row:any)=>[!row.issuedOn?'Falta a data da fatura':null,!row.supplier?'Falta o fornecedor':null,row.total==null?'Falta um total válido':null]).filter(Boolean);
-    return {changes,blockingIssues,canApplyDraft:touched,canValidate:touched&&!blockingIssues.length,draft};
+    return {changes,accepted,blockingIssues,canApplyDraft:touched,canValidate:touched&&!blockingIssues.length,draft};
   };
   await page.route("**/api/v1/alerts/"+alertId+"/preview",route=>{state.lastPreview=route.request().postDataJSON();return reply(route,state.preview(state.lastPreview));});
   await page.route("**/api/v1/alerts/"+alertId+"/apply",route=>{
@@ -56,13 +80,51 @@ async function setup(page:Page,initial:any={supplier:"",issuedOn:null,total:null
     state.alert.repair={...state.alert.repair,outcome:'STALE',canApply:false};return reply(route,document);
   });
   await page.goto("/");
+  const dialog = page.getByRole("dialog", {name: itemReview ? "Rever alerta" : "Rever extração", exact: true});
   const open=async()=>{
     await page.getByRole("button",{name:/Alertas/,exact:false}).first().click();
     await page.locator("article").filter({hasText:state.alert.message}).getByRole("button",{name:"Consultar →",exact:true}).click();
-    await expect(page.getByRole("dialog",{name:"Rever extração",exact:true})).toBeVisible();
+    await expect(dialog).toBeVisible();
   };
-  await open();return {state,open,dialog:page.getByRole("dialog",{name:"Rever extração",exact:true})};
+  await open();return {state,open,dialog};
 }
+
+test("record alert stages AI values locally and saves only the selected invoice", async ({page}) => {
+  const first = {...valid(), id: recordId, supplier: "", issuedOn: null};
+  const sibling = {...valid(), id: siblingId, supplier: "Fornecedor de outro comprovativo"};
+  const {state, open, dialog} = await setup(page, {invoices: [first, sibling]}, true);
+  const supplier = dialog.getByLabel("Fornecedor", {exact: true});
+  await expect(dialog.getByRole("region", {name: "Questões do alerta"}).getByRole("listitem")).toHaveCount(2);
+  await expect(dialog.getByText(sibling.supplier, {exact: true})).toHaveCount(0);
+  state.submitted = () => state.result({invoices: [{...first, supplier: "Fornecedor proposto"}, sibling]});
+  await dialog.getByRole("button", {name: "✧ Pedir tentativa de correção à IA", exact: true}).click();
+  await dialog.getByRole("button", {name: "Aplicar ao rascunho", exact: true}).click();
+  await expect(supplier).toHaveValue("Fornecedor proposto");
+  await expect.poll(() => state.lastPreview.selectedItems).toEqual([recordId]);
+  expect(state.applies).toBe(0);
+  expect(state.saves).toHaveLength(0);
+  await dialog.getByRole("button", {name: "Descartar alterações"}).click();
+  await open();
+  await expect(supplier).toHaveValue("");
+
+  await dialog.getByRole("button", {name: "Aplicar ao rascunho", exact: true}).click();
+  await dialog.getByRole("button", {name: "Validar e resolver", exact: true}).click();
+  await expect(dialog.getByText("Falta a data da fatura.", {exact: true})).toBeVisible();
+  await expect(supplier).toHaveValue("Fornecedor proposto");
+  state.jobId = "e245b1ab-5314-4ad8-a91f-c75510592006";
+  await dialog.getByRole("button", {name: "Pedir nova análise à IA", exact: true}).click();
+  await expect.poll(() => state.posts).toBe(2);
+  await expect(dialog.getByRole("button", {name: "Pedir nova análise à IA", exact: true})).toBeEnabled();
+  await expect(supplier).toHaveValue("Fornecedor proposto");
+  await dialog.getByRole("button", {name: "Guardar sem resolver", exact: true}).click();
+  await expect(dialog).not.toBeVisible();
+  expect(state.saves.at(-1)).toMatchObject({resolve: false, repairs: [], draft: {id: recordId, supplier: "Fornecedor proposto"}});
+  await open();
+  await dialog.getByLabel("Data de emissão", {exact: true}).fill("2026-01-01");
+  await dialog.getByRole("button", {name: "Validar e resolver", exact: true}).click();
+  await expect(dialog).not.toBeVisible();
+  expect(state.saves.at(-1)).toMatchObject({resolve: true, draft: {id: recordId, issuedOn: "2026-01-01"}});
+});
 
   test('editing the invoice date reaches repair previews and validation requests', async ({page}) => {
     const {state, dialog} = await setup(page, {...valid(), issuedOn: null});

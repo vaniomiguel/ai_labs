@@ -147,7 +147,8 @@ class AutomaticReviewIntegrationTest {
     assertThat(first.manuallyConfirmed).isTrue();
     assertThat(first.reviewStatus).isEqualTo(ReviewStatus.CORRECTED);
     assertThat(second.reviewStatus).isEqualTo(ReviewStatus.AUTOMATIC);
-    assertThat(store.all(Alert.class).stream().filter(a -> a.code.equals("AI_CONCERN"))).hasSize(2);
+    assertThat(store.all(Alert.class).stream().filter(a -> a.code.equals("AI_CONCERN")))
+        .extracting(a -> a.entityId).containsExactly(second.id);
   }
 
   @Test
@@ -191,6 +192,10 @@ class AutomaticReviewIntegrationTest {
     assertThat(movement.reviewStatus).isEqualTo(ReviewStatus.OPEN);
     assertThat(sibling.reviewStatus).isEqualTo(ReviewStatus.AUTOMATIC);
     assertThat(doc.status).isEqualTo("PROCESSED");
+    assertThat(store.all(Alert.class)).singleElement().satisfies(alert -> {
+      assertThat(alert.entityType).isEqualTo("movement");
+      assertThat(alert.entityId).isEqualTo(movement.id);
+    });
   }
 
   @Test

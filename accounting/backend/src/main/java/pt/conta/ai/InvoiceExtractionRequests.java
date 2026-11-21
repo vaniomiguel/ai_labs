@@ -50,6 +50,8 @@ public class InvoiceExtractionRequests {
       throw DomainException.invalid("Não existe texto extraído da fatura para analisar; revê a extração OCR.");
 
     String instructions = prompts.prompt(systemInstructions);
+    if (context.containsKey("alertTarget"))
+      instructions += "\n" + prompts.prompt(PromptCatalog.REPAIR_RECORD_SCOPE_INSTRUCTIONS).stripTrailing();
     var payload = new LinkedHashMap<>(context);
     payload.put("fields", prompts.prompt(PromptCatalog.INVOICE_EXTRACTION_FIELD_INSTRUCTIONS));
     payload.put("sourceText", sourceText);

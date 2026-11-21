@@ -177,6 +177,8 @@ public class AutomaticReviewContext {
     for (int n = 0; n < rows.size(); n++) {
       var row = rows.get(n);
       var invoice = invoices.get(Objects.toString(row.get("id"), ""));
+      if (invoice == null && root && row.get("id") == null && invoices.size() == 1)
+        invoice = invoices.values().iterator().next();
       String prefix = root ? "" : "invoices[" + n + "].";
       var saved = draftRecord(doc, row, root);
       var record = invoice == null ? saved : withDraftOwnership(invoiceRecord(invoice), saved);

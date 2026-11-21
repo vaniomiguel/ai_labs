@@ -86,7 +86,10 @@ class FieldProtectionIntegrationTest {
     assertThat(Json.object(doc.draft)).containsEntry("supplier","Nome humano");
     // A deliberately cleared nonempty field is protected; an untouched blank remains fillable.
     assertThat(Json.object(doc.draft)).containsEntry("supplierTaxId","123456789");
-    assertThat(store.all(Alert.class)).anySatisfy(a->{assertThat(a.code).isEqualTo("AI_FIELD_SUGGESTIONS");assertThat(a.proposal).contains("Nome alternativo");});
+    assertThat(store.all(Alert.class)).anySatisfy(a->{
+      assertThat(a.concerns()).anyMatch(c->c.code().equals("AI_FIELD_SUGGESTIONS"));
+      assertThat(a.proposal).contains("Nome alternativo");
+    });
     assertThat(store.all(ExtractionAttempt.class)).anySatisfy(a->assertThat(a.result).contains("Nome alternativo"));
   }
 
@@ -173,6 +176,37 @@ class FieldProtectionIntegrationTest {
     assertThat(store.all(LedgerEntry.class)).hasSize(1);
   }
 
+  @Test void invoiceAlertScopesRepairAndPersistsOnlyExplicitlySavedSuggestions() {
+    var first = invoice("SCOPED-A");
+    var second = invoice("SCOPED-B");
+    first.put("issuedOn", null);
+    second.put("issuedOn", null);
+    var doc = document("INVOICE", map("invoices", List.of(first, second), "validate", false));
+    var sourceRows = rows(Json.object(doc.draft), "invoices");
+    String target = text(sourceRows.getFirst(), "id");
+    String sibling = text(sourceRows.getLast(), "id");
+    var item = store.get(Invoice.class, UUID.fromString(target));
+    var alert = review.openFor("invoice", item.id).orElseThrow();
+    var ai = Json.object(doc.draft);
+    rows(ai, "invoices").forEach(row -> row.put("issuedOn", "2026-01-02"));
+    alert.proposal = Json.write(map("draft", ai, "jobId", UUID.randomUUID(), "documentVersion", doc.version));
+    store.flush();
+
+    var choice = request(doc, alert, List.of(), List.of(target), false);
+    var preview = repairs.preview(alert.id, choice);
+    assertThat(rows(preview, "changes")).extracting(change -> change.get("itemId")).containsOnly(target);
+    assertThat(item.issuedOn).isNull();
+    var draft = new LinkedHashMap<>(edited(item));
+    draft.put("issuedOn", rows(preview, "accepted").getFirst().get("proposed"));
+    repairs.saveRecordDraft(alert.id, map("alertVersion", alert.version, "recordVersion", item.version,
+        "documentVersion", doc.version, "draft", draft, "resolve", false, "repairs", List.of(choice)));
+    assertThat(item.issuedOn).hasToString("2026-01-02");
+    assertThat(owner(item, "issuedOn")).containsEntry("origin", "HUMAN_ACCEPTED_AI");
+    assertThat(alert.status).isEqualTo("OPEN");
+    assertThat(store.get(Invoice.class, UUID.fromString(sibling)).issuedOn).isNull();
+    assertThat(store.all(LedgerEntry.class)).isEmpty();
+  }
+
   @Test void acceptingInvoiceArticlesRequiresExplicitCollectionAcceptance() {
     var doc=document("INVOICE",invoice("LINES"));var i=record(doc);var human=edited(i);
     human.put("lines",List.of(map("description","Artigo humano","total","100.00")));book.saveInvoice(i.id,human);
@@ -209,7 +243,8 @@ class FieldProtectionIntegrationTest {
     var replacement=map("invoices",List.of(invoice("NEW-A"),invoice("NEW-B")),"validate",false);
     publisher.aiExtracted(doc.id,doc.version,replacement,"[]",List.of());
     assertThat(rows(Json.object(doc.draft),"invoices")).extracting(r->r.get("number")).containsExactly("OLD-A","OLD-B");
-    assertThat(store.all(Invoice.class)).hasSize(2);assertThat(store.all(Alert.class)).anySatisfy(a->assertThat(a.code).isEqualTo("AI_STRUCTURE_REVIEW"));
+    assertThat(store.all(Invoice.class)).hasSize(2);
+    assertThat(store.all(Alert.class)).anySatisfy(a->assertThat(a.concerns()).anyMatch(c->c.code().equals("AI_STRUCTURE_REVIEW")));
   }
 
   @Test void provenanceInTheClientPayloadCannotForgeAnUnprotectedHumanField() {
@@ -237,7 +272,8 @@ class FieldProtectionIntegrationTest {
     var human=Json.object(doc.draft);human.put("description",null);publisher.edit(doc.id,map("version",doc.version,"draft",human,"resolve",false),documents);
     var ai=invoice("CLEAR");ai.put("description","Texto recuperado pela IA");publisher.aiExtracted(doc.id,doc.version,ai,"[]",List.of());
     assertThat(Json.object(doc.draft).get("description")).isNull();
-    var alert=store.all(Alert.class).stream().filter(x->x.code.equals("AI_FIELD_SUGGESTIONS")).findFirst().orElseThrow();
+    var alert=store.all(Alert.class).stream().filter(x->x.concerns().stream()
+        .anyMatch(c->c.code().equals("AI_FIELD_SUGGESTIONS"))).findFirst().orElseThrow();
     assertThat(repairs.view(alert.id).get("proposal").toString()).contains("protected=true","Texto recuperado pela IA");
   }
 

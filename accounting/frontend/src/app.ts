@@ -1,12 +1,13 @@
 import { Component, signal, inject, computed, OnDestroy } from "@angular/core";
 import { CommonModule, Location } from "@angular/common";
+import { HttpErrorResponse } from "@angular/common/http";
 import { ActivatedRouteSnapshot, NavigationEnd, Router, RouterOutlet } from "@angular/router";
 import { takeUntilDestroyed } from "@angular/core/rxjs-interop";
 import { FormsModule } from "@angular/forms";
 import { MatButtonModule } from "@angular/material/button";
 import { MatSnackBar, MatSnackBarModule } from "@angular/material/snack-bar";
 import { A11yModule } from "@angular/cdk/a11y";
-import { AiExecutionItem, AlertView, Api, contextUsagePercent, contextWarningLabels, DocumentAttempt, euros, errorMessage, labels, JobCounts, JobItem, JobPage, ReconciliationEntry, ReconciliationPage, ReviewableRecord } from "./api";
+import { AiExecutionItem, AlertView, Api, contextUsagePercent, contextWarningLabels, DocumentAttempt, euros, errorMessage, labels, JobCounts, JobItem, JobPage, ReconciliationEntry, ReconciliationPage, RepairApplyRequest, RepairPreview, ReviewableRecord } from "./api";
 import { AppliedFilters } from "./applied-filters";
 import { FinancialFilterBar } from "./financial-filters";
 import { DEFAULT_CATALOG_FILTERS, defaultFinancialFilters, financialQuery, initialFinancialFilters, isFinancialFilterView } from "./workspace-filters";
@@ -22,6 +23,9 @@ import { DEFAULT_WORKSPACE_URL, RecordKind, recordView, WORKSPACE_PATHS, Workspa
 
 interface WorkspaceOrigin { url: string; view: WorkspaceView }
 interface SuspendedEditor { url: string; draft: ReviewableRecord }
+interface RecordAlertSource {
+  id: string; version: number; kind: string; mediaType: string; draft: Record<string, unknown>;
+}
 const UUID = /^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/i;
 const EMPTY_RECONCILIATION_PAGE: ReconciliationPage = { items: [], total: 0, page: 0, size: 100 };
 
@@ -60,6 +64,7 @@ export class AppComponent implements OnDestroy {
   readonly view = signal<WorkspaceView>("reconciliation");
   readonly routeLoading = signal(false);
   readonly routeMessage = signal("");
+  readonly processingAlert = signal<{ message: string; jobId: string | null } | null>(null);
   readonly routeKind = signal<WorkspaceRouteKind>("list");
   readonly routedGroup = signal<ReconciliationEntry | null>(null);
   readonly exclusionGroup = signal<ReconciliationEntry | null>(null);
@@ -113,7 +118,22 @@ export class AppComponent implements OnDestroy {
   private editorRequest=0;
   readonly categoryTarget = signal<{type:"invoice"|"movement";record:any}|null>(null);
   readonly reviewDocument = signal<any>(null);
-  readonly activeAlert = signal<any>(null);
+  readonly activeAlert = signal<AlertView | null>(null);
+  readonly alertSource = signal<RecordAlertSource | null>(null);
+  private stagedRepairs: RepairApplyRequest[] = [];
+  readonly recordAlertDocument = computed(() => {
+    const source = this.alertSource();
+    const record = this.editor();
+    this.reviewEdits();
+    if (!source || !record || !source.draft) return source;
+    const draft = structuredClone(source.draft);
+    const children = draft[source.kind === "INVOICE" ? "invoices" : "movements"];
+    const rows = Array.isArray(children) && children.length ? children : [draft];
+    const target = rows.find(row => row.id === record.id);
+    if (!target) return source;
+    Object.assign(target, record);
+    return { ...source, draft };
+  });
   readonly repairProgress = signal("");
   private documentRequest=0;
   readonly documentAttempts = signal<DocumentAttempt[]>([]);
@@ -328,11 +348,14 @@ export class AppComponent implements OnDestroy {
     this.loading.set(false);
     this.jobsLoading.set(false);
     this.routeMessage.set("");
+    this.processingAlert.set(null);
     this.routeLoading.set(false);
     this.error.set("");
     this.editor.set(null);
     this.reviewDocument.set(null);
     this.activeAlert.set(null);
+    this.alertSource.set(null);
+    this.stagedRepairs = [];
     this.reviewEdits.set(0);
     this.assignment.set(null);
     this.categoryTarget.set(null);
@@ -651,6 +674,8 @@ export class AppComponent implements OnDestroy {
   }
   async saveRecord(validate: boolean) {
     if (this.working() || !this.editor()) return;
+    const alert = this.activeAlert();
+    if (alert?.status === "OPEN") return this.saveRecordAlert(alert, validate);
     const request=this.editorRequest;
     await this.run(async () => {
       const data = { ...this.editor(), validate };
@@ -665,6 +690,24 @@ export class AppComponent implements OnDestroy {
         validate ? "Validar e guardar" : "Guardar rascunho",
         this.recordSaveContext(validate, data.issuedOn || data.bookedOn),
       );
+    });
+  }
+
+  private async saveRecordAlert(alert: AlertView, resolve: boolean) {
+    const request = this.editorRequest;
+    await this.run(async () => {
+      const record: ReviewableRecord = this.editor();
+      await this.api.put("/alerts/" + alert.id + "/draft", {
+        alertVersion: alert.version,
+        recordVersion: record.version,
+        documentVersion: record.documentVersion,
+        draft: record,
+        resolve,
+        repairs: this.stagedRepairs,
+      });
+      if (request !== this.editorRequest) { await this.refresh(); return; }
+      this.closeRoute();
+      this.showSaveSuccess(resolve ? "Validar e resolver" : "Guardar sem resolver");
     });
   }
   private recordSaveContext(validate: boolean, date: string | null): string {
@@ -758,10 +801,61 @@ export class AppComponent implements OnDestroy {
   private async loadAlert(id: string, request: number) {
     const alert = await this.api.get<AlertView>("/alerts/" + id);
     if (request !== this.routeRequest) return;
+    if (alert.entityType === "invoice" || alert.entityType === "movement")
+      return this.loadRecordAlert(alert, request);
     if (alert.documentId) return this.loadDocument(alert.documentId, request, alert);
-    if (alert.entityType === "invoice") return this.loadRecord("INVOICE", alert.entityId, request);
-    if (alert.entityType === "movement") return this.loadRecord("MOVEMENT", alert.entityId, request);
+    if (alert.entityType === "job") return this.loadProcessingAlert(alert, request);
     this.routeMessage.set(alert.message);
+  }
+
+  private async loadProcessingAlert(alert: AlertView, request: number) {
+    this.processingAlert.set({ message: alert.message, jobId: null });
+    try {
+      const job = await this.api.get<JobItem>(`/jobs/${alert.entityId}`);
+      if (request !== this.routeRequest) return;
+      this.processingAlert.set({ message: alert.message, jobId: job.id });
+      const target = job.target;
+      if (!target.available || (target.type !== "invoice" && target.type !== "movement")) return;
+      await this.loadRecord(target.type === "invoice" ? "INVOICE" : "MOVEMENT", target.id, request);
+    } catch (error) {
+      if (!(error instanceof HttpErrorResponse && error.status === 404)) throw error;
+    }
+  }
+
+  private async loadRecordAlert(alert: AlertView, request: number) {
+    const kind = alert.entityType === "invoice" ? "INVOICE" : "MOVEMENT";
+    this.activeAlert.set(alert);
+    await Promise.all([this.loadRecord(kind, alert.entityId, request), this.loadAlertSource(alert, request)]);
+  }
+
+  private async loadAlertSource(alert: AlertView, request: number) {
+    if (!alert.documentId) return;
+    const source = await this.api.get<RecordAlertSource>("/documents/" + alert.documentId);
+    if (request === this.routeRequest) this.alertSource.set(source);
+  }
+
+  updateRecordAlert(alert: AlertView) {
+    if (alert.id === this.activeAlert()?.id) this.activeAlert.set(alert);
+  }
+
+  startNewRecordAnalysis() {
+    // Values already applied to the form stay editable after their proposal is superseded.
+    this.stagedRepairs = [];
+  }
+
+  async stageRecordRepair(selection: RepairApplyRequest) {
+    const alert = this.activeAlert();
+    const request = this.editorRequest;
+    if (!alert || this.working()) return;
+    await this.run(async () => {
+      const preview = await this.api.post<RepairPreview>("/alerts/" + alert.id + "/preview", selection);
+      if (request !== this.editorRequest || !preview.canApplyDraft) return;
+      const draft = { ...this.editor() };
+      for (const change of preview.accepted) draft[change.field] = structuredClone(change.proposed);
+      this.stagedRepairs.push(selection);
+      this.editor.set(draft);
+      this.draftEdited();
+    });
   }
   reviewEdits=signal(0);
   draftEdited(){this.reviewEdits.update(n=>n+1);}
@@ -784,7 +878,9 @@ export class AppComponent implements OnDestroy {
   async applyProposal(choices:any) {
     await this.run(async () => {
       const request=this.documentRequest;
-      const result=await this.api.post("/alerts/" + this.activeAlert().id + "/apply",choices);
+      const alertId = this.activeAlert()?.id;
+      if (!alertId) return;
+      const result=await this.api.post("/alerts/" + alertId + "/apply",choices);
       if(request===this.documentRequest){
         const key=(row:any,root:boolean)=>root?'root':String(row.id||row._itemId||'');
         const collection=result.kind==='INVOICE'?'invoices':'movements';
@@ -798,7 +894,7 @@ export class AppComponent implements OnDestroy {
         this.reviewDocument.set(result);
         if(choices.validate)this.activeAlert.set(null);
         else {
-          const alert = await this.api.get('/alerts/'+this.activeAlert().id);
+          const alert = await this.api.get<AlertView>('/alerts/'+alertId);
           if (request === this.documentRequest) this.activeAlert.set(alert);
         }
       }

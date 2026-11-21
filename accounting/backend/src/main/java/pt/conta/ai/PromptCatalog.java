@@ -20,6 +20,7 @@ public class PromptCatalog {
   public static final String AUTOMATIC_ALLOCATION_REVIEW_CHECKLIST = "automatic-review-allocation";
   public static final String AUTOMATIC_REVIEW_RESPONSE_EXAMPLE = "automatic-review-example";
   public static final String REPAIR_ANALYSIS_INSTRUCTIONS = "repair-analysis-instructions";
+  public static final String REPAIR_RECORD_SCOPE_INSTRUCTIONS = "repair-record-scope-instructions";
   public static final String HUMAN_FIELD_AUTHORITY_INSTRUCTIONS = "human-field-authority-instructions";
   public static final String CATEGORY_VALIDATION_RETRY_INSTRUCTIONS = "category-validation-retry-instructions";
   public static final String EXPENSE_CLASSIFICATION_SYSTEM_INSTRUCTIONS = "categories";

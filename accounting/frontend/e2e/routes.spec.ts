@@ -1,12 +1,16 @@
 import { expect, Page, test } from "@playwright/test";
+import type { JobTarget } from "../src/api";
 
 const invoiceId = "e245b1ab-5314-4ad8-a91f-c75510594001";
 const documentId = "e245b1ab-5314-4ad8-a91f-c75510594002";
 const alertId = "e245b1ab-5314-4ad8-a91f-c75510594003";
 const jobId = "e245b1ab-5314-4ad8-a91f-c75510594004";
+const movementId = "e245b1ab-5314-4ad8-a91f-c75510594005";
 const invoicePath = `/invoice/${invoiceId}/edit`;
 const alertPath = `/alert/${alertId}/review`;
 const draft = { supplier: "Fornecedor da ligação", type: "INVOICE", currency: "EUR", lines: [] };
+const categoryEvidenceError = "Categoria sem evidência nos dados do registo";
+const processingAlertMessage = `O processamento precisa de atenção: ${categoryEvidenceError}`;
 const jobsPageUrl = "**/api/v1/jobs/page?*";
 const emptyJobsPage = {
   items: [], total: 0, page: 0, size: 50,
@@ -21,10 +25,27 @@ async function signIn(page: Page) {
   expect(response.ok()).toBeTruthy();
 }
 
-async function mockInvoice(page: Page) {
-  const record = { ...draft, id: invoiceId, version: 0, categoryDetails: [], reviewStatus: "OPEN" };
-  await page.route(`**/api/v1/invoices/${invoiceId}`, route => route.fulfill({ json: record }));
-  await page.route(`**/api/v1/audit/invoice/${invoiceId}`, route => route.fulfill({ json: [] }));
+async function mockRecord(page: Page, type: "invoice" | "movement", id: string, fields: Record<string, unknown>) {
+  const record = { ...fields, id, version: 0, categoryDetails: [], reviewStatus: "OPEN" };
+  await page.route(`**/api/v1/${type}s/${id}`, route => route.fulfill({ json: record }));
+  await page.route(`**/api/v1/audit/${type}/${id}`, route => route.fulfill({ json: [] }));
+}
+
+async function mockProcessingAlert(page: Page, target?: Pick<JobTarget, "type" | "id" | "available">) {
+  const alert = {
+    id: alertId, documentId: null, entityType: "job", entityId: jobId, version: 0,
+    status: "OPEN", code: "PROCESSING_FAILED", message: processingAlertMessage, proposal: null, repair: null,
+  };
+  await page.route("**/api/v1/alerts", route => route.fulfill({ json: [alert] }));
+  await page.route(`**/api/v1/alerts/${alertId}`, route => route.fulfill({ json: alert }));
+  await page.route(`**/api/v1/jobs/${jobId}`, route => {
+    if (!target) return route.fulfill({ status: 404, json: { detail: "Registo indisponível." } });
+    return route.fulfill({ json: {
+      id: jobId, kind: target.type === "invoice" ? "CLASSIFY_INVOICE" : "CLASSIFY_MOVEMENT",
+      state: "FAILED", attempts: 5, targetId: target.id, targetVersion: 0, error: categoryEvidenceError,
+      target: { ...target, label: "Registo da tarefa", documentId: null },
+    } });
+  });
 }
 
 const contextUsage = {
@@ -134,7 +155,7 @@ test("every sidebar section has its own URL", async ({ page }) => {
 });
 
 test("sign-in returns to an invoice bookmark and its editor survives reload", async ({ page }) => {
-  await mockInvoice(page);
+  await mockRecord(page, "invoice", invoiceId, draft);
   await page.goto(invoicePath);
   await expect(page).toHaveURL(/\/login\?returnTo=/);
   await page.getByLabel("Palavra-passe", { exact: true }).fill("conta-e2e-dev");
@@ -175,7 +196,7 @@ test("alert review restores the original and its alert context through browser h
 
 test("a job opens the canonical record editor and closing restores the job", async ({ page }) => {
   await signIn(page);
-  await mockInvoice(page);
+  await mockRecord(page, "invoice", invoiceId, draft);
   await page.route(`**/api/v1/jobs/${jobId}`, route => route.fulfill({ json: {
     id: jobId, kind: "REVIEW_INVOICE", state: "DONE", attempts: 0, targetId: invoiceId, targetVersion: 0,
     target: { type: "invoice", id: invoiceId, label: "Fatura do processamento", available: true },
@@ -187,6 +208,61 @@ test("a job opens the canonical record editor and closing restores the job", asy
   await page.getByRole("button", { name: "Fechar editor" }).click();
   await expect(page).toHaveURL(path);
   await expect(page.getByRole("button", { name: "Consultar registo associado →" })).toBeVisible();
+});
+
+const linkedProcessingRecords = [
+  { type: "invoice", id: invoiceId, fields: draft, label: "Fornecedor", value: draft.supplier },
+  { type: "movement", id: movementId, fields: { description: "Pagamento da ligação" },
+    label: "Descrição original", value: "Pagamento da ligação" },
+] as const;
+
+for (const { type, id, fields, label, value } of linkedProcessingRecords) {
+  test(`a processing alert opens its ${type} editor with category controls`, async ({ page }) => {
+    await signIn(page);
+    await mockRecord(page, type, id, fields);
+    await mockProcessingAlert(page, { type, id, available: true });
+
+    await page.goto("/alert");
+    await page.getByRole("button", { name: "Consultar →", exact: true }).click();
+    await expect(page).toHaveURL(alertPath);
+    const editor = page.getByRole("dialog", { name: "Editar registo" });
+    const alert = editor.getByRole("region", { name: "Alerta de processamento" });
+    await expect(editor.getByLabel(label, { exact: true })).toHaveValue(value);
+    await expect(alert).toContainText(processingAlertMessage);
+    await expect(alert.getByRole("button", { name: "Consultar tarefa" })).toBeEnabled();
+    await expect(editor.getByRole("button", { name: "Editar categorias" })).toBeEnabled();
+
+    await page.reload();
+    await expect(editor.getByLabel(label, { exact: true })).toHaveValue(value);
+    await editor.getByRole("button", { name: "Fechar editor" }).click();
+    await expect(page).toHaveURL("/alert");
+    await expect(editor).toHaveCount(0);
+  });
+}
+
+test("a processing alert keeps its task link after its target is deleted", async ({ page }) => {
+  await signIn(page);
+  await mockProcessingAlert(page, { type: "invoice", id: invoiceId, available: false });
+
+  await page.goto(alertPath);
+  const banner = page.getByRole("status").filter({ hasText: processingAlertMessage });
+  await banner.getByRole("button", { name: "Consultar tarefa" }).click();
+  await expect(page).toHaveURL(`/processing/${jobId}`);
+  await expect(page.getByText(categoryEvidenceError, { exact: true })).toBeVisible();
+});
+
+test("a processing alert still shows its message when the task is missing", async ({ page }) => {
+  await signIn(page);
+  await mockProcessingAlert(page);
+
+  const jobResponse = page.waitForResponse(response => response.url().endsWith(`/api/v1/jobs/${jobId}`));
+  await page.goto(alertPath);
+  expect((await jobResponse).status()).toBe(404);
+  const banner = page.getByRole("status").filter({ hasText: processingAlertMessage });
+  await expect(banner).toBeVisible();
+  await expect(banner.getByRole("button", { name: "Consultar tarefa" })).toHaveCount(0);
+  await banner.getByRole("button", { name: "Voltar" }).click();
+  await expect(page).toHaveURL("/alert");
 });
 
 test("a rejected processing page shows the error and allows retry", async ({ page }) => {

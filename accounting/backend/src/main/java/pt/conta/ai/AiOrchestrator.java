@@ -176,21 +176,32 @@ public class AiOrchestrator {
   private void publishExtraction(
       JobQueue.Claim job, SourceDocument doc, List<CompletedRequest> requests) {
     var merged = merge(requests.stream().map(CompletedRequest::response).toList(), doc.kind);
-    String source = doc.text;
     var draft = Json.object(Json.write(merged.get("draft")));
     draft.put("issues", merged.get("issues"));
-    boolean safe =
-        (doc.kind.equals("INVOICE")
-                ? AiEvidence.supportsInvoice(draft, rows(merged, "evidence"), source)
-                : AiEvidence.supportsStatement(draft, rows(merged, "evidence"), source))
-            && ((List<?>) merged.get("issues")).isEmpty();
-    draft.put("validate", safe);
-    if (doc.kind.equals("INVOICE") && !rows(draft, "invoices").isEmpty()) {
+    applyExtractionEvidence(doc, draft, rows(merged, "evidence"));
+    var requestPrompts = requests.stream().map(CompletedRequest::prompt).toList();
+    publisher.aiExtracted(doc.id, job.revision(), draft, Json.write(merged.get("evidence")), requestPrompts);
+  }
+
+  private void applyExtractionEvidence(SourceDocument doc, Map<String, Object> draft,
+      List<Map<String, Object>> evidence) {
+    boolean sourceClear = ((List<?>) draft.get("issues")).isEmpty();
+    if (doc.kind.equals("STATEMENT")) {
+      int index = 0;
+      for (var row : rows(draft, "movements")) {
+        var fields = AiEvidence.unsupportedMovementFields(row, index++, evidence, doc.text);
+        row.put("validate", fields.isEmpty());
+        row.put("issues", fields.stream().map(field -> "Falta evidência para confirmar " + field + ".").toList());
+      }
+      draft.put("validate", sourceClear);
+    } else if (rows(draft, "invoices").isEmpty()) {
+      draft.put("validate", sourceClear && AiEvidence.supportsInvoice(draft, evidence, doc.text));
+    } else {
       int n = 0;
       for (var child : rows(draft, "invoices")) {
         String prefix = "invoices[" + (n++) + "].";
         var proof =
-            rows(merged, "evidence").stream()
+            evidence.stream()
                 .filter(e -> Objects.toString(e.get("field"), "").startsWith(prefix))
                 .map(
                     e -> {
@@ -199,15 +210,12 @@ public class AiOrchestrator {
                       return (Map<String, Object>) copy;
                     })
                 .toList();
-        boolean valid =
-            AiEvidence.supportsInvoice(child, proof, source)
-                && ((List<?>) merged.get("issues")).isEmpty();
-        child.put("validate", valid);
+        boolean supported = AiEvidence.supportsInvoice(child, proof, doc.text);
+        child.put("validate", supported);
+        child.put("issues", supported ? List.of() : List.of("Falta evidência para confirmar os dados deste comprovativo."));
       }
-      draft.put("validate", ((List<?>) merged.get("issues")).isEmpty());
+      draft.put("validate", sourceClear);
     }
-    var requestPrompts = requests.stream().map(CompletedRequest::prompt).toList();
-    publisher.aiExtracted(doc.id, job.revision(), draft, Json.write(merged.get("evidence")), requestPrompts);
   }
 
   /**

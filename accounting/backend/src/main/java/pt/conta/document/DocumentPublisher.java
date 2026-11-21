@@ -2,7 +2,6 @@ package pt.conta.document;
 
 import static pt.conta.shared.Inputs.*;
 
-import java.math.BigDecimal;
 import java.time.*;
 import java.util.*;
 import java.util.function.*;
@@ -51,6 +50,7 @@ public class DocumentPublisher {
     store.lockFinancialWrites();
     var doc = store.get(SourceDocument.class, id);
     if (doc.version != version || doc.deleted) return false;
+    boolean reprocessing = !Json.object(doc.draft).isEmpty();
     draft = DraftSanitizer.sanitize(doc.kind, draft);
     doc.text = converted.text();
     doc.pages = converted.pages();
@@ -67,7 +67,7 @@ public class DocumentPublisher {
     store.add(attempt);
     publish(doc, draft, converted.engine(), false);
     store.flush();
-    proposeDifferences(doc,Json.object(rawDraft),doc.layout);
+    if (reprocessing) proposeDifferences(doc, Json.object(rawDraft), doc.layout);
     return true;
   }
 
@@ -80,23 +80,81 @@ public class DocumentPublisher {
     String before = doc.draft;
     Object raw = body.get("draft");
     var draft = protection.initialize(doc.kind,Json.object(Json.write(raw)));
+    boolean resolve = flag(body, "resolve");
+    if (!resolve && financial(doc)) draft = preserveConfirmedRows(doc, Json.object(before), draft);
     if(Set.of("INVOICE","STATEMENT").contains(doc.kind))
-      doc.fieldProvenance=Json.write(protection.humanDocument(doc.kind,Json.object(before),draft,Json.object(doc.fieldProvenance),flag(body,"resolve")));
+      doc.fieldProvenance=Json.write(protection.humanDocument(doc.kind,Json.object(before),draft,Json.object(doc.fieldProvenance),resolve));
     doc.draft = Json.write(draft);
-    if (flag(body, "resolve")) {
+    if (resolve) {
       draft.put("validate", true);
       publish(doc, draft, "MANUAL", true);
       review.resolveFor("document", id);
     } else {
-      suspend(doc);
-      doc.status = "OPEN";
-      review.open(
-          id, "document", id, "DRAFT_REVIEW", "Alterações guardadas; falta validar e resolver");
+      saveUnresolved(doc, draft);
     }
     store.flush();
     audit.record("EDIT_EXTRACTION", "document", id, Json.read(before), Json.read(doc.draft));
     jobs.enqueue("REVIEW_DOCUMENT", id, doc.version, "{}");
     return documents.view(doc);
+  }
+
+  private void saveUnresolved(SourceDocument doc, Map<String, Object> draft) {
+    String message = "Alterações guardadas; falta validar e resolver";
+    if (financial(doc) && onlyConfirmedRows(doc, draft)) return;
+    UUID invoice = linkedRootInvoice(doc, draft);
+    if (invoice != null) {
+      review.open(doc.id, "invoice", invoice, "DRAFT_REVIEW", message);
+    } else {
+      review.open(doc.id, "document", doc.id, "DRAFT_REVIEW", message);
+    }
+    suspend(doc);
+    doc.status = "OPEN";
+  }
+
+  private UUID linkedRootInvoice(SourceDocument doc, Map<String, Object> draft) {
+    if (!protection.root(doc.kind, draft)) return null;
+    UUID id = uuid(draft, "id");
+    if (id == null) return null;
+    var invoice = store.get(Invoice.class, id);
+    return !invoice.deleted && doc.id.equals(invoice.documentId) ? id : null;
+  }
+
+  private boolean onlyConfirmedRows(SourceDocument doc, Map<String, Object> draft) {
+    var rows = protection.entries(doc.kind, draft);
+    return !rows.isEmpty() && rows.stream().allMatch(row -> confirmedSourceRow(doc, row));
+  }
+
+  private boolean confirmedSourceRow(SourceDocument doc, Map<String, Object> row) {
+    UUID id = uuid(row, "id");
+    if (id == null) return false;
+    if (doc.kind.equals("INVOICE")) {
+      var invoice = store.get(Invoice.class, id);
+      return !invoice.deleted && invoice.manuallyConfirmed && doc.id.equals(invoice.documentId);
+    }
+    var movement = store.get(BankMovement.class, id);
+    return !movement.deleted && movement.manuallyConfirmed && doc.id.equals(movement.documentId);
+  }
+
+  private Map<String, Object> preserveConfirmedRows(
+      SourceDocument doc, Map<String, Object> before, Map<String, Object> draft) {
+    var confirmed = protection.entries(doc.kind, before).stream()
+        .filter(row -> confirmedSourceRow(doc, row))
+        .toList();
+    if (confirmed.isEmpty()) return draft;
+    if (protection.root(doc.kind, before)) return before;
+    if (protection.root(doc.kind, draft)) throw protection.ambiguous();
+    var rows = new ArrayList<>(protection.entries(doc.kind, draft));
+    for (var row : confirmed) {
+      int index = rows.stream().map(other -> text(other, "id")).toList().indexOf(text(row, "id"));
+      if (index < 0) rows.add(row);
+      else rows.set(index, row);
+    }
+    draft.put(doc.kind.equals("INVOICE") ? "invoices" : "movements", rows);
+    return draft;
+  }
+
+  private boolean financial(SourceDocument doc) {
+    return Set.of("INVOICE", "STATEMENT").contains(doc.kind);
   }
 
   /**
@@ -109,6 +167,7 @@ public class DocumentPublisher {
     store.lockFinancialWrites();
     var doc = store.get(SourceDocument.class, id);
     if (doc.version != version || doc.deleted) return;
+    boolean reprocessing = !Json.object(doc.draft).isEmpty();
     draft = DraftSanitizer.sanitize(doc.kind, draft);
     String rawDraft=Json.write(draft);
     draft=automaticDraft(doc,draft);
@@ -123,7 +182,7 @@ public class DocumentPublisher {
     store.add(attempt);
     publish(doc, draft, "AI", false);
     store.flush();
-    proposeDifferences(doc,Json.object(rawDraft),evidence);
+    if (reprocessing) proposeDifferences(doc, Json.object(rawDraft), evidence);
     jobs.enqueue("REVIEW_DOCUMENT", doc.id, doc.version, "{}");
   }
 
@@ -144,13 +203,36 @@ public class DocumentPublisher {
   }
 
   private void proposeDifferences(SourceDocument doc,Map<String,Object> incoming,String evidence) {
-    if(!Set.of("INVOICE","STATEMENT").contains(doc.kind))return;
+    if (!financial(doc)) return;
     try {
-      var current=Json.object(doc.draft);var aligned=protection.align(doc.kind,current,incoming);
-      if(protection.changes(doc.kind,current,aligned,Json.object(doc.fieldProvenance)).isEmpty())return;
-      var alert=review.open(doc.id,"document",doc.id,"AI_FIELD_SUGGESTIONS","A IA sugeriu valores diferentes. Os teus dados foram preservados.");
-      alert.proposal=Json.write(map("draft",aligned,"documentVersion",doc.version,"issues",incoming.get("issues"),"evidence",Json.value(evidence)));
-    }catch(DomainException e){review.open(doc.id,"document",doc.id,"AI_STRUCTURE_REVIEW",e.getMessage());}
+      var current = Json.object(doc.draft);
+      var aligned = protection.align(doc.kind, current, incoming);
+      var changes = protection.changes(doc.kind, current, aligned, Json.object(doc.fieldProvenance));
+      offerDifferences(doc, current, aligned, changes, Json.value(evidence));
+    } catch (DomainException e) {
+      review.open(doc.id, "document", doc.id, "AI_STRUCTURE_REVIEW", e.getMessage());
+    }
+  }
+
+  private void offerDifferences(SourceDocument doc, Map<String, Object> current, Map<String, Object> aligned,
+      List<Map<String, Object>> changes, Object evidence) {
+    String type = doc.kind.equals("INVOICE") ? "invoice" : "movement";
+    boolean root = protection.root(doc.kind, current);
+    var rows = protection.entries(doc.kind, current);
+    var candidates = protection.entries(doc.kind, aligned);
+    for (int i = 0; i < rows.size(); i++) {
+      var row = rows.get(i);
+      String key = protection.rowKey(row, root);
+      var concerns = changes.stream().filter(change -> key.equals(change.get("itemId")))
+          .map(change -> "A IA sugeriu rever " + change.get("field") + ".").toList();
+      if (concerns.isEmpty()) continue;
+      UUID id = uuid(row, "id");
+      var alert = review.openAll(doc.id, id == null ? "document" : type, id == null ? doc.id : id,
+          "AI_FIELD_SUGGESTIONS", concerns);
+      if (alert != null && (alert.proposal == null || !Json.read(alert.proposal).hasNonNull("jobId")))
+        alert.proposal = Json.write(map("draft", aligned, "documentVersion", doc.version,
+            "issues", candidates.get(i).get("issues"), "evidence", evidence));
+    }
   }
 
   /** Saves only selected children; draft changes never withdraw a validated sibling or record. */
@@ -201,10 +283,10 @@ public class DocumentPublisher {
   @Transactional
   public void suspend(SourceDocument doc) {
     store.all(Invoice.class).stream()
-        .filter(i -> Objects.equals(i.documentId, doc.id) && !i.deleted)
+        .filter(i -> Objects.equals(i.documentId, doc.id) && !i.deleted && !i.manuallyConfirmed)
         .forEach(i -> i.reviewStatus = ReviewStatus.OPEN);
     store.all(BankMovement.class).stream()
-        .filter(m -> Objects.equals(m.documentId, doc.id) && !m.deleted)
+        .filter(m -> Objects.equals(m.documentId, doc.id) && !m.deleted && !m.manuallyConfirmed)
         .forEach(m -> m.reviewStatus = ReviewStatus.OPEN);
     book.synchronize();
   }
@@ -214,7 +296,8 @@ public class DocumentPublisher {
     var draft = new LinkedHashMap<>(input);
     draft.put("documentId", doc.id.toString());
     boolean issues = draft.get("issues") instanceof List<?> list && !list.isEmpty();
-    if (!human && issues) draft.put("validate", false);
+    if (!human && issues && (!financial(doc) || !protection.root(doc.kind, draft)))
+      draft.put("validate", false);
     switch (doc.kind) {
       case "HISTORY" -> {
         if (human) history.validateDraft(draft);
@@ -225,20 +308,15 @@ public class DocumentPublisher {
       case "STATEMENT" -> publishStatement(doc, draft, origin, human);
       default -> { }
     }
-    if (issues && !human)
-      review.open(
-          doc.id,
-          "document",
-          doc.id,
-          "EXTRACTION_REVIEW",
-          String.join(
-              "; ", ((List<?>) draft.get("issues")).stream().map(Object::toString).toList()));
+    if (issues && !human && (!financial(doc) || !protection.root(doc.kind, draft)))
+      review.openAll(doc.id, "document", doc.id, "EXTRACTION_REVIEW", review.messages(draft.get("issues")));
     if(!human&&Set.of("INVOICE","STATEMENT").contains(doc.kind)&&protection.entries(doc.kind,draft).stream().anyMatch(row->Boolean.FALSE.equals(row.get("validate"))))doc.status="OPEN";
     if (doc.status.equals("DONE")) {
-      review.resolveFor("document", doc.id);
+      if (human || !financial(doc)) review.resolveFor("document", doc.id);
+      else if (review.openFor("document", doc.id).isPresent()) doc.status = "OPEN";
       if (human) {
         draft.put("issues", List.of());
-        for (String key : List.of("lines", "movements", "rows"))
+        for (String key : List.of("lines", "invoices", "movements", "rows"))
           rows(draft, key).forEach(row -> row.remove("issues"));
         doc.draft = Json.write(draft);
       }
@@ -273,6 +351,13 @@ public class DocumentPublisher {
     book.batch(() -> published.add(book.saveInvoice(existing.map(i -> i.id).orElse(null), draft, origin, human)));
     var result = published.getFirst();
     draft.put("id", result.get("id").toString());
+    if (!human && result.get("reviewStatus") == ReviewStatus.OPEN && review.openFor("invoice", uuid(draft, "id")).isEmpty())
+      review.open(doc.id, "invoice", uuid(draft, "id"), "EXTRACTION_REVIEW", "Confirma os dados extraídos.");
+    if (Boolean.TRUE.equals(result.get("manuallyConfirmed"))) {
+      if (!Boolean.FALSE.equals(draft.get("validate")) || !existing.map(i -> i.manuallyConfirmed).orElse(false) || human)
+        draft.put("validate", true);
+      draft.put("issues", List.of());
+    }
     doc.draft = Json.write(draft);
     doc.status = result.get("reviewStatus") == ReviewStatus.OPEN ? "OPEN" : "DONE";
   }
@@ -296,12 +381,14 @@ public class DocumentPublisher {
             if (old != null) child.put("version", old.version);
             var result = book.saveInvoice(old == null ? null : old.id, child, origin, human);
             receipts.get(n).put("id", result.get("id").toString());
+            recordUnverifiedItem(doc, "invoice", child, result, human);
             if(human||old==null||!old.manuallyConfirmed||!Boolean.FALSE.equals(receipts.get(n).get("validate")))
               receipts.get(n).put("validate",result.get("reviewStatus")!=ReviewStatus.OPEN);
             results.add(result);
           }
           for (var old : existing)
-            if (!identities.contains(old)) book.delete("invoice", old.id, old.version);
+            if (!identities.contains(old) && (human || !old.manuallyConfirmed))
+              book.delete("invoice", old.id, old.version);
         });
     doc.draft = Json.write(draft);
     doc.status =
@@ -338,85 +425,75 @@ public class DocumentPublisher {
     var errors = new ArrayList<String>();
     if (rows.isEmpty()) errors.add("Não existem movimentos para confirmar");
     if (statement.accountId == null) errors.add("Falta a conta bancária");
-    for (var row : rows) {
-      BigDecimal amount = Money.optional(row.get("amount"));
-      String direction = text(row, "direction");
-      if (amount == null
-          || amount.signum() <= 0
-          || direction == null
-          || date(row, "bookedOn") == null
-          || text(row, "description") == null) errors.add("Existe um movimento incompleto");
-      if (direction != null && !Set.of("DEBIT", "CREDIT").contains(direction))
-        errors.add("Direção de movimento inválida");
-      if (row.get("currency") != null && !row.get("currency").equals("EUR"))
-        errors.add("Moeda diferente de EUR");
-    }
     if (human && flag(draft, "validate") && !errors.isEmpty())
       throw DomainException.invalid(String.join("; ", errors));
-    statement.validated = flag(draft, "validate") && errors.isEmpty();
     for (var row : rows) {
       row.remove("postBalance");
       row.remove("balance");
     }
     doc.draft = Json.write(draft);
-    book.batch(
-        () -> {
-          var old =
-              store.all(BankMovement.class).stream()
-                  .filter(m -> statement.id.equals(m.statementId) && !m.deleted)
-                  .toList();
-          var seen = new HashSet<UUID>();
-          var identities = identities(old, rows, book::movementView, m -> m.excluded, "movement");
-          for (int n = 0; n < rows.size(); n++) {
-            var row = new LinkedHashMap<>(rows.get(n));
-            row.put("documentId", doc.id.toString());
-            row.put("statementId", statement.id.toString());
-            row.put(
-                "accountId", statement.accountId == null ? null : statement.accountId.toString());
-            row.put("validate", statement.validated);
-            BankMovement existing = identities.get(n);
-            if (existing != null) {
-              row.put("version", existing.version);
-              seen.add(existing.id);
-            }
-            // Identical rows within a statement remain legitimate separate transactions. Across
-            // sources they require review.
-            boolean duplicate =
-                store.all(BankMovement.class).stream()
-                    .anyMatch(
-                        m ->
-                            !m.deleted
-                                && !Objects.equals(m.documentId, doc.id)
-                                && Objects.equals(m.accountId, statement.accountId)
-                                && Objects.equals(m.bookedOn, date(row, "bookedOn"))
-                                && Objects.equals(m.description, text(row, "description"))
-                                && m.amount != null
-                                && row.get("amount") != null
-                                && m.amount.compareTo(Money.optional(row.get("amount"))) == 0);
-            if (duplicate && !human) {
-              row.put("validate", false);
-              review.open(
-                  doc.id,
-                  "document",
-                  doc.id,
-                  "POSSIBLE_DUPLICATE",
-                  "Existe um movimento semelhante noutro extrato; confirma a sobreposição");
-            }
-            var result = book.saveMovement(existing == null ? null : existing.id, row, origin, human);
-            rows.get(n).put("id", result.get("id").toString());
-            if(human||existing==null||!existing.manuallyConfirmed||!Boolean.FALSE.equals(rows.get(n).get("validate")))
-              rows.get(n).put("validate",result.get("reviewStatus")!=ReviewStatus.OPEN);
-          }
-          for (var movement : old)
-            if (!seen.contains(movement.id)) {
-              movement.deleted = true;
-            }
-          if (!errors.isEmpty())
-            review.open(
-                doc.id, "document", doc.id, "STATEMENT_INTEGRITY", String.join("; ", errors));
-          doc.status = statement.validated && errors.isEmpty() ? "DONE" : "OPEN";
-        });
+    boolean validate = flag(draft, "validate") && errors.isEmpty();
+    book.batch(() -> publishStatementRows(doc, statement, rows, origin, human, validate));
+    if (!errors.isEmpty()) review.openAll(doc.id, "document", doc.id, "STATEMENT_INTEGRITY", errors);
+    statement.validated = errors.isEmpty() && rows.stream().allMatch(row -> flag(row, "validate"))
+        && (human || review.messages(draft.get("issues")).isEmpty()
+            && review.openFor("document", doc.id).isEmpty());
+    doc.status = statement.validated ? "DONE" : "OPEN";
     doc.draft = Json.write(draft);
+  }
+
+  private void publishStatementRows(SourceDocument doc, BankStatement statement,
+      List<Map<String, Object>> rows, String origin, boolean human, boolean validate) {
+    var old = store.all(BankMovement.class).stream()
+        .filter(m -> !m.deleted && doc.id.equals(m.documentId)
+            && (m.statementId == null || statement.id.equals(m.statementId))).toList();
+    var identities = identities(old, rows, book::movementView, m -> m.excluded, "movement");
+    for (int n = 0; n < rows.size(); n++) {
+      var row = rows.get(n);
+      var existing = identities.get(n);
+      var input = new LinkedHashMap<>(row);
+      input.put("documentId", doc.id);
+      input.put("statementId", statement.id);
+      input.put("accountId", statement.accountId);
+      input.put("validate", human || validate && !Boolean.FALSE.equals(row.get("validate")));
+      if (existing != null) input.put("version", existing.version);
+      boolean duplicate = !human && duplicateMovement(doc, input);
+      if (duplicate) input.put("validate", false);
+      var result = book.saveMovement(existing == null ? null : existing.id, input, origin, human);
+      UUID id = (UUID) result.get("id");
+      if (duplicate) review.open(doc.id, "movement", id, "POSSIBLE_DUPLICATE",
+          "Existe um movimento semelhante noutro extrato; confirma a sobreposição");
+      if (!duplicate) recordUnverifiedItem(doc, "movement", row, result, human);
+      row.put("id", id.toString());
+      if (human || existing == null || !existing.manuallyConfirmed || !Boolean.FALSE.equals(row.get("validate")))
+        row.put("validate", result.get("reviewStatus") != ReviewStatus.OPEN);
+      if (Boolean.TRUE.equals(result.get("manuallyConfirmed"))) row.remove("issues");
+    }
+    for (var movement : old) {
+      if (!identities.contains(movement) && (human || !movement.manuallyConfirmed)) {
+        movement.deleted = true;
+        review.resolveFor("movement", movement.id);
+      }
+    }
+  }
+
+  private boolean duplicateMovement(SourceDocument doc, Map<String, Object> row) {
+    var amount = Money.optional(row.get("amount"));
+    var bookedOn = date(row, "bookedOn");
+    String description = text(row, "description");
+    return amount != null && bookedOn != null && description != null
+        && store.all(BankMovement.class).stream().anyMatch(m -> !m.deleted
+            && !Objects.equals(m.documentId, doc.id) && Objects.equals(m.accountId, doc.accountId)
+            && bookedOn.equals(m.bookedOn) && description.equals(m.description)
+            && m.amount != null && m.amount.compareTo(amount) == 0);
+  }
+
+  private void recordUnverifiedItem(SourceDocument doc, String type, Map<String, Object> row,
+      Map<String, Object> result, boolean human) {
+    UUID id = (UUID) result.get("id");
+    if (!human && Boolean.FALSE.equals(row.get("validate")) && result.get("reviewStatus") == ReviewStatus.OPEN
+        && review.openFor(type, id).isEmpty())
+      review.open(doc.id, type, id, "EXTRACTION_REVIEW", "Confirma os dados extraídos.");
   }
 
   /** Carries human participation decisions by identity, never by a changed extraction's position. */

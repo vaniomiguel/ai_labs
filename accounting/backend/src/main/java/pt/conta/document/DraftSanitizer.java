@@ -28,9 +28,7 @@ public final class DraftSanitizer {
    */
   public static Map<String, Object> sanitize(String kind, Map<String, Object> input) {
     var draft = kind.equals("INVOICE") ? withoutInvoiceDueDates(input) : Json.object(Json.write(input));
-    var issues = new ArrayList<String>();
-    if (draft.get("issues") instanceof List<?> list)
-      list.forEach(issue -> issues.add(Objects.toString(issue)));
+    var issues = issues(draft);
     if (kind.equals("INVOICE")) {
       if (!Inputs.rows(draft, "invoices").isEmpty())
         draft.put(
@@ -63,28 +61,36 @@ public final class DraftSanitizer {
           List.of(
               "periodStart", "periodEnd", "openingBalance", "closingBalance", "balanceDerivation"))
         draft.remove(ignored);
-      int n = 0;
       for (var movement : Inputs.rows(draft, "movements")) {
-        String prefix = "Movimento " + (++n) + ": ";
-        dates(movement, List.of("bookedOn", "valueOn"), issues, prefix);
-        money(movement, List.of("amount"), issues, prefix);
+        var rowIssues = issues(movement);
+        dates(movement, List.of("bookedOn", "valueOn"), rowIssues, "");
+        money(movement, List.of("amount"), rowIssues, "");
         if (Inputs.text(movement, "direction") != null
             && !Set.of("DEBIT", "CREDIT").contains(movement.get("direction"))) {
           movement.put("direction", null);
-          issues.add(prefix + "débito/crédito por identificar");
+          rowIssues.add("Débito/crédito por identificar");
         }
         if (Inputs.text(movement, "occurredAt") != null)
           try {
             LocalTime.parse(movement.get("occurredAt").toString());
           } catch (Exception e) {
             movement.put("occurredAt", null);
-            issues.add(prefix + "hora ilegível");
+            rowIssues.add("Hora ilegível");
           }
+        movement.put("issues", rowIssues);
+        if (!rowIssues.isEmpty()) movement.put("validate", false);
       }
     }
     draft.put("issues", issues);
     if (!issues.isEmpty()) draft.put("validate", false);
     return draft;
+  }
+
+  private static List<String> issues(Map<String, Object> row) {
+    var issues = new ArrayList<String>();
+    if (row.get("issues") instanceof List<?> entries)
+      entries.forEach(issue -> issues.add(Objects.toString(issue)));
+    return issues;
   }
 
   /**

@@ -49,11 +49,38 @@ class AutomaticReviewResults {
     if (!jobs.saveAutomaticReview(job, result)) return;
     if (report.findings().isEmpty()) return;
 
-    String type = snapshot.kind().name().toLowerCase(Locale.ROOT);
-    String code = report.verdict().equals("CONCERN") ? "AI_CONCERN" : "AI_REVIEW_SUGGESTION";
-    var alert = review.open(snapshot.alertDocument(), type, snapshot.target().id(), code, report.summary());
-    alert.proposal = Json.write(result);
+    publishConcerns(snapshot, report, result);
     reopenAffectedRecords(report.findings());
+  }
+
+  private void publishConcerns(Snapshot snapshot, AutomaticReviewWorker.Report report, Map<String, Object> result) {
+    String code = report.verdict().equals("CONCERN") ? "AI_CONCERN" : "AI_REVIEW_SUGGESTION";
+    var groups = new LinkedHashMap<AlertTarget, List<Finding>>();
+    for (var finding : report.findings()) {
+      var record = finding.field().record();
+      var target = record != null && record.revision() != null && snapshot.kind() != Kind.ALLOCATION
+          ? new AlertTarget(record.revision(), record.documentId())
+          : new AlertTarget(snapshot.target(), snapshot.alertDocument());
+      groups.computeIfAbsent(target, ignored -> new ArrayList<>()).add(finding);
+    }
+    groups.forEach((target, findings) -> {
+      var revision = target.revision();
+      var alert = review.openAll(target.documentId(), revision.kind().name().toLowerCase(Locale.ROOT),
+          revision.id(), code, findings.stream().map(this::concernMessage).toList());
+      if (alert == null || alert.proposal != null && Json.read(alert.proposal).has("draft")) return;
+      var scoped = new LinkedHashMap<>(result);
+      scoped.put("concerns", findings.stream().map(Finding::detail).toList());
+      if (groups.size() > 1) scoped.remove("suggestions");
+      alert.proposal = Json.write(scoped);
+    });
+  }
+
+  private record AlertTarget(Revision revision, UUID documentId) {}
+
+  private String concernMessage(Finding finding) {
+    var detail = finding.detail();
+    return finding.field().name() + " · " + detail.get("reason")
+        + " (" + detail.get("recordedValue") + " → " + detail.get("sourceValue") + ")";
   }
 
   private void reopenAffectedRecords(List<Finding> findings) {
@@ -75,13 +102,13 @@ class AutomaticReviewResults {
     var revision = record.revision();
     if (revision.kind() == Kind.INVOICE) {
       var invoice = store.get(Invoice.class, revision.id());
-      if (!uniqueInvoice(invoice)) return false;
+      if (invoice.manuallyConfirmed || !uniqueInvoice(invoice)) return false;
       invoice.reviewStatus = ReviewStatus.OPEN;
       return true;
     }
     if (revision.kind() == Kind.MOVEMENT) {
       var movement = store.get(BankMovement.class, revision.id());
-      if (!uniqueMovement(movement, record.identity())) return false;
+      if (movement.manuallyConfirmed || !uniqueMovement(movement, record.identity())) return false;
       movement.reviewStatus = ReviewStatus.OPEN;
       return true;
     }

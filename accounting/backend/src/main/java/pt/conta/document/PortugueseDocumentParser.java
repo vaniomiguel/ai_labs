@@ -132,13 +132,14 @@ public class PortugueseDocumentParser {
         String raw = matcher.group(4);
         String flag = Objects.toString(matcher.group(5), "").toUpperCase();
         boolean known = raw.startsWith("-") || raw.startsWith("+") || !flag.isBlank();
-        if (!known) issues.add("Um movimento não indica débito ou crédito");
+        var rowIssues = new ArrayList<String>();
+        if (!known) rowIssues.add("O movimento não indica débito ou crédito");
         rows.add(
             Inputs.map(
                 "bookedOn",
-                safeBankDate(matcher.group(1), issues),
+                safeBankDate(matcher.group(1), rowIssues),
                 "valueOn",
-                matcher.group(2) == null ? null : safeBankDate(matcher.group(2), issues),
+                matcher.group(2) == null ? null : safeBankDate(matcher.group(2), rowIssues),
                 "description",
                 matcher.group(3).trim(),
                 "amount",
@@ -148,7 +149,8 @@ public class PortugueseDocumentParser {
                 "kind",
                 "UNCLASSIFIED",
                 "currency",
-                "EUR"));
+                "EUR",
+                "issues", rowIssues));
       } catch (Exception e) {
         issues.add("Linha bancária inválida: " + matcher.group());
       }
@@ -185,10 +187,11 @@ public class PortugueseDocumentParser {
       if (n + 1 < lines.length && lines[n + 1].trim().matches("[A-ZÀ-Ý][A-ZÀ-Ý \\t]{1,50}"))
         description += " " + lines[++n].trim();
       String raw = row.group(4);
+      var rowIssues = new ArrayList<String>();
       movements.add(
           Inputs.map(
               "bookedOn",
-              safeBankDate(row.group(1), issues),
+              safeBankDate(row.group(1), rowIssues),
               "description",
               description,
               "amount",
@@ -198,7 +201,8 @@ public class PortugueseDocumentParser {
               "currency",
               "EUR",
               "kind",
-              "UNCLASSIFIED"));
+              "UNCLASSIFIED",
+              "issues", rowIssues));
     }
     if (movements.isEmpty() || movements.size() != dated)
       issues.add("Existem linhas de movimentos por reconhecer");

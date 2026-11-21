@@ -49,20 +49,18 @@ public final class AiEvidence {
     var movements = Inputs.rows(draft, "movements");
     if (movements.isEmpty()) return false;
     for (int n = 0; n < movements.size(); n++) {
-      int index = n;
-      var movement = movements.get(n);
-      for (String field : List.of("bookedOn", "description", "amount", "direction"))
-        if (movement.get(field) == null
-            || !evidence.stream()
-                .anyMatch(
-                    e ->
-                        ("movements[" + index + "]." + field).equals(e.get("field"))
-                            && quoteExists(e, source)
-                            && bankValueSupported(
-                                field, movement, Objects.toString(e.get("quote"), ""))))
-          return false;
+      if (!unsupportedMovementFields(movements.get(n), n, evidence, source).isEmpty()) return false;
     }
     return true;
+  }
+
+  static List<String> unsupportedMovementFields(Map<String, Object> movement, int index,
+      List<Map<String, Object>> evidence, String source) {
+    return List.of("bookedOn", "description", "amount", "direction").stream()
+        .filter(field -> movement.get(field) == null || evidence.stream().noneMatch(e ->
+            ("movements[" + index + "]." + field).equals(e.get("field")) && quoteExists(e, source)
+                && bankValueSupported(field, movement, Objects.toString(e.get("quote"), ""))))
+        .toList();
   }
 
   /** Keeps bank-review concerns within movement facts, excluding all balance fields. */

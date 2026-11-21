@@ -7,6 +7,7 @@ import java.util.*;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import pt.conta.bank.BankMovement;
 import pt.conta.document.*;
 import pt.conta.invoice.*;
 import pt.conta.jobs.JobQueue;
@@ -20,7 +21,8 @@ import pt.conta.shared.Types.InvoiceType;
 public class RepairService {
   public record Snapshot(UUID alertId, UUID documentId, long sourceVersion, String kind,
       String mediaType, String storageKey, String sha256, String text, Map<String,Object> draft,
-      String message, Map<String,Object> fieldProvenance) {}
+      String message, Map<String,Object> fieldProvenance, String entityType, UUID entityId,
+      List<Alert.Concern> concerns) {}
 
   private record PreparedRepair(
       Map<String,Object> draft, List<Map<String,Object>> changes, Map<String,Object> fieldProvenance,
@@ -41,16 +43,19 @@ public class RepairService {
   private final BookkeepingService book;
   private final FieldProtection protection;
   private final DocumentPublisher publisher;
+  private final ReviewService review;
 
-  public RepairService(Store store, JdbcTemplate jdbc, JobQueue jobs, BookkeepingService book, FieldProtection protection, DocumentPublisher publisher) {
+  public RepairService(Store store, JdbcTemplate jdbc, JobQueue jobs, BookkeepingService book,
+      FieldProtection protection, DocumentPublisher publisher, ReviewService review) {
     this.store=store; this.jdbc=jdbc; this.jobs=jobs; this.book=book;this.protection=protection;this.publisher=publisher;
+    this.review = review;
   }
 
   public Map<String,Object> request(UUID id) {
     store.lockFinancialWrites();
     var alert=store.get(Alert.class,id);
     if (alert.documentId==null) throw DomainException.invalid("Este alerta não tem um documento para análise");
-    if (!alert.status.equals("OPEN")) throw DomainException.invalid("O alerta já está resolvido");
+    if (!open(alert)) throw DomainException.invalid("O alerta já está resolvido");
     var doc=store.get(SourceDocument.class,alert.documentId);
     if (doc.deleted) throw DomainException.invalid("O documento já foi eliminado");
     var current=latest(id);
@@ -62,14 +67,19 @@ public class RepairService {
   }
 
   @Transactional(readOnly=true)
-  public Map<String,Object> view(UUID id) { return view(store.get(Alert.class,id),latest(id)); }
+  public Map<String,Object> view(UUID id) {
+    var alert = store.get(Alert.class, id);
+    if (alert.mergedInto != null) alert = store.get(Alert.class, alert.mergedInto);
+    return view(alert, latest(alert.id));
+  }
 
   @Transactional(readOnly=true)
   public List<Map<String,Object>> list() {
     var latest=new HashMap<UUID,Map<String,Object>>();
     jdbc.queryForList("select distinct on (target_id) * from job where kind='REPAIR_ALERT' order by target_id,target_version desc,created_at desc,id desc")
         .forEach(j->latest.put((UUID)j.get("target_id"),j));
-    return store.all(Alert.class).stream().sorted(Comparator.comparing((Alert a)->!a.status.equals("OPEN"))
+    return store.all(Alert.class).stream().filter(alert -> alert.mergedInto == null)
+        .sorted(Comparator.comparing((Alert a)->!a.status.equals("OPEN"))
         .thenComparing(a->a.createdAt,Comparator.reverseOrder())).map(a->view(a,latest.get(a.id))).toList();
   }
 
@@ -94,8 +104,8 @@ public class RepairService {
       long source=sourceVersion(job,proposal!=null&&proposal.get("documentVersion") instanceof Number n?n.longValue():doc==null?-1:doc.version);
       boolean stale=doc==null||doc.deleted||!alert.status.equals("OPEN")||source!=doc.version
           ||active(job)&&metadata(job).get("outcome")==null&&((Number)job.get("target_version")).longValue()!=alert.version;
-      var errors=proposal==null||doc==null?List.<String>of():previewErrors(doc,proposal);
-      if(proposal!=null&&doc!=null)enrich(doc,proposal);
+      var errors=proposal==null||doc==null?List.<String>of():previewErrors(doc,proposal,alert);
+      if(proposal!=null&&doc!=null)enrich(doc,proposal,alert);
       String outcome=stale?"STALE":Objects.toString(metadata(job).get("outcome"),null);
       if(outcome==null&&"DONE".equals(job.get("state"))) outcome=proposal==null?"REVIEW_REQUIRED":outcome(doc,proposal,errors);
       PreparedRepair eligibility=null;
@@ -110,9 +120,10 @@ public class RepairService {
           "canApplyDraft",eligibility!=null&&eligibility.canApplyDraft(),
           "canValidate",canValidate,"canApply",canValidate,"context",metadata(job).get("context"));
     }
-    if(proposal!=null&&job==null&&alert.documentId!=null)enrich(store.get(SourceDocument.class,alert.documentId),proposal);
+    if(proposal!=null&&job==null&&alert.documentId!=null)
+      enrich(store.get(SourceDocument.class,alert.documentId),proposal,alert);
     return map("id",alert.id,"version",alert.version,"documentId",alert.documentId,"entityType",alert.entityType,
-        "entityId",alert.entityId,"code",alert.code,"message",alert.message,"status",alert.status,
+        "entityId",alert.entityId,"code",alert.code,"message",alert.message,"concerns",alert.concerns(),"status",alert.status,
         "proposal",proposal,"resolvedBy",alert.resolvedBy,"resolvedAt",alert.resolvedAt,"repair",repair);
   }
 
@@ -126,13 +137,14 @@ public class RepairService {
     if(job==null||!job.get("id").equals(claim.id())) { mark(claim,"STALE",null);return null; }
     if(metadata(job).get("outcome")!=null) return null; // Already applied before a lease was reclaimed.
     var alert=store.get(Alert.class,claim.target());
-    if(alert.documentId==null||!alert.status.equals("OPEN")||alert.version!=claim.revision()) {mark(claim,"STALE",null);return null;}
+    if(alert.documentId==null||!open(alert)||alert.version!=claim.revision()) {mark(claim,"STALE",null);return null;}
     var doc=store.get(SourceDocument.class,alert.documentId);
     if(doc.deleted||sourceVersion(job,doc.version)!=doc.version) {mark(claim,"STALE",null);return null;}
     var data=metadata(job);data.put("sourceVersion",doc.version);
     jdbc.update("update job set payload=? where id=?",Json.write(data),claim.id());
     return new Snapshot(alert.id,doc.id,doc.version,doc.kind,doc.mediaType,doc.storageKey,doc.sha256,
-        Objects.requireNonNullElse(doc.text,""),Json.object(doc.draft),alert.message,Json.object(doc.fieldProvenance));
+        Objects.requireNonNullElse(doc.text,""),Json.object(doc.draft),alert.message,Json.object(doc.fieldProvenance),
+        alert.entityType, alert.entityId, alert.concerns());
   }
 
   /** Atomically links a result to the exact live request; stale results never replace proposals. */
@@ -142,7 +154,7 @@ public class RepairService {
     var current=latest(claim.target());
     if(current!=null&&current.get("id").equals(claim.id())&&metadata(current).get("outcome")!=null) return false;
     var alert=store.get(Alert.class,claim.target());var doc=store.get(SourceDocument.class,snapshot.documentId());
-    if(current==null||!current.get("id").equals(claim.id())||!ownsLease(claim)||!alert.status.equals("OPEN")
+    if(current==null||!current.get("id").equals(claim.id())||!ownsLease(claim)||!open(alert)
         ||alert.version!=claim.revision()||doc.deleted||doc.version!=snapshot.sourceVersion()) {
       if (ownsLease(claim)) {
         mark(claim, "STALE", context);
@@ -159,8 +171,10 @@ public class RepairService {
       draft.put("issues",new ArrayList<>(issues));proposal.put("draft",draft);proposal.put("issues",new ArrayList<>(issues));
     }
     proposal.put("documentVersion",snapshot.sourceVersion());proposal.put("jobId",claim.id().toString());
-    var errors=previewErrors(doc,proposal);String outcome=outcome(doc,proposal,errors);
+    var errors=previewErrors(doc,proposal,alert);String outcome=outcome(doc,proposal,errors);
     alert.proposal = Json.write(proposal);
+    review.openAll(alert.documentId, alert.entityType, alert.entityId, "AI_REPAIR_REVIEW",
+        review.messages(proposal.get("issues")));
     mark(claim, outcome, context);
     attempt(snapshot, proposal, context, outcome, prompt);
     return true;
@@ -204,14 +218,18 @@ public class RepairService {
     catch(DomainException e){return "REVIEW_REQUIRED";}
   }
 
-  private void enrich(SourceDocument doc,Map<String,Object> proposal) {
+  private void enrich(SourceDocument doc,Map<String,Object> proposal,Alert alert) {
     if(!(proposal.get("draft") instanceof Map<?,?> raw))return;
-    try {proposal.put("changes",protection.changes(doc.kind,Json.object(doc.draft),protection.copy(raw),Json.object(doc.fieldProvenance)));}
+    var current = Json.object(doc.draft);
+    try {proposal.put("changes",scopedChanges(alert, doc, current, protection.copy(raw), Json.object(doc.fieldProvenance)));}
     catch(DomainException e){proposal.put("changes",List.of());proposal.put("structureIssue",e.getMessage());}
   }
-  private List<String> previewErrors(SourceDocument doc,Map<String,Object> proposal) {
+  private List<String> previewErrors(SourceDocument doc,Map<String,Object> proposal,Alert alert) {
     if(!(proposal.get("draft") instanceof Map<?,?> raw))return List.of("A análise não contém uma correção de dados aplicável");
-    try {return blocking(doc,map("draft",protection.automaticDocument(doc.kind,Json.object(doc.draft),protection.copy(raw),Json.object(doc.fieldProvenance))));}
+    try {
+      var draft = protection.automaticDocument(doc.kind, Json.object(doc.draft), protection.copy(raw), Json.object(doc.fieldProvenance));
+      return blocking(doc, draft, ReviewService.isRecord(alert.entityType) ? targetKeys(alert, doc, draft) : null);
+    }
     catch(DomainException e){return List.of(e.getMessage());}
   }
 
@@ -221,7 +239,7 @@ public class RepairService {
 
   private PreparedRepair prepare(UUID id,Map<String,Object> body) {
     var alert=store.get(Alert.class,id);
-    if(!alert.status.equals("OPEN")||alert.documentId==null||alert.proposal==null)throw DomainException.invalid("Não existe uma proposta aplicável");
+    if(!open(alert)||alert.documentId==null||alert.proposal==null)throw DomainException.invalid("Não existe uma proposta aplicável");
     var doc=store.get(SourceDocument.class,alert.documentId);var proposal=Json.object(alert.proposal);
     if(!body.isEmpty()&&(!body.containsKey("documentVersion")||!body.containsKey("proposalId")))
       throw new DomainException(428,"A versão documental e a identidade da proposta são obrigatórias");
@@ -237,19 +255,11 @@ public class RepairService {
     var before=Json.object(doc.draft);var local=body.get("draft") instanceof Map<?,?> edits?protection.align(doc.kind,before,protection.copy(edits)):protection.copy(before);
     // Only editable fields may cross from a browser draft; identifiers/control metadata remain server-owned.
     var current=protection.copy(before);var oldRows=protection.entries(doc.kind,current);var localRows=protection.entries(doc.kind,local);
-    var allowedItems=new LinkedHashSet<String>();
-    if(body.get("selectedItems") instanceof List<?> items) {
-      for(Object item:items) {
-        if(!(item instanceof String key)||oldRows.stream().noneMatch(r->protection.rowKey(r,protection.root(doc.kind,current)).equals(key)))throw DomainException.invalid("O item indicado não pertence a este documento");
-        allowedItems.add(key);
-      }
-    }else if(body.containsKey("selectedItems"))throw DomainException.invalid("A seleção de itens é inválida");
-    else for(var row:oldRows)if(alert.entityType.equals("document")||Objects.equals(text(row,"id"),alert.entityId.toString()))allowedItems.add(protection.rowKey(row,protection.root(doc.kind,current)));
-    if(allowedItems.isEmpty()&&!body.containsKey("selectedItems")&&oldRows.size()==1)allowedItems.add(protection.rowKey(oldRows.getFirst(),protection.root(doc.kind,current)));
+    var allowedItems = selectedKeys(body, targetKeys(alert, doc, current));
     for(int i=0;i<oldRows.size();i++)if(allowedItems.contains(protection.rowKey(oldRows.get(i),protection.root(doc.kind,current))))
       for(String field:protection.fields(doc.kind))if(localRows.get(i).containsKey(field))oldRows.get(i).put(field,localRows.get(i).get(field));
     var metadata=protection.humanDocument(doc.kind,before,current,Json.object(doc.fieldProvenance),false);
-    var changes=protection.changes(doc.kind,current,protection.copy(raw),metadata);
+    var changes=scopedChanges(alert, doc, current, protection.copy(raw), metadata);
     var selected=new LinkedHashSet<String>();
     if(body.get("acceptedFields") instanceof List<?> requested)for(Object key:requested){if(!(key instanceof String value)||!selected.add(value))throw DomainException.invalid("A seleção de campos é inválida");}
     else if(body.containsKey("acceptedFields"))throw DomainException.invalid("A seleção de campos é inválida");
@@ -264,12 +274,15 @@ public class RepairService {
       row.put(field,change.get("proposed"));var ownership=protection.rowMetadata(metadata,item);
       ownership.put(field,protection.decision("HUMAN_ACCEPTED_AI",proposalId));metadata.put(item,ownership);touched.add(item);accepted.add(change);
     }
-    var errors=blocking(doc,map("draft",current),touched);
+    var errors=blocking(doc,current,touched);
     return new PreparedRepair(current, changes, metadata, touched, accepted, errors);
   }
 
   public Map<String,Object> apply(UUID id,Map<String,Object> body,DocumentService documents) {
-    store.lockFinancialWrites();var prepared=prepare(id,body);
+    store.lockFinancialWrites();
+    if (ReviewService.isRecord(store.get(Alert.class, id).entityType))
+      throw DomainException.invalid("Aplica a proposta no editor e guarda o registo para concluir.");
+    var prepared=prepare(id,body);
     if(!prepared.canApplyDraft())throw DomainException.invalid("Não existem complementos ou escolhas para aplicar");
     boolean validate=body.isEmpty()||flag(body,"validate");
     if(validate&&!prepared.canValidate())throw DomainException.invalid(String.join("; ",prepared.blockingIssues()));
@@ -277,13 +290,104 @@ public class RepairService {
     return publisher.applySelected(alert.documentId,protection.copy(prepared.draft()),protection.copy(prepared.fieldProvenance()),selected,validate,documents);
   }
 
-  /** Publication remains authoritative; this preview reuses its invoice arithmetic rules. */
-  private List<String> blocking(SourceDocument doc,Map<String,Object> proposal) {
-    return blocking(doc,proposal,null);
+  /** Saves the visible draft and any accepted AI decisions in the normal financial transaction. */
+  public Map<String, Object> saveRecordDraft(UUID id, Map<String, Object> body) {
+    store.lockFinancialWrites();
+    var alert = store.get(Alert.class, id);
+    if (!ReviewService.isRecord(alert.entityType) || !open(alert))
+      throw new DomainException(409, "O alerta já não está disponível para revisão.");
+    store.checkVersion(alert, requiredVersion(body, "alertVersion"));
+    boolean invoice = "invoice".equals(alert.entityType);
+    var target = recordTarget(alert, invoice);
+    store.checkVersion(target.record(), requiredVersion(body, "recordVersion"));
+    if (!Objects.equals(alert.documentId, target.documentId()))
+      throw new DomainException(409, "O documento do registo foi alterado.");
+    if (target.documentId() != null) {
+      var source = store.get(SourceDocument.class, target.documentId());
+      if (source.deleted) throw DomainException.missing();
+      store.checkVersion(source, requiredVersion(body, "documentVersion"));
+    }
+    if (!(body.get("draft") instanceof Map<?, ?> raw) || !(body.get("resolve") instanceof Boolean resolve))
+      throw DomainException.invalid("O rascunho e a decisão de validação são obrigatórios.");
+    var input = map("version", target.record().version, "validate", resolve);
+    for (String field : protection.fields(invoice ? "INVOICE" : "STATEMENT"))
+      input.put(field, raw.containsKey(field) ? raw.get(field) : target.values().get(field));
+    var decisions = stagedDecisions(alert, body, input);
+    return invoice ? book.saveReviewedInvoice(alert.entityId, input, decisions)
+        : book.saveReviewedMovement(alert.entityId, input, decisions);
   }
-  private List<String> blocking(SourceDocument doc,Map<String,Object> proposal,Set<String> selected) {
-    if(!(proposal.get("draft") instanceof Map<?,?> raw))return List.of("A análise não contém uma correção de dados aplicável");
-    var draft=Json.object(Json.write(raw));var errors=new ArrayList<String>();
+
+  private record RecordTarget(BaseEntity record, UUID documentId, Map<String, Object> values) {}
+
+  private RecordTarget recordTarget(Alert alert, boolean invoice) {
+    if (invoice) {
+      var item = store.get(Invoice.class, alert.entityId);
+      return new RecordTarget(item, item.documentId, book.invoiceView(item));
+    }
+    var item = store.get(BankMovement.class, alert.entityId);
+    return new RecordTarget(item, item.documentId, book.movementView(item));
+  }
+
+  private long requiredVersion(Map<String, Object> body, String key) {
+    if (!(body.get(key) instanceof Integer || body.get(key) instanceof Long))
+      throw new DomainException(428, "A versão do registo é obrigatória");
+    return ((Number) body.get(key)).longValue();
+  }
+
+  private Map<String, Object> stagedDecisions(Alert alert, Map<String, Object> body, Map<String, Object> input) {
+    var decisions = new LinkedHashMap<String, Object>();
+    if (!body.containsKey("repairs")) return decisions;
+    if (!(body.get("repairs") instanceof List<?> stages) || stages.stream().anyMatch(stage -> !(stage instanceof Map<?, ?>)))
+      throw DomainException.invalid("A seleção de propostas é inválida.");
+    for (var stage : stages) {
+      var selection = protection.copy(stage);
+      if (selection.isEmpty()) throw DomainException.invalid("A seleção de propostas é inválida.");
+      var prepared = prepare(alert.id, selection);
+      for (var accepted : prepared.accepted()) {
+        String field = text(accepted, "field");
+        if (protection.same(field, input.get(field), accepted.get("proposed")))
+          decisions.put(field, protection.decision("HUMAN_ACCEPTED_AI", text(selection, "proposalId")));
+      }
+    }
+    return decisions;
+  }
+
+  private boolean open(Alert alert) {
+    return "OPEN".equals(alert.status) && !review.protectedRecord(alert.entityType, alert.entityId);
+  }
+
+  private Set<String> targetKeys(Alert alert, SourceDocument doc, Map<String, Object> draft) {
+    boolean root = protection.root(doc.kind, draft);
+    var rows = protection.entries(doc.kind, draft);
+    return rows.stream().filter(row -> "document".equals(alert.entityType)
+            || Objects.equals(text(row, "id"), alert.entityId.toString())
+            || !ReviewService.isRecord(alert.entityType) && rows.size() == 1)
+        .map(row -> protection.rowKey(row, root)).collect(java.util.stream.Collectors.toSet());
+  }
+
+  private Set<String> selectedKeys(Map<String, Object> body, Set<String> eligible) {
+    if (!body.containsKey("selectedItems")) return eligible;
+    if (!(body.get("selectedItems") instanceof List<?> items))
+      throw DomainException.invalid("A seleção de itens é inválida");
+    var selected = new LinkedHashSet<String>();
+    for (Object item : items) {
+      if (!(item instanceof String key) || !eligible.contains(key))
+        throw DomainException.invalid("O item indicado não pertence a esta revisão");
+      selected.add(key);
+    }
+    return selected;
+  }
+
+  private List<Map<String, Object>> scopedChanges(Alert alert, SourceDocument doc,
+      Map<String, Object> current, Map<String, Object> proposed, Map<String, Object> metadata) {
+    var keys = targetKeys(alert, doc, current);
+    return protection.changes(doc.kind, current, proposed, metadata).stream()
+        .filter(change -> keys.contains(change.get("itemId"))).toList();
+  }
+
+  /** Publication remains authoritative; this preview reuses its invoice arithmetic rules. */
+  private List<String> blocking(SourceDocument doc,Map<String,Object> draft,Set<String> selected) {
+    var errors=new ArrayList<String>();
     if(doc.kind.equals("STATEMENT")) {
       for(var row:rows(draft,"movements")) {
         if(selected!=null&&!selected.contains(protection.rowKey(row,false)))continue;
@@ -300,7 +404,10 @@ public class RepairService {
     for(int n=0;n<receipts.size();n++) {
       try {
         var row=receipts.get(n);if(selected!=null&&!selected.contains(protection.rowKey(row,protection.root(doc.kind,draft))))continue;
-        var i=new Invoice();if(n<existing.size())i.id=existing.get(n).id;
+        var i=new Invoice();
+        UUID id = uuid(row, "id");
+        if (id != null) i.id = id;
+        else if (receipts.size() == 1 && existing.size() == 1) i.id = existing.getFirst().id;
         i.documentId=doc.id;i.issuedOn=date(row,"issuedOn");i.supplier=text(row,"supplier");i.number=text(row,"number");
         i.supplierTaxId=text(row,"supplierTaxId");i.total=Money.optional(row.get("total"));i.net=Money.optional(row.get("net"));
         i.tax=Money.optional(row.get("tax"));i.discount=Money.optional(row.get("discount"));i.currency=Objects.requireNonNullElse(text(row,"currency"),"EUR");

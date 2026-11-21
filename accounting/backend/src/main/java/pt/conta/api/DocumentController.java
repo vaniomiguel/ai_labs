@@ -196,6 +196,11 @@ public class DocumentController {
   @PostMapping("/alerts/{id}/preview")
   public Map<String,Object> preview(@PathVariable UUID id,@RequestBody Map<String,Object> body) {return repairs.preview(id,body);}
 
+  @PutMapping("/alerts/{id}/draft")
+  public Map<String, Object> saveAlertDraft(@PathVariable UUID id, @RequestBody Map<String, Object> body) {
+    return repairs.saveRecordDraft(id, body);
+  }
+
   /** Applies only safe complements and explicitly accepted server-stored suggestions. */
   @PostMapping("/alerts/{id}/apply")
   public Map<String,Object> apply(@PathVariable UUID id,@RequestBody(required=false) Map<String,Object> body) {

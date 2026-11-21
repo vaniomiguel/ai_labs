@@ -13,6 +13,7 @@ import pt.conta.document.DocumentStorage;
 import pt.conta.document.ExtractionAttempt;
 import pt.conta.jobs.JobQueue;
 import pt.conta.review.RepairService;
+import pt.conta.review.ReviewService;
 import pt.conta.shared.*;
 
 /** Explicit repairs analyse the complete source in one fresh, versioned model execution. */
@@ -85,6 +86,8 @@ public class RepairAiWorker {
       RepairService.Snapshot source, AiProvider.Model model, String task) throws Exception {
     String prompt = prompts.prompt(task) + "\n"
         + prompts.prompt(PromptCatalog.REPAIR_ANALYSIS_INSTRUCTIONS).stripTrailing();
+    if (ReviewService.isRecord(source.entityType()))
+      prompt += "\n" + prompts.prompt(PromptCatalog.REPAIR_RECORD_SCOPE_INSTRUCTIONS).stripTrailing();
     var pages = new ArrayList<Integer>();
     var images = new ArrayList<String>();
     // Reject oversized text before rendering; the model must receive the whole source.
@@ -99,9 +102,16 @@ public class RepairAiWorker {
   }
 
   private Map<String, Object> input(RepairService.Snapshot source, List<Integer> pages) {
-    return map("data", source.draft(), "fieldProvenance", source.fieldProvenance(),
+    var input = map("data", source.draft(), "fieldProvenance", source.fieldProvenance(),
         "sourceText", source.text(), "alert", source.message(),
         "documentVersion", source.sourceVersion(), "sourcePages", pages);
+    if (ReviewService.isRecord(source.entityType())) {
+      input.put("alertTarget", map("type", source.entityType(), "id", source.entityId()));
+      input.put("alertConcerns", source.concerns());
+    } else if (source.concerns().size() > 1) {
+      input.put("alertConcerns", source.concerns());
+    }
+    return input;
   }
 
   private Map<String, Object> context(

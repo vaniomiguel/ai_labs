@@ -211,7 +211,8 @@ class FinancialIntegrationTest {
 
   @Test
   void draftsAndDeletionReverseEffectsWithoutDeletingHistory() {
-    var invoice = invoice("100.00", "2026-01-10", "DRAFT-1");
+    var invoice = book.saveInvoice(null, map("total", "100.00", "issuedOn", "2026-01-10",
+        "number", "DRAFT-1", "supplier", "Fornecedor", "validate", true), "RULES", false);
     var original = store.get(Invoice.class, (UUID) invoice.get("id"));
     var draft = new LinkedHashMap<>(book.invoiceView(original));
     draft.put("total", null);
@@ -828,7 +829,7 @@ class FinancialIntegrationTest {
   }
 
   @Test
-  void independentReceiptsKeepSeparateIdentitiesAndSavingDraftSuspendsBoth() throws Exception {
+  void independentReceiptsKeepSeparateIdentitiesAndSavingSourceDraftKeepsConfirmedPostings() throws Exception {
     var original =
         documents.upload(
             new ByteArrayInputStream(pdf("Comprovativos independentes")),
@@ -876,7 +877,8 @@ class FinancialIntegrationTest {
     assertThat(store.all(Invoice.class).stream().map(i -> i.id)).containsExactlyElementsOf(ids);
     assertThat(closing(2016, 3)).isEqualTo("18.00");
     publisher.edit(id, map("version", source.version, "draft", draft, "resolve", false), documents);
-    assertThat(closing(2016, 3)).isEqualTo("0.00");
+    assertThat(closing(2016, 3)).isEqualTo("18.00");
+    assertThat(store.all(Invoice.class)).allMatch(i -> i.manuallyConfirmed);
   }
 
   @Test
@@ -1117,7 +1119,8 @@ class FinancialIntegrationTest {
 
   @Test
   void editsAndPublicationPreserveExclusionAndDraftReinclusionDoesNotValidate() {
-    var i = invoice("100.00", "2026-01-01", "PRESERVE-EX");
+    var i = book.saveInvoice(null, map("total", "100.00", "issuedOn", "2026-01-01",
+        "number", "PRESERVE-EX", "supplier", "Fornecedor", "validate", true), "RULES", false);
     participation(true, selection("invoice", i));
     var entity = store.get(Invoice.class, (UUID) i.get("id"));
     var edit = new LinkedHashMap<>(book.invoiceView(entity));

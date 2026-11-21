@@ -9,7 +9,11 @@ import { Api, AlertView, FieldSuggestion, RepairApplyRequest, RepairPreview, eur
   imports: [CommonModule, MatButtonModule, MatProgressSpinnerModule],
   template: `
     <section class="notice repair-panel" aria-label="Correção por IA">
-      <strong>{{current()?.message || alert().message}}</strong>
+      @if(!stageOnly()){
+        @if((current() ?? alert()).concerns?.length){
+          <ul>@for(concern of (current() ?? alert()).concerns;track $index){<li>{{concern.message}}</li>}</ul>
+        }@else{<strong>{{current()?.message || alert().message}}</strong>}
+      }
       <div class="row-actions">
         <button mat-stroked-button [attr.aria-busy]="submitting()" [disabled]="pending() || current()?.status==='RESOLVED'" (click)="request()">
           @if(submitting()){<mat-spinner diameter="18" aria-label="A enviar pedido" />}{{submitting()?'A enviar pedido…':current()?.repair?'Pedir nova análise à IA':'✧ Pedir tentativa de correção à IA'}}
@@ -53,10 +57,16 @@ import { Api, AlertView, FieldSuggestion, RepairApplyRequest, RepairPreview, eur
             @if(!changes().length){<p>A análise não encontrou complementos ou alterações aplicáveis aos dados apresentados.</p>}
             @if(current()?.proposal?.structureIssue){<p class="error">{{current()!.proposal.structureIssue}}</p>}
             @if(issues().length){<div class="repair-issues"><strong>O que continua a precisar de revisão</strong><ul>@for(issue of issues();track $index){<li>{{issue}}</li>}</ul></div>}
-            <p class="hint">Os teus valores mantêm-se. Apenas os complementos e as alterações que aceitares serão guardados nos itens selecionados.</p>
+            @if(stageOnly()){
+              <p class="hint">As sugestões ficam no rascunho até guardares o registo.</p>
+            }@else{
+              <p class="hint">Os teus valores mantêm-se. Apenas os complementos e as alterações que aceitares serão guardados nos itens selecionados.</p>
+            }
             <div class="row-actions">
               <button mat-stroked-button [disabled]="!canDraft()" (click)="apply.emit(payload(false))">Aplicar ao rascunho</button>
-              <button mat-flat-button [disabled]="!canApply()" (click)="apply.emit(payload(true))" aria-describedby="repair-validation-reason">Aplicar proposta e validar</button>
+              @if(!stageOnly()){
+                <button mat-flat-button [disabled]="!canApply()" (click)="apply.emit(payload(true))" aria-describedby="repair-validation-reason">Aplicar proposta e validar</button>
+              }
             </div>
             <p id="repair-validation-reason" class="hint" role="status">{{validationReason()}}</p>
           }@else{<p>{{current()!.proposal.summary || 'A análise não produziu uma correção de dados aplicável.'}}</p>
@@ -72,11 +82,13 @@ export class RepairPanel implements OnChanges, OnDestroy {
   private api=inject(Api);
   readonly alert=input.required<AlertView>();
   readonly document=input.required<any>();
+  readonly stageOnly=input(false);
   readonly progress=input("");
   readonly edits=input(0);
   readonly updated=output<AlertView>();
   readonly inspect=output<string>();
   readonly apply=output<RepairApplyRequest>();
+  readonly newAnalysis = output<void>();
   readonly current=signal<AlertView|null>(null);
   readonly preview=signal<RepairPreview|null>(null);
   readonly accepted=signal(new Set<string>());
@@ -121,8 +133,15 @@ export class RepairPanel implements OnChanges, OnDestroy {
   async request() {
     if(this.pending())return;
     clearTimeout(this.timer);const sequence=++this.sequence,id=this.alert().id;
+    const previousJob = this.current()?.repair?.jobId;
     this.fetching=false;this.submitting.set(true);this.error.set("");
-    try{const next=await this.api.post<AlertView>("/alerts/"+id+"/ai");if(!this.destroyed&&sequence===this.sequence)this.accept(next);}
+    try {
+      const next = await this.api.post<AlertView>("/alerts/" + id + "/ai");
+      if (!this.destroyed && sequence === this.sequence) {
+        if (next.repair && next.repair.jobId !== previousJob) this.newAnalysis.emit();
+        this.accept(next);
+      }
+    }
     catch(e){if(!this.destroyed&&sequence===this.sequence)this.error.set(errorMessage(e));}
     finally{if(sequence===this.sequence){this.submitting.set(false);this.schedule();if(this.current()?.proposal?.draft&&!this.pending())this.queuePreview();}}
   }

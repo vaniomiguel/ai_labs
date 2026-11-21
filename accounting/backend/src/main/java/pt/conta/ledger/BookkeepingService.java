@@ -93,6 +93,7 @@ public class BookkeepingService {
   private Map<String,Object> saveInvoice(UUID id,Map<String,Object> input,String origin,boolean human,Map<String,Object> decisions) {
     store.lockFinancialWrites();
     Invoice invoice = id == null ? store.add(new Invoice()) : store.get(Invoice.class, id);
+    requireValidatedRevision(human, invoice.manuallyConfirmed, input);
     Object before = id == null ? null : invoiceView(invoice);
     var ownership=Json.object(invoice.fieldProvenance);
     var previousFields=before==null?new LinkedHashMap<String,Object>():Json.object(Json.write(before));
@@ -125,7 +126,7 @@ public class BookkeepingService {
     if (invoice.documentId != null) store.get(SourceDocument.class, invoice.documentId);
     invoice.origin = origin;
     invoice.author = human ? audit.actor() : origin;
-    invoice.manuallyConfirmed = human && flag(input, "validate");
+    invoice.manuallyConfirmed |= human && flag(input, "validate");
     store.all(InvoiceLine.class).stream()
         .filter(l -> l.invoiceId.equals(invoice.id))
         .toList()
@@ -145,7 +146,7 @@ public class BookkeepingService {
       store.add(line);
     }
     var errors = invoiceErrors(invoice);
-    boolean requested = flag(input, "validate");
+    boolean requested = validationRequested(input, human, previous, "invoice", invoice.id);
     if (human && requested && !errors.isEmpty())
       throw DomainException.invalid(String.join("; ", errors));
     invoice.reviewStatus =
@@ -156,10 +157,12 @@ public class BookkeepingService {
                     : previous == ReviewStatus.OPEN ? ReviewStatus.CORRECTED : ReviewStatus.EDITED
                 : ReviewStatus.AUTOMATIC
             : ReviewStatus.OPEN;
-    if (invoice.reviewStatus == ReviewStatus.OPEN && !errors.isEmpty())
-      review.open(
-          invoice.documentId, "invoice", invoice.id, "INVALID_INVOICE", String.join("; ", errors));
-    else if (invoice.reviewStatus != ReviewStatus.OPEN) review.resolveFor("invoice", invoice.id);
+    if (invoice.manuallyConfirmed) review.resolveFor("invoice", invoice.id);
+    else {
+      review.updateRecordSource("invoice", invoice.id, invoice.documentId);
+      if (invoice.reviewStatus == ReviewStatus.OPEN)
+        recordConcerns(invoice.documentId, "invoice", invoice.id, input, errors);
+    }
     store.flush();
     if (!batching.get()) {
       synchronize();
@@ -195,6 +198,7 @@ public class BookkeepingService {
   private Map<String,Object> saveMovement(UUID id,Map<String,Object> input,String origin,boolean human,Map<String,Object> decisions) {
     store.lockFinancialWrites();
     var movement = id == null ? store.add(new BankMovement()) : store.get(BankMovement.class, id);
+    requireValidatedRevision(human, movement.manuallyConfirmed, input);
     Object before = id == null ? null : movementView(movement);
     var ownership=Json.object(movement.fieldProvenance);
     var previousFields=before==null?new LinkedHashMap<String,Object>():Json.object(Json.write(before));
@@ -230,35 +234,28 @@ public class BookkeepingService {
     movement.kind = enumeration(input, "kind", MovementKind.class, MovementKind.UNCLASSIFIED);
     movement.origin = origin;
     movement.author = human ? audit.actor() : origin;
-    movement.manuallyConfirmed = human && flag(input, "validate");
+    movement.manuallyConfirmed |= human && flag(input, "validate");
     var errors = movementErrors(movement);
-    if (human && flag(input, "validate") && !errors.isEmpty())
+    boolean requested = validationRequested(input, human, previous, "movement", movement.id);
+    if (human && requested && !errors.isEmpty())
       throw DomainException.invalid(String.join("; ", errors));
     movement.reviewStatus =
-        flag(input, "validate") && errors.isEmpty()
+        requested && errors.isEmpty()
             ? human
                 ? id == null
                     ? ReviewStatus.MANUAL
                     : previous == ReviewStatus.OPEN ? ReviewStatus.CORRECTED : ReviewStatus.EDITED
                 : ReviewStatus.AUTOMATIC
             : ReviewStatus.OPEN;
-    if (movement.reviewStatus == ReviewStatus.OPEN && !errors.isEmpty())
-      review.open(
-          movement.documentId,
-          "movement",
-          movement.id,
-          "INVALID_MOVEMENT",
-          String.join("; ", errors));
-    else if (movement.reviewStatus != ReviewStatus.OPEN) review.resolveFor("movement", movement.id);
+    if (movement.manuallyConfirmed) review.resolveFor("movement", movement.id);
+    else {
+      review.updateRecordSource("movement", movement.id, movement.documentId);
+      if (movement.reviewStatus == ReviewStatus.OPEN)
+        recordConcerns(movement.documentId, "movement", movement.id, input, errors);
+    }
     if (!batching.get() && movement.statementId != null && !errors.isEmpty()) {
       var statement = store.get(BankStatement.class, movement.statementId);
       statement.validated = false;
-      review.open(
-          statement.documentId,
-          "document",
-          statement.documentId,
-          "STATEMENT_INTEGRITY",
-          String.join("; ", errors));
     }
     store.flush();
     if (!batching.get()) {
@@ -272,6 +269,23 @@ public class BookkeepingService {
     audit.record(
         id == null ? "CREATE" : "UPDATE", "movement", movement.id, before, movementView(movement));
     return movementView(movement);
+  }
+
+  private void requireValidatedRevision(boolean human, boolean confirmed, Map<String, Object> input) {
+    if (human && confirmed && !flag(input, "validate"))
+      throw DomainException.invalid("Valida as alterações para atualizar este registo.");
+  }
+
+  private boolean validationRequested(
+      Map<String, Object> input, boolean human, ReviewStatus previous, String type, UUID id) {
+    if (!flag(input, "validate") || !human && !review.messages(input.get("issues")).isEmpty()) return false;
+    return human || previous != ReviewStatus.OPEN || review.openFor(type, id).isEmpty();
+  }
+
+  private void recordConcerns(
+      UUID source, String type, UUID id, Map<String, Object> input, List<String> errors) {
+    review.openAll(source, type, id, type.equals("invoice") ? "INVALID_INVOICE" : "INVALID_MOVEMENT", errors);
+    review.openAll(source, type, id, "EXTRACTION_REVIEW", review.messages(input.get("issues")));
   }
 
   /** Reports invoice inconsistencies, including incomplete or inconsistent article totals. */
@@ -369,6 +383,7 @@ public class BookkeepingService {
             : movementView((BankMovement) entity);
     if (entity instanceof Invoice i) i.deleted = true;
     else ((BankMovement) entity).deleted = true;
+    review.resolveFor(type, id);
     store.flush();
     synchronize();
     automatic();
@@ -437,10 +452,12 @@ public class BookkeepingService {
       if (!request.excluded()) {
         var errors = entity instanceof Invoice i ? invoiceErrors(i) : movementErrors((BankMovement) entity);
         if (!errors.isEmpty()) {
+          if (review.protectedRecord(item.type(), item.id()))
+            throw DomainException.invalid(String.join("; ", errors));
           UUID doc;
           if (entity instanceof Invoice i) { i.reviewStatus = ReviewStatus.OPEN; doc = i.documentId; }
           else { var m = (BankMovement) entity; m.reviewStatus = ReviewStatus.OPEN; doc = m.documentId; }
-          review.open(doc, item.type(), item.id(), "INVALID_REINCLUDED_RECORD", String.join("; ", errors));
+          review.openAll(doc, item.type(), item.id(), "INVALID_REINCLUDED_RECORD", errors);
         }
       }
       audit.record(request.excluded() ? "EXCLUDE" : "INCLUDE", item.type(), item.id(),
@@ -782,6 +799,8 @@ public class BookkeepingService {
         i.reviewStatus == ReviewStatus.OPEN ? invoiceErrors(i) : List.of(),
         "reviewStatus",
         i.reviewStatus,
+        "manuallyConfirmed",
+        i.manuallyConfirmed,
         "excluded",
         i.excluded,
         "origin",
@@ -859,6 +878,8 @@ public class BookkeepingService {
         m.reviewStatus == ReviewStatus.OPEN ? movementErrors(m) : List.of(),
         "reviewStatus",
         m.reviewStatus,
+        "manuallyConfirmed",
+        m.manuallyConfirmed,
         "excluded",
         m.excluded,
         "origin",

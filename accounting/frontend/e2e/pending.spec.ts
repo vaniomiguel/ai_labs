@@ -20,26 +20,31 @@ async function openSection(page: Page, name: string) {
   await expect(section).toHaveAttribute('aria-current', 'page');
 }
 async function open(page:Page,view:string,year:number){await page.goto('/');if(view)await openSection(page,view);await setYear(page,year);}
-function pdf(){
+function pdf(name: string){
   const objects=['<< /Type /Catalog /Pages 2 0 R >>','<< /Type /Pages /Kids [3 0 R] /Count 1 >>','<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Resources << >> >>'];
-  let text='%PDF-1.4\n';const offsets=[0];objects.forEach((object,n)=>{offsets.push(Buffer.byteLength(text));text+=`${n+1} 0 obj\n${object}\nendobj\n`;});
+  let text=`%PDF-1.4\n% ${name}\n`;const offsets=[0];objects.forEach((object,n)=>{offsets.push(Buffer.byteLength(text));text+=`${n+1} 0 obj\n${object}\nendobj\n`;});
   const start=Buffer.byteLength(text);text+='xref\n0 4\n0000000000 65535 f \n'+offsets.slice(1).map(n=>String(n).padStart(10,'0')+' 00000 n \n').join('');
   text+=`trailer\n<< /Size 4 /Root 1 0 R >>\nstartxref\n${start}\n%%EOF\n`;return Buffer.from(text);
 }
 async function upload(page:Page,kind:string,name:string,accountId?:string){
-  const csrf=await get(page,'/csrf');const r=await page.request.post('/api/v1/documents',{multipart:{files:{name,mimeType:'application/pdf',buffer:pdf()},kind,...(accountId?{accountId}:{})},headers:{'X-XSRF-TOKEN':csrf.token}});
+  const csrf=await get(page,'/csrf');const r=await page.request.post('/api/v1/documents',{multipart:{files:{name,mimeType:'application/pdf',buffer:pdf(name)},kind,...(accountId?{accountId}:{})},headers:{'X-XSRF-TOKEN':csrf.token}});
   expect(r.ok(),await r.text()).toBeTruthy();return (await r.json())[0];
 }
 async function source(page:Page,kind:'INVOICE'|'STATEMENT',name:string){
   const account=kind==='STATEMENT'?await write(page,'/accounts',{name:'E2E pending account'}):null;
   const document=await upload(page,kind,name,account?.id);
-  const invoice=(number:string,total:string)=>({supplier:number,number,issuedOn:'2016-01-01',total,currency:'EUR',type:'INVOICE',lines:[],categories:[],custom:'keep-'+number});
-  const movement=(description:string,amount:string)=>({description,bookedOn:'2016-01-01',amount,direction:'DEBIT',custom:'keep-'+description});
-  const draft=kind==='INVOICE'?{invoices:[invoice('E2E-SOURCE-I-A','100.00'),invoice('E2E-SOURCE-I-B','50.00')],reference:'preserve-source'}
-    :{movements:[movement('E2E-SOURCE-M-A','100.00'),movement('E2E-SOURCE-M-B','50.00')],reference:'preserve-source'};
-  await write(page,'/documents/'+document.id+'/draft',{version:document.version,draft,resolve:true},'PUT');
-  const resource=kind==='INVOICE'?'invoices':'movements',records=(await get(page,'/documents/'+document.id+'/records'))[resource];
-  for(const row of records){created.push({resource,id:row.id});const current=await get(page,`/${resource}/${row.id}`);await write(page,`/${resource}/${row.id}`,{...current,[kind==='INVOICE'?'issuedOn':'bookedOn']:null,validate:false},'PUT');}
+  const invoice=(number:string,total:string)=>({supplier:number,number,issuedOn:null,total,currency:'EUR',type:'INVOICE',lines:[],custom:'keep-'+number});
+  const movement=(description:string,amount:string)=>({description,bookedOn:null,amount,direction:'DEBIT',accountId:account.id,custom:'keep-'+description});
+  const resource = kind === 'INVOICE' ? 'invoices' : 'movements';
+  const items = kind === 'INVOICE'
+    ? [invoice('E2E-SOURCE-I-A','100.00'), invoice('E2E-SOURCE-I-B','50.00')]
+    : [movement('E2E-SOURCE-M-A','100.00'), movement('E2E-SOURCE-M-B','50.00')];
+  const records = [];
+  for (const item of items) records.push(await create(page, resource, {...item, validate: false}));
+  const draft = {reference:'preserve-source', [resource]: items.map((item, index) => ({...item, id: records[index].id}))};
+  await write(page, '/documents/' + document.id + '/draft', {version: document.version, draft, resolve: false}, 'PUT');
+  for (const row of records)
+    await write(page, `/${resource}/${row.id}`, {...row, documentId: document.id, validate: false}, 'PUT');
   return {document,resource,records};
 }
 test.beforeEach(async({page})=>{
@@ -140,14 +145,19 @@ test('validating a receipt preserves the other receipt and source metadata',asyn
   expect((await get(page,'/invoices/'+records[0].id)).reviewStatus).toBe('CORRECTED');
 });
 
-test('validating one bank row leaves its sibling pending and completes the source after the last row',async({page})=>{
+test('validating bank rows independently leaves the source review open until explicitly resolved',async({page})=>{
   const {document,records}=await source(page,'STATEMENT','E2E-Multiple-movements.pdf');
   const before=await get(page,'/documents/'+document.id);await open(page,'↗ Movimentos',2074);
   const row=page.locator('tr').filter({hasText:'E2E-SOURCE-M-A'});await row.getByRole('button',{name:'Rever e validar',exact:true}).click();
   const dialog=page.getByRole('dialog',{name:'Editar registo',exact:true});await dialog.getByLabel('Data do movimento',{exact:true}).fill('2074-01-01');await dialog.getByRole('button',{name:'Validar e guardar',exact:true}).click();await expect(dialog).not.toBeVisible();
   const after=await get(page,'/documents/'+document.id);expect(after.status).toBe('OPEN');expect(after.draft.movements[1]).toEqual(before.draft.movements[1]);
   const other=await get(page,'/movements/'+records[1].id);expect(other.reviewStatus).toBe('OPEN');await write(page,'/movements/'+other.id,{...other,bookedOn:'2074-01-02',validate:true},'PUT');
-  const finished=await get(page,'/documents/'+document.id);expect(finished.status).toBe('DONE');expect(finished.draft.movements.map((m:any)=>m.id)).toEqual(records.map((r:any)=>r.id));
+  const pending=await get(page,'/documents/'+document.id);
+  expect(pending.status).toBe('OPEN');
+  const finished = await write(page, '/documents/' + document.id + '/draft',
+    {version: pending.version, draft: pending.draft, resolve: true}, 'PUT');
+  expect(finished.status).toBe('DONE');
+  expect(finished.draft.movements.map((m:any)=>m.id)).toEqual(records.map((r:any)=>r.id));
 });
 
 test('pending and excluded markers remain independent after validation',async({page})=>{

@@ -23,12 +23,15 @@ export interface RepairApplyRequest {
 }
 export interface RepairPreview {
   changes: FieldSuggestion[]; blockingIssues: string[]; canApplyDraft: boolean; canValidate: boolean;
+  accepted: FieldSuggestion[];
 }
+
+export interface AlertConcern { code: string; message: string }
 
 export interface AlertView {
   id: string; version: number; documentId: string | null; status: string;
   message: string; code: string; entityType: string; entityId: string;
-  proposal: any; repair: RepairTask | null;
+  concerns?: AlertConcern[]; proposal: any; repair: RepairTask | null;
 }
 
 export interface DocumentAttempt {
@@ -60,6 +63,7 @@ export interface ReviewableRecord {
   id: string; version: number; documentId: string | null;
   documentVersion: number | null; fieldProvenance: Record<string, FieldDecision>; reviewStatus: string; reviewIssues: string[];
   remaining: string | null;
+  manuallyConfirmed: boolean;
   [field: string]: any;
 }
 

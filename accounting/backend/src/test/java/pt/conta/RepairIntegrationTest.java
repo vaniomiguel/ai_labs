@@ -19,6 +19,7 @@ import org.springframework.transaction.annotation.*;
 import org.springframework.transaction.support.TransactionTemplate;
 import pt.conta.ai.*;
 import pt.conta.document.*;
+import pt.conta.invoice.Invoice;
 import pt.conta.jobs.*;
 import pt.conta.review.*;
 import pt.conta.ledger.*;
@@ -59,6 +60,8 @@ class RepairIntegrationTest {
   @Autowired pt.conta.api.DocumentController controller;
   @Autowired AiOrchestrator orchestrator;
   @Autowired JobMonitor jobMonitor;
+  @Autowired BookkeepingService book;
+  @Autowired ReviewService review;
   private record Fixture(UUID doc,UUID alert){}
 
   @BeforeEach void setup(){provider.calls=0;provider.vision=false;provider.varyUsage=false;provider.program=_->Json.write(response(valid(),List.of()));}
@@ -108,6 +111,26 @@ class RepairIntegrationTest {
     assertThat(second.get("version")).isEqualTo(first.get("version"));
     assertThat(task(controller.alert(f.alert)).get("state")).isEqualTo("QUEUED");
     assertThat(jdbc.queryForObject("select count(*) from job where target_id=?",Integer.class,f.alert)).isEqualTo(1);assertNoMoney();
+  }
+
+  @Test void aLateItemRepairRemainsStaleAfterHumanValidation() throws Exception {
+    var doc = store.get(SourceDocument.class, fixture().doc);
+    var item = book.saveInvoice(null, map("documentId", doc.id, "supplier", "Fornecedor", "total", "100.00"));
+    UUID id = (UUID) item.get("id");
+    var alert = review.openFor("invoice", id).orElseThrow();
+    review.open(doc.id, "invoice", id, "EXTRACTION_REVIEW", "Confirma a referência");
+    var claim = request(new Fixture(doc.id, alert.id));
+    var snapshot = repairs.begin(claim);
+    assertThat(snapshot.concerns()).extracting(Alert.Concern::message).contains("Confirma a referência");
+    var invoice = store.get(Invoice.class, id);
+    repairs.saveRecordDraft(alert.id, map("alertVersion", alert.version, "recordVersion", invoice.version,
+        "documentVersion", doc.version, "resolve", true, "draft", valid()));
+    assertThat(repairs.complete(claim, snapshot, response(valid(), List.of("Outro problema")), Map.of(),
+        new ExtractionAttempt.Prompt("Sistema", "Documento"))).isFalse();
+    assertThat(alert.status).isEqualTo("RESOLVED");
+    assertThat(alert.proposal).isNull();
+    assertThat(alert.concerns()).extracting(Alert.Concern::message).doesNotContain("Outro problema");
+    assertThat(task(repairs.view(alert.id))).containsEntry("outcome", "STALE");
   }
 
   @Test void fullTextLongerThanOldChunksReachesTheProviderUnchanged()throws Exception {
@@ -369,7 +392,8 @@ class RepairIntegrationTest {
     assertThat(task(view)).containsEntry("outcome","READY").containsEntry("canApply",true);
     assertThat(store.get(SourceDocument.class,f.doc).draft).doesNotContain("100.00");assertNoMoney();
     controller.apply(f.alert);
-    assertThat(store.all(LedgerEntry.class)).hasSize(1);assertThat(store.get(Alert.class,f.alert).status).isEqualTo("RESOLVED");
+    assertThat(store.all(LedgerEntry.class)).hasSize(1);
+    assertThat(store.get(Alert.class,f.alert).status).isEqualTo("OPEN");
   }
 
   @Test void missingRequiredFieldsAndWarningsProduceAnExplicitReviewResult()throws Exception {
@@ -462,5 +486,31 @@ class RepairIntegrationTest {
       assertThat(a.get(20,TimeUnit.SECONDS)).isEqualTo(b.get(20,TimeUnit.SECONDS));
       assertThat(jdbc.queryForObject("select count(*) from job where target_id=?",Integer.class,f.alert)).isEqualTo(1);
     }finally{jdbc.update("update job set state='DONE' where target_id=?",f.alert);}
+  }
+
+  @Test
+  @Transactional(propagation = Propagation.NOT_SUPPORTED)
+  void concurrentConcernsUseTheSameRecordAlert() throws Exception {
+    UUID invoiceId = UUID.randomUUID();
+    jdbc.update("insert into invoice(id, created_at, updated_at) values (?, now(), now())", invoiceId);
+    try (var pool = Executors.newFixedThreadPool(2)) {
+      var start = new CountDownLatch(1);
+      var extraction = pool.submit(() -> {
+        start.await();
+        return review.open(null, "invoice", invoiceId, "EXTRACTION_REVIEW", "Data ilegível").id;
+      });
+      var verification = pool.submit(() -> {
+        start.await();
+        return review.open(null, "invoice", invoiceId, "AI_CONCERN", "Total incerto").id;
+      });
+      start.countDown();
+      UUID alertId = extraction.get(20, TimeUnit.SECONDS);
+      assertThat(verification.get(20, TimeUnit.SECONDS)).isEqualTo(alertId);
+      assertThat((List<?>) repairs.view(alertId).get("concerns")).hasSize(2);
+    } finally {
+      jdbc.update("delete from audit_event where entity_id in (select id from alert where entity_id=?)", invoiceId);
+      jdbc.update("delete from alert where entity_id=?", invoiceId);
+      jdbc.update("delete from invoice where id=?", invoiceId);
+    }
   }
 }
