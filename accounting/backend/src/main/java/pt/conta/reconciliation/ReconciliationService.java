@@ -26,6 +26,9 @@ public class ReconciliationService {
       String balanceImpact, String periodImpact, boolean spansPeriods,
       LocalDate firstDate, LocalDate lastDate) {}
   public record Page(List<Entry> items, int total, int page, int size) {}
+  private record Groups(
+      Map<UUID, Invoice> invoices, Map<UUID, BankMovement> movements, Map<UUID, UUID> parent,
+      Map<UUID, List<UUID>> members, Map<UUID, List<Allocation>> allocations) {}
 
   private final pt.conta.category.CategoryService categories;
   private final Store store;
@@ -45,6 +48,24 @@ public class ReconciliationService {
   public Page entries(Map<String, String> requested) {
     var filters = new HashMap<String, String>();
     requested.forEach((key, value) -> { if (value != null && !value.isBlank()) filters.put(key, value); });
+    var groups = connectedGroups();
+    var rows = projectEntries(filters, groups, groups.members().keySet());
+    rows.sort(Comparator.comparing((Entry e) -> !(e.pendingReview() && e.firstDate()==null))
+        .thenComparing(Entry::firstDate, Comparator.nullsLast(Comparator.naturalOrder())).thenComparing(Entry::id));
+    int page = Math.max(0, integer(filters, "page", 0));
+    int size = Math.clamp(integer(filters, "size", 100), 1, 500);
+    return new Page(rows.stream().skip((long) page * size).limit(size).toList(), rows.size(), page, size);
+  }
+
+  /** Looks up the current group using a persisted member ID, independent of the list filters. */
+  public Entry entryByRecord(UUID recordId) {
+    var groups = connectedGroups();
+    if (!groups.parent().containsKey(recordId)) throw DomainException.missing();
+    var groupId = root(groups.parent(), recordId);
+    return projectEntries(Map.of(), groups, List.of(groupId)).getFirst();
+  }
+
+  private Groups connectedGroups() {
     var invoiceMap = new LinkedHashMap<UUID, Invoice>();
     var movementMap = new LinkedHashMap<UUID, BankMovement>();
     store.all(Invoice.class).stream().filter(i -> !i.deleted).forEach(i -> invoiceMap.put(i.id, i));
@@ -62,6 +83,12 @@ public class ReconciliationService {
     for (var a : links) groupLinks.computeIfAbsent(root(parent, a.invoiceId), k -> new ArrayList<>()).add(a);
     var groups = new LinkedHashMap<UUID, List<UUID>>();
     parent.keySet().stream().sorted().forEach(id -> groups.computeIfAbsent(root(parent, id), k -> new ArrayList<>()).add(id));
+    return new Groups(invoiceMap, movementMap, parent, groups, groupLinks);
+  }
+
+  private List<Entry> projectEntries(Map<String, String> filters, Groups groups, Collection<UUID> groupIds) {
+    var invoiceMap = groups.invoices();
+    var movementMap = groups.movements();
     var period = period(filters);
     String query = filters.getOrDefault("q", "");
     var search = new HashSet<UUID>();
@@ -71,10 +98,11 @@ public class ReconciliationService {
       search.addAll(movements.search(query, literal));
     }
     var rows = new ArrayList<Entry>();
-    for (var ids : groups.values()) {
+    for (var key : groupIds) {
+      var ids = groups.members().get(key);
       var ii = ids.stream().filter(invoiceMap::containsKey).map(invoiceMap::get).toList();
       var mm = ids.stream().filter(movementMap::containsKey).map(movementMap::get).toList();
-      var aa = groupLinks.getOrDefault(root(parent, ids.getFirst()), List.of());
+      var aa = groups.allocations().getOrDefault(key, List.of());
       boolean pendingReview = ii.stream().anyMatch(i -> i.reviewStatus == ReviewStatus.OPEN)
           || mm.stream().anyMatch(m -> m.reviewStatus == ReviewStatus.OPEN);
       var dates = new ArrayList<LocalDate>();
@@ -127,10 +155,7 @@ public class ReconciliationService {
           hasPeriod(filters) && dates.stream().anyMatch(period.negate()),
           dates.isEmpty() ? null : dates.getFirst(), dates.isEmpty() ? null : dates.getLast()));
     }
-    rows.sort(Comparator.comparing((Entry e) -> !(e.pendingReview() && e.firstDate()==null))
-        .thenComparing(Entry::firstDate, Comparator.nullsLast(Comparator.naturalOrder())).thenComparing(Entry::id));
-    int page = Math.max(0, integer(filters, "page", 0)), size = Math.clamp(integer(filters, "size", 100), 1, 500);
-    return new Page(rows.stream().skip((long) page * size).limit(size).toList(), rows.size(), page, size);
+    return rows;
   }
 
   private UUID root(Map<UUID, UUID> parent, UUID id) {

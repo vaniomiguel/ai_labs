@@ -1,10 +1,12 @@
 import { Component, signal, inject, computed, OnDestroy } from "@angular/core";
-import { CommonModule } from "@angular/common";
+import { CommonModule, Location } from "@angular/common";
+import { ActivatedRouteSnapshot, NavigationEnd, Router, RouterOutlet } from "@angular/router";
+import { takeUntilDestroyed } from "@angular/core/rxjs-interop";
 import { FormsModule } from "@angular/forms";
 import { MatButtonModule } from "@angular/material/button";
 import { MatSnackBar, MatSnackBarModule } from "@angular/material/snack-bar";
 import { A11yModule } from "@angular/cdk/a11y";
-import { Api, euros, errorMessage, labels, JobCounts, JobItem, JobPage } from "./api";
+import { AlertView, Api, euros, errorMessage, labels, JobCounts, JobItem, JobPage, ReconciliationEntry, ReviewableRecord } from "./api";
 import { FieldsEditor } from "./fields-editor";
 import { PdfViewer } from "./pdf-viewer";
 import { ReconciliationTable } from "./reconciliation";
@@ -12,6 +14,11 @@ import { CategoryTags } from "./category-tags";
 import { CategoryEditor } from "./category-editor";
 import { CategoryManager } from "./category-manager";
 import { RepairPanel } from "./repair-panel";
+import { DEFAULT_WORKSPACE_URL, RecordKind, recordView, WORKSPACE_PATHS, WorkspaceRoute, WorkspaceRouteKind, WorkspaceView } from "./workspace-routes";
+
+interface WorkspaceOrigin { url: string; view: WorkspaceView }
+interface SuspendedEditor { url: string; draft: ReviewableRecord }
+const UUID = /^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/i;
 
 /** Owner workspace joining reconciliation, document review and auditable financial records. */
 @Component({
@@ -19,6 +26,7 @@ import { RepairPanel } from "./repair-panel";
   standalone: true,
   imports: [
     CommonModule,
+    RouterOutlet,
     FormsModule,
     MatButtonModule,
     MatSnackBarModule,
@@ -31,6 +39,8 @@ import { RepairPanel } from "./repair-panel";
 })
 export class AppComponent implements OnDestroy {
   private api = inject(Api);
+  private readonly router = inject(Router);
+  private readonly location = inject(Location);
   private readonly snackBar = inject(MatSnackBar);
   private readonly activeOperations = signal(0);
   readonly working = computed(() => this.activeOperations() > 0);
@@ -40,7 +50,16 @@ export class AppComponent implements OnDestroy {
   readonly loading = signal(false);
   readonly error = signal("");
   readonly notice = signal("");
-  readonly view = signal("reconciliation");
+  readonly view = signal<WorkspaceView>("reconciliation");
+  readonly routeLoading = signal(false);
+  readonly routeMessage = signal("");
+  readonly routeKind = signal<WorkspaceRouteKind>("list");
+  readonly routedGroup = signal<ReconciliationEntry | null>(null);
+  readonly exclusionGroup = signal<ReconciliationEntry | null>(null);
+  private sessionReady = false;
+  private routeRequest = 0;
+  private suspendedEditor?: SuspendedEditor;
+  private groupRefreshRequest = 0;
   readonly state = signal<any>({
     invoices: [],
     movements: [],
@@ -95,7 +114,7 @@ export class AppComponent implements OnDestroy {
   uploadKind = "INVOICE";
   uploadAccount = "";
   uploading = signal(false);
-  recordKind = "INVOICE";
+  recordKind: RecordKind = "INVOICE";
   mappingKind = "HISTORY";
   readonly columnNames = Array.from({ length: 26 }, (_, i) =>
     String.fromCharCode(65 + i),
@@ -150,55 +169,179 @@ export class AppComponent implements OnDestroy {
     ["history", "↥", "Histórico"],
     ["settings", "⚙", "Categorias e contas"],
     ["assistant", "✧", "Assistente de IA"],
-  ];
+  ] as const;
   private events?: EventSource;
   private progressRevision = "";
   private financialRequest = 0;
   private refreshTimer?: ReturnType<typeof setTimeout>;
   constructor() {
+    this.router.events.pipe(takeUntilDestroyed()).subscribe(event => {
+      if (event instanceof NavigationEnd && this.sessionReady) void this.applyRoute();
+    });
     void this.restore();
   }
   /** Restores the session without reporting a normal first-time sign-in as an error. */
   async restore() {
     try {
       const me = await this.api.get("/me");
-      this.user.set(me.username);
       await this.api.get("/csrf");
-      await this.refresh();
+      this.user.set(me.username);
       this.connect();
     } catch {
       /* The sign-in screen is the expected anonymous state. */
     }
+    this.sessionReady = true;
+    if (this.router.navigated) await this.applyRoute();
   }
   async login() {
     await this.run(async () => {
       await this.api.signIn(this.username, this.password);
       this.password = "";
       this.user.set((await this.api.get("/me")).username);
-      await this.refresh();
       this.connect();
+      await this.router.navigateByUrl(this.signInDestination(), { replaceUrl: true });
     });
   }
   async logout() {
     await this.run(async () => {
       await this.api.post("/logout");
       this.events?.close();
+      clearTimeout(this.refreshTimer);
       this.user.set("");
+      await this.router.navigateByUrl("/login", { replaceUrl: true });
     });
   }
-  navigate(view: string) {
-    this.view.set(view);
-    this.filters.page = 0;
-    if (view === "processing") {
+  navigate(view: WorkspaceView) {
+    if (view !== this.view()) this.filters.page = 0;
+    if (view === "processing" && view !== this.view()) {
       this.processingState = "active";
       this.processingPage = 0;
-      this.closeJob();
     }
-    if (view === "assistant") void this.loadAssistant();
-    else void this.refresh();
+    void this.router.navigate(["/", WORKSPACE_PATHS[view]]);
+  }
+
+  private signInDestination() {
+    const target = this.router.routerState.snapshot.root.queryParamMap.get("returnTo");
+    return target?.startsWith("/") && !target.startsWith("//") && !target.includes("\\")
+      && !/^\/login(?:[/?#;]|$)/.test(target) ? target : DEFAULT_WORKSPACE_URL;
+  }
+
+  private origin(): WorkspaceOrigin | undefined {
+    const origin = this.location.getState() as { workspaceOrigin?: WorkspaceOrigin };
+    return origin.workspaceOrigin;
+  }
+
+  private openRoute(commands: string[], queryParams?: Record<string, string>) {
+    const workspaceOrigin: WorkspaceOrigin = { url: this.router.url, view: this.view() };
+    void this.router.navigate(["/", ...commands], { queryParams, state: { workspaceOrigin } });
+  }
+
+  closeRoute() {
+    const origin = this.origin();
+    if (origin && origin.url !== this.router.url) this.location.back();
+    else {
+      const route = this.router.routerState.snapshot.root.firstChild;
+      void this.router.navigateByUrl(this.routeParent(route), { replaceUrl: true });
+    }
+  }
+
+  private routeParent(snapshot: ActivatedRouteSnapshot | null) {
+    const route = snapshot?.data as WorkspaceRoute | undefined;
+    if (route?.kind === "new" && snapshot?.queryParamMap.has("historyRowId")) return "/history";
+    return route ? "/" + WORKSPACE_PATHS[route.view] : DEFAULT_WORKSPACE_URL;
+  }
+
+  private async applyRoute() {
+    const snapshot = this.router.routerState.snapshot.root.firstChild;
+    if (!snapshot) return;
+    const route = snapshot.data as WorkspaceRoute;
+    const request = this.resetRoute(route.kind);
+    if (route.kind !== "categories" && this.suspendedEditor?.url !== this.router.url) this.suspendedEditor = undefined;
+    if (!this.user()) {
+      if (route.kind !== "login") {
+        await this.router.navigate(["/login"], { queryParams: { returnTo: this.router.url }, replaceUrl: true });
+      }
+      return;
+    }
+    if (route.kind === "login") {
+      await this.router.navigateByUrl(this.signInDestination(), { replaceUrl: true });
+      return;
+    }
+    this.view.set(this.routeView(route, snapshot));
+    const id = snapshot.paramMap.get("id");
+    if (route.kind === "job" && id && UUID.test(id)) this.selectedJobId.set(id);
+    void this.refresh(false);
+    await this.loadRoute(route, snapshot, id, request);
+  }
+
+  private routeView(route: WorkspaceRoute, snapshot: ActivatedRouteSnapshot): WorkspaceView {
+    if (["new", "edit", "categories", "document"].includes(route.kind)) {
+      const origin = this.origin();
+      if (origin && Object.hasOwn(WORKSPACE_PATHS, origin.view)) return origin.view;
+    }
+    if (route.kind === "new" && snapshot.queryParamMap.has("historyRowId")) return "history";
+    return route.view;
+  }
+
+  private resetRoute(kind: WorkspaceRouteKind) {
+    ++this.financialRequest;
+    ++this.processingRequest;
+    ++this.editorRequest;
+    ++this.documentRequest;
+    this.routeKind.set(kind);
+    this.loading.set(false);
+    this.jobsLoading.set(false);
+    this.routeMessage.set("");
+    this.routeLoading.set(false);
+    this.error.set("");
+    this.editor.set(null);
+    this.reviewDocument.set(null);
+    this.activeAlert.set(null);
+    this.reviewEdits.set(0);
+    this.assignment.set(null);
+    this.categoryTarget.set(null);
+    this.confirmDelete.set(null);
+    this.routedGroup.set(null);
+    this.exclusionGroup.set(null);
+    this.selectedJobId.set(null);
+    this.jobDetail.set(null);
+    this.timeline.set([]);
+    return ++this.routeRequest;
+  }
+
+  private async loadRoute(route: WorkspaceRoute, snapshot: ActivatedRouteSnapshot, id: string | null, request: number) {
+    if (route.kind === "missing" || (id && !UUID.test(id))) {
+      this.routeMessage.set("Página ou registo indisponível.");
+      return;
+    }
+    const kind = route.view === "movements" ? "MOVEMENT" : "INVOICE";
+    if (route.kind === "list" || route.kind === "job") return;
+    this.routeLoading.set(true);
+    try {
+      if (route.kind === "new") await this.loadNewRecord(kind, snapshot.queryParamMap.get("historyRowId"), request);
+      else if (id) await this.loadRouteTarget(route.kind, kind, id, snapshot.queryParamMap.get("movementId"), request);
+    } catch (error) {
+      if (request === this.routeRequest) this.routeMessage.set(errorMessage(error));
+    } finally {
+      if (request === this.routeRequest) this.routeLoading.set(false);
+    }
+  }
+
+  private async loadRouteTarget(action: WorkspaceRouteKind, kind: RecordKind, id: string, candidateId: string | null, request: number) {
+    switch (action) {
+      case "edit": return this.loadRecord(kind, id, request);
+      case "categories": return this.loadCategories(kind, id, request);
+      case "document": return this.loadDocument(id, request);
+      case "alert": return this.loadAlert(id, request);
+      case "group":
+      case "exclude": return this.loadGroup(id, action, request);
+      case "assign": return this.loadAssignment(id, candidateId, request);
+      case "reverse": return this.loadReversal(id, request);
+    }
   }
   /** Reloads server-derived amounts; the browser never calculates financial balances. */
-  async refresh() {
+  async refresh(refreshGroup = true) {
+    if (refreshGroup && this.routeKind() === "group") void this.refreshGroup();
     if (this.view() === "processing") return this.loadProcessing();
     if (this.view() === "assistant") return this.loadAssistant();
     const request = ++this.financialRequest;
@@ -271,7 +414,7 @@ export class AppComponent implements OnDestroy {
       if (!this.uploadAccount && accounts.length)
         this.uploadAccount = accounts[0].id;
     } catch (e) {
-      this.error.set(errorMessage(e));
+      if (request === this.financialRequest) this.error.set(errorMessage(e));
     } finally {
       if (request === this.financialRequest) this.loading.set(false);
     }
@@ -282,24 +425,41 @@ export class AppComponent implements OnDestroy {
     const selectedId = this.selectedJobId();
     this.jobsLoading.set(true);
     try {
-      const [page, detail] = await Promise.all([
+      const [page, detail] = await Promise.allSettled([
         this.api.get<JobPage>("/jobs/page", { state: this.processingState, page: this.processingPage, size: 50 }),
         selectedId ? this.api.get<JobItem>("/jobs/" + selectedId) : Promise.resolve(null),
       ]);
       if (request !== this.processingRequest || this.view() !== "processing") return;
-      if (this.processingPage > 0 && this.processingPage * 50 >= page.total) {
-        this.processingPage = Math.max(0, Math.ceil(page.total / 50) - 1);
+      if (page.status === "rejected") throw page.reason;
+      if (this.processingPage > 0 && this.processingPage * 50 >= page.value.total) {
+        this.processingPage = Math.max(0, Math.ceil(page.value.total / 50) - 1);
         await this.loadProcessing();
         return;
       }
-      this.processing.set(page);
-      this.jobDetail.set(detail);
-      this.counts.update((previous) => ({ ...previous, jobs: page.counts.active, jobStates: page.counts }));
+      this.processing.set(page.value);
+      this.setJobDetail(detail, selectedId);
+      const counts = page.value.counts;
+      this.counts.update((previous) => ({ ...previous, jobs: counts.active, jobStates: counts }));
     } catch (error) {
       if (request === this.processingRequest) this.error.set(errorMessage(error));
     } finally {
       if (request === this.processingRequest) this.jobsLoading.set(false);
     }
+  }
+
+  private setJobDetail(result: PromiseSettledResult<JobItem | null>, id: string | null) {
+    if (!id) return;
+    if (result.status === "rejected") {
+      this.jobDetail.set(null);
+      this.routeMessage.set(errorMessage(result.reason));
+      return;
+    }
+    const opened = !this.jobDetail();
+    this.routeMessage.set("");
+    this.jobDetail.set(result.value);
+    if (opened) setTimeout(() => {
+      if (this.selectedJobId() === id) document.getElementById("job-detail-heading")?.focus();
+    });
   }
   filterJobs(state: string) {
     this.processingState = state;
@@ -310,45 +470,30 @@ export class AppComponent implements OnDestroy {
     const counts = this.counts().jobStates ?? this.processing()?.counts;
     return counts?.[state === "all" ? "total" : state as keyof JobCounts] ?? 0;
   }
-  async openJob(id: string) {
-    this.view.set("processing");
-    this.selectedJobId.set(id);
-    this.jobDetail.set(null);
-    await this.loadProcessing();
-    if (this.selectedJobId() === id) {
-      setTimeout(() => document.getElementById("job-detail-heading")?.focus());
-    }
-  }
-  closeJob() {
-    ++this.processingRequest;
-    this.selectedJobId.set(null);
-    this.jobDetail.set(null);
-    this.jobsLoading.set(false);
-  }
-  async openJobTarget(job: JobItem) {
+  openJob(id: string) { this.openRoute(["processing", id]); }
+
+  openJobTarget(job: JobItem) {
     const target = job.target;
     if (!target.available) return;
-    if (target.type === "document") await this.openDocument(target.id);
+    if (target.type === "document") this.openDocument(target.id);
     else if (target.type === "invoice" || target.type === "movement") {
-      await this.openJobRecord(target.type, target.id);
+      this.openJobRecord(target.type, target.id);
     } else if (target.type === "alert") {
-      await this.run(async () => {
-        const alerts = await this.api.get<any[]>("/alerts");
-        const alert = alerts.find((item) => item.id === target.id);
-        if (alert) await this.openAlert(alert);
-      });
+      this.openAlert(target.id);
     }
   }
-  async openJobRecord(type: "invoice" | "movement", id: string) {
-    await this.run(async () => {
-      await this.editRecord(type === "invoice" ? "INVOICE" : "MOVEMENT",
-        await this.api.get("/" + (type === "invoice" ? "invoices" : "movements") + "/" + id));
-    });
+  openJobRecord(type: "invoice" | "movement", id: string) {
+    this.editRecord(type === "invoice" ? "INVOICE" : "MOVEMENT", { id });
   }
   async loadAssistant() {
+    const request = this.routeRequest;
     await this.run(async () => {
-      this.assistant.set(await this.api.get("/assistant"));
-      this.executions.set(await this.api.get("/assistant/executions"));
+      const [assistant, executions] = await Promise.all([
+        this.api.get("/assistant"), this.api.get<any[]>("/assistant/executions"),
+      ]);
+      if (request !== this.routeRequest) return;
+      this.assistant.set(assistant);
+      this.executions.set(executions);
     });
   }
   async saveModels() {
@@ -387,13 +532,18 @@ export class AppComponent implements OnDestroy {
     input.value = "";
     this.uploading.set(false);
   }
-  newRecord(kind: string) {
-    ++this.editorRequest;
+  newRecord(kind: RecordKind) {
+    this.openRoute([WORKSPACE_PATHS[recordView(kind)], "new"]);
+  }
+
+  private async loadNewRecord(kind: RecordKind, historyId: string | null, request: number) {
+    const history = historyId && kind === "INVOICE" ? await this.historyDraft(historyId) : {};
+    if (kind === "MOVEMENT") await this.loadEditorAccounts(request);
+    if (request !== this.routeRequest) return;
     this.recordKind = kind;
-    this.timeline.set([]);
     this.editor.set(
       kind === "INVOICE"
-        ? { currency: "EUR", type: "INVOICE", lines: [], categories: [] }
+        ? { currency: "EUR", type: "INVOICE", lines: [], categories: [], ...history }
         : {
             accountId: this.uploadAccount || null,
             currency: "EUR",
@@ -402,18 +552,55 @@ export class AppComponent implements OnDestroy {
           },
     );
   }
+
+  private async historyDraft(id: string) {
+    const history = await this.api.get<{ id: string; date: string; description: string; received: string; documentId: string }[]>("/history");
+    const row = history.find(item => item.id === id);
+    if (!row) throw new Error("Linha do histórico indisponível.");
+    return { issuedOn: row.date, description: row.description, total: row.received, documentId: row.documentId };
+  }
   recordTitle(kind:string,row:any) {
     return (kind==='INVOICE'?row.supplier:row.description) || (row.documentId?this.sourceName(row.documentId):kind==='INVOICE'?'Fornecedor por identificar':'Descrição por identificar');
   }
-  closeEditor(){++this.editorRequest;this.editor.set(null);}
-  async editRecord(kind: string, row: any) {
-    const request=++this.editorRequest;
-    await this.run(async()=>{
-      const record=row.id?await this.api.get((kind==='INVOICE'?'/invoices/':'/movements/')+row.id):row;
-      if(request!==this.editorRequest)return;
-      this.recordKind=kind;this.timeline.set([]);this.editor.set(structuredClone(record));
-      if(row.id){const history=await this.api.get('/audit/'+(kind==='INVOICE'?'invoice':'movement')+'/'+row.id);if(request===this.editorRequest)this.timeline.set(history);}
-    });
+  editRecord(kind: RecordKind, row: { id: string }) {
+    this.openRoute([WORKSPACE_PATHS[recordView(kind)], row.id, "edit"]);
+  }
+
+  private fetchRecord(kind: RecordKind, id: string) {
+    return this.api.get<ReviewableRecord>(`/${recordView(kind)}/${id}`);
+  }
+
+  private async loadRecord(kind: RecordKind, id: string, request: number) {
+    const record = await this.fetchRecord(kind, id);
+    if (kind === "MOVEMENT") await this.loadEditorAccounts(request);
+    if (request !== this.routeRequest) return;
+    this.recordKind = kind;
+    const draft = this.suspendedEditor?.url === this.router.url ? this.suspendedEditor.draft : undefined;
+    this.suspendedEditor = undefined;
+    this.editor.set(draft ? {
+      ...draft, categories: record.categories, categoryDetails: record.categoryDetails, classification: record.classification,
+    } : structuredClone(record));
+    const history = await this.api.get<any[]>(`/audit/${WORKSPACE_PATHS[recordView(kind)]}/${id}`);
+    if (request === this.routeRequest) this.timeline.set(history);
+  }
+
+  private async loadEditorAccounts(request: number) {
+    if (request !== this.routeRequest || this.state().accounts.length) return;
+    const accounts = await this.api.get<{ id: string }[]>("/accounts");
+    if (request !== this.routeRequest) return;
+    this.state.update(state => ({ ...state, accounts }));
+    if (!this.uploadAccount && accounts.length) this.uploadAccount = accounts[0].id;
+  }
+
+  openCategories(type: "invoice" | "movement", id: string) {
+    const draft = this.editor();
+    if (draft?.id === id) this.suspendedEditor = { url: this.router.url, draft };
+    this.openRoute([type, id, "categories"]);
+  }
+
+  private async loadCategories(kind: RecordKind, id: string, request: number) {
+    const record = await this.fetchRecord(kind, id);
+    if (request === this.routeRequest) this.categoryTarget.set({ type: WORKSPACE_PATHS[recordView(kind)], record });
   }
   private inCurrentPeriod(date:string|null) {
     if(!date)return false;const [year,month,day]=date.split('-').map(Number);
@@ -431,12 +618,11 @@ export class AppComponent implements OnDestroy {
       if (data.id) await this.api.put(resource + "/" + data.id, data);
       else await this.api.post(resource, data);
       if(request!==this.editorRequest){await this.refresh();return;}
-      this.closeEditor();
+      this.closeRoute();
       this.showSaveSuccess(
         validate ? "Validar e guardar" : "Guardar rascunho",
         this.recordSaveContext(validate, data.issuedOn || data.bookedOn),
       );
-      await this.refresh();
     });
   }
   private recordSaveContext(validate: boolean, date: string | null): string {
@@ -481,19 +667,18 @@ export class AppComponent implements OnDestroy {
       await this.refresh();
     });
   }
-  async openDocument(id: string, alert: any = null) {
-    const request=++this.documentRequest;
-    await this.run(async () => {
-      try {
-        const [document,timeline]=await Promise.all([this.api.get("/documents/"+id),this.api.get("/documents/"+id+"/attempts")]);
-        if(request!==this.documentRequest)return;
-        this.activeAlert.set(alert);
-        this.reviewDocument.set(document);
-        this.timeline.set(timeline);
-      } catch(error) { if(request===this.documentRequest)throw error; }
-    });
+  openDocument(id: string) { this.openRoute(["document", id, "review"]); }
+
+  private async loadDocument(id: string, request: number, alert: AlertView | null = null) {
+    const [source, timeline] = await Promise.all([
+      this.api.get("/documents/" + id), this.api.get<any[]>(`/documents/${id}/attempts`),
+    ]);
+    if (source.kind === "STATEMENT" || source.kind === "MOVEMENT") await this.loadEditorAccounts(request);
+    if (request !== this.routeRequest) return;
+    this.activeAlert.set(alert);
+    this.reviewDocument.set(source);
+    this.timeline.set(timeline);
   }
-  closeReview(){++this.documentRequest;this.reviewDocument.set(null);this.activeAlert.set(null);}
   async saveDraft(resolve: boolean) {
     const doc = this.reviewDocument();
     if (this.working() || !doc) return;
@@ -505,39 +690,32 @@ export class AppComponent implements OnDestroy {
         resolve,
       });
       if (request === this.documentRequest) {
-        this.closeReview();
+        this.closeRoute();
         this.showSaveSuccess(resolve ? "Validar e resolver" : "Guardar sem resolver");
-      }
-      await this.refresh();
+      } else await this.refresh();
     });
   }
   async reprocess() {
+    const request = this.documentRequest;
     await this.run(async () => {
       const doc = this.reviewDocument();
       await this.api.post("/documents/" + doc.id + "/reprocess", {
         version: doc.version,
       });
-      this.reviewDocument.set(null);
+      if (request !== this.documentRequest) return;
       this.notice.set("Nova extração agendada.");
-      await this.refresh();
+      this.closeRoute();
     });
   }
-  async openAlert(alert: any) {
-    if (alert.documentId) await this.openDocument(alert.documentId, alert);
-    else if (alert.entityType === "invoice") {
-      await this.editRecord(
-        "INVOICE",
-        await this.api.get("/invoices/" + alert.entityId),
-      );
-    } else if (alert.entityType === "movement") {
-      await this.editRecord(
-        "MOVEMENT",
-        await this.api.get("/movements/" + alert.entityId),
-      );
-    } else {
-      this.navigate("documents");
-      this.notice.set(alert.message);
-    }
+  openAlert(id: string) { this.openRoute(["alert", id, "review"]); }
+
+  private async loadAlert(id: string, request: number) {
+    const alert = await this.api.get<AlertView>("/alerts/" + id);
+    if (request !== this.routeRequest) return;
+    if (alert.documentId) return this.loadDocument(alert.documentId, request, alert);
+    if (alert.entityType === "invoice") return this.loadRecord("INVOICE", alert.entityId, request);
+    if (alert.entityType === "movement") return this.loadRecord("MOVEMENT", alert.entityId, request);
+    this.routeMessage.set(alert.message);
   }
   reviewEdits=signal(0);
   draftEdited(){this.reviewEdits.update(n=>n+1);}
@@ -557,15 +735,16 @@ export class AppComponent implements OnDestroy {
         }
         this.reviewDocument.set(result);
         if(choices.validate)this.activeAlert.set(null);
-        else this.activeAlert.set(await this.api.get('/alerts/'+this.activeAlert().id));
+        else {
+          const alert = await this.api.get('/alerts/'+this.activeAlert().id);
+          if (request === this.documentRequest) this.activeAlert.set(alert);
+        }
       }
-      this.notice.set(choices.validate?"Escolhas aplicadas e itens selecionados validados.":"Complementos e escolhas guardados no rascunho. Falta validar os itens alterados.");
+      if (request === this.documentRequest) this.notice.set(choices.validate?"Escolhas aplicadas e itens selecionados validados.":"Complementos e escolhas guardados no rascunho. Falta validar os itens alterados.");
       await this.refresh();
     });
   }
-  async inspectRepair(id: string) {
-    this.closeReview();await this.openJob(id);
-  }
+  inspectRepair(id: string) { this.openJob(id); }
   async retry(job: any) {
     await this.run(async () => {
       await this.api.post("/jobs/" + job.id + "/retry");
@@ -579,45 +758,104 @@ export class AppComponent implements OnDestroy {
       this.notice.set("Reconciliação atualizada.");
     });
   }
-  async assign(invoice: any, candidate: any = null, reverses: any = null) {
+  openGroup(id: string) { this.openRoute(["reconciliation", id]); }
+  openExclusion(id: string) { this.openRoute(["reconciliation", id, "exclude"]); }
+
+  private fetchGroup(id: string) {
+    return this.api.get<ReconciliationEntry>("/reconciliation/entries/by-record/" + id);
+  }
+
+  private async loadGroup(id: string, kind: "group" | "exclude", request: number) {
+    const group = await this.fetchGroup(id);
+    if (request !== this.routeRequest) return;
+    if (kind === "group") this.routedGroup.set(group);
+    else if (group.excluded || group.invoices.length + group.movements.length < 2) {
+      this.routeMessage.set("A seleção de registos para excluir já não está disponível.");
+    } else this.exclusionGroup.set(group);
+  }
+
+  private async refreshGroup() {
+    const id = this.router.routerState.snapshot.root.firstChild?.paramMap.get("id");
+    if (!id || !UUID.test(id) || this.routeLoading()) return;
+    const routeRequest = this.routeRequest;
+    const request = ++this.groupRefreshRequest;
+    try {
+      const group = await this.fetchGroup(id);
+      if (routeRequest !== this.routeRequest || request !== this.groupRefreshRequest) return;
+      this.routedGroup.set(group);
+      this.routeMessage.set("");
+    } catch (error) {
+      if (routeRequest !== this.routeRequest || request !== this.groupRefreshRequest) return;
+      this.routedGroup.set(null);
+      this.routeMessage.set(errorMessage(error));
+    }
+  }
+
+  assign(id: string, candidateId?: string) {
+    this.openRoute(["reconciliation", id, "assign"], candidateId ? { movementId: candidateId } : undefined);
+  }
+
+  private async loadAssignment(id: string, candidateId: string | null, request: number) {
+    const group = await this.fetchGroup(id);
+    if (request !== this.routeRequest) return;
+    const invoice = group.invoices.find(record => record.id === id);
+    const movement = group.movements.find(record => record.id === id);
+    const record = invoice ?? movement;
+    if (!record || group.excluded || record.reviewStatus === "OPEN" || !record.remaining || record.remaining === "0.00") {
+      this.routeMessage.set("Este registo já não está disponível para associação.");
+      return;
+    }
+    if (invoice) await this.loadInvoiceAssignment(invoice, candidateId, null, request);
+    else if (movement) await this.loadMovementAssignment(movement, request);
+  }
+
+  private async loadInvoiceAssignment(invoice: ReviewableRecord, candidateId: string | null, reversesId: string | null, request: number) {
+    const [options, candidates] = await Promise.all([
+      this.assignmentOptions("movements"),
+      candidateId ? this.api.get<{ invoiceId: string; movementId: string; amount: string }[]>("/reconciliation/candidates") : [],
+    ]);
+    const candidate = candidates.find(item => item.invoiceId === invoice.id && item.movementId === candidateId);
+    if (candidate && !options.some(item => item.id === candidate.movementId)) {
+      const movement = await this.fetchRecord("MOVEMENT", candidate.movementId);
+      if (this.assignmentEligible(movement)) options.unshift(movement);
+    }
+    if (request !== this.routeRequest) return;
+    const suggested = candidate && options.some(item => item.id === candidate.movementId) ? candidate : undefined;
+    this.assignmentMovements.set(options);
+    this.assignment.set({ invoiceId: invoice.id, movementId: suggested?.movementId ?? "",
+      amount: suggested?.amount ?? invoice.remaining, reversesId, evidence: "Confirmado pelo gestor", invoice });
+  }
+
+  private async loadMovementAssignment(movement: ReviewableRecord, request: number) {
+    const invoices = await this.assignmentOptions("invoices");
+    if (request !== this.routeRequest) return;
+    this.allInvoices.set(invoices);
+    this.assignmentMovements.set([movement]);
+    this.assignment.set({ invoiceId: "", movementId: movement.id, amount: movement.remaining,
+      reversesId: null, evidence: "Confirmado pelo gestor", invoice: null, fromMovement: true });
+  }
+
+  private async assignmentOptions(resource: "invoices" | "movements", q = "") {
+    const { items } = await this.api.get<{ items: ReviewableRecord[] }>(`/${resource}`, { q, size: 500 });
+    return items.filter(item => this.assignmentEligible(item) && (resource === "movements" || item.remaining !== "0.00"));
+  }
+
+  private assignmentEligible(item: ReviewableRecord) { return !item.excluded && item.reviewStatus !== "OPEN"; }
+
+  async searchAssignment(text: string, resource: "invoices" | "movements" = "movements") {
+    const request = this.routeRequest;
     await this.run(async () => {
-      this.assignmentMovements.set(
-        (await this.api.get("/movements", { size: 500 })).items.filter((m: any) => !m.excluded && m.reviewStatus !== 'OPEN'),
-      );
-      this.assignment.set({
-        invoiceId: invoice.id,
-        movementId: candidate?.movementId ?? "",
-        amount: candidate?.amount ?? invoice.remaining,
-        reversesId: reverses?.id ?? null,
-        evidence: "Confirmado pelo gestor",
-        invoice,
-      });
+      const records = await this.assignmentOptions(resource, text);
+      if (request !== this.routeRequest) return;
+      (resource === "movements" ? this.assignmentMovements : this.allInvoices).set(records);
     });
-  }
-  async searchAssignment(text: string) {
-    await this.run(async () =>
-      this.assignmentMovements.set(
-        (await this.api.get("/movements", { q: text, size: 500 })).items.filter((m: any) => !m.excluded && m.reviewStatus !== 'OPEN'),
-      ),
-    );
-  }
-  async assignFromMovement(movement: any) {
-    await this.run(async () => {
-      this.allInvoices.set((await this.api.get("/invoices", { size: 500 })).items.filter((i: any) => !i.excluded && i.reviewStatus !== 'OPEN' && i.remaining !== '0.00'));
-      this.assignmentMovements.set([movement]);
-      this.assignment.set({ invoiceId: '', movementId: movement.id, amount: movement.remaining,
-        reversesId: null, evidence: 'Confirmado pelo gestor', invoice: null, fromMovement: true });
-    });
-  }
-  async searchAssignmentInvoices(text: string) {
-    await this.run(async () => this.allInvoices.set((await this.api.get("/invoices", { q: text, size: 500 })).items
-      .filter((i: any) => !i.excluded && i.reviewStatus !== 'OPEN' && i.remaining !== '0.00')));
   }
   async allocate() {
+    const request = this.routeRequest;
     await this.run(async () => {
       await this.api.post("/allocations", this.assignment());
-      this.assignment.set(null);
-      await this.refresh();
+      if (request === this.routeRequest) this.closeRoute();
+      else await this.refresh();
     });
   }
   async undo(allocation: any) {
@@ -626,9 +864,20 @@ export class AppComponent implements OnDestroy {
       await this.refresh();
     });
   }
-  async reverse(allocation: any) {
-    const invoice = await this.api.get("/invoices/" + allocation.invoiceId);
-    await this.assign(invoice, null, allocation);
+  reverse(allocation: { id: string }) {
+    this.openRoute(["reconciliation", allocation.id, "reverse"]);
+  }
+
+  private async loadReversal(id: string, request: number) {
+    const allocations = await this.api.get<{ id: string; reversesId: string | null; invoiceId: string }[]>("/allocations");
+    const allocation = allocations.find(item => item.id === id && !item.reversesId);
+    if (request !== this.routeRequest) return;
+    if (!allocation) {
+      this.routeMessage.set("Associação indisponível para estorno.");
+      return;
+    }
+    const invoice = await this.fetchRecord("INVOICE", allocation.invoiceId);
+    if (request === this.routeRequest) await this.loadInvoiceAssignment(invoice, null, id, request);
   }
   async link(row: any, invoiceId: string) {
     if (!invoiceId) return;
@@ -642,15 +891,8 @@ export class AppComponent implements OnDestroy {
       (await this.api.get("/invoices", { size: 500 })).items,
     );
   }
-  fromLegacy(row: any) {
-    this.newRecord("INVOICE");
-    this.editor.set({
-      ...this.editor(),
-      issuedOn: row.date,
-      description: row.description,
-      total: row.received,
-      documentId: row.documentId,
-    });
+  fromLegacy(row: { id: string }) {
+    this.openRoute(["invoice", "new"], { historyRowId: row.id });
   }
   async saveCategory(data: any) {
     await this.run(async () => {
@@ -773,17 +1015,19 @@ export class AppComponent implements OnDestroy {
     });
   }
   private async run(operation: () => Promise<unknown>) {
+    const request = this.routeRequest;
     this.activeOperations.update((n) => n + 1);
     this.error.set("");
     try {
       await operation();
     } catch (error) {
-      this.error.set(errorMessage(error));
+      if (request === this.routeRequest) this.error.set(errorMessage(error));
     } finally {
       this.activeOperations.update((n) => n - 1);
     }
   }
   ngOnDestroy() {
+    ++this.routeRequest;
     ++this.documentRequest;
     ++this.editorRequest;
     this.events?.close();

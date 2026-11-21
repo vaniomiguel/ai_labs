@@ -74,7 +74,9 @@ public class FinanceController {
   /** Returns a complete editable invoice. */
   @GetMapping("/invoices/{id}")
   public Map<String, Object> invoice(@PathVariable UUID id) {
-    return book.invoiceView(store.get(Invoice.class, id));
+    var invoice = store.get(Invoice.class, id);
+    if (invoice.deleted) throw DomainException.missing();
+    return book.invoiceView(invoice);
   }
 
   /** Creates an invoice, optionally already validated by the owner. */
@@ -136,7 +138,9 @@ public class FinanceController {
   /** Returns one movement with its source identities. */
   @GetMapping("/movements/{id}")
   public Map<String, Object> movement(@PathVariable UUID id) {
-    return book.movementView(store.get(BankMovement.class, id));
+    var movement = store.get(BankMovement.class, id);
+    if (movement.deleted) throw DomainException.missing();
+    return book.movementView(movement);
   }
 
   /** Creates a bank movement with an optional supporting document. */
@@ -173,6 +177,11 @@ public class FinanceController {
   @GetMapping("/reconciliation/entries")
   public ReconciliationService.Page entries(@RequestParam Map<String, String> filters) {
     return reconciliation.entries(filters);
+  }
+
+  @GetMapping("/reconciliation/entries/by-record/{recordId}")
+  public ReconciliationService.Entry entryByRecord(@PathVariable UUID recordId) {
+    return reconciliation.entryByRecord(recordId);
   }
 
   @PostMapping("/reconciliation/exclusions")

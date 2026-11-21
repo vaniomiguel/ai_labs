@@ -135,6 +135,10 @@ test("an unlabelled invoice can be classified from the list and retried from the
     if (row) row.classification = { ...classification };
     await route.fulfill({ response, json: body });
   });
+  await page.route(`**/api/v1/invoices/${record.id}`, async route => {
+    const response = await route.fetch();
+    await route.fulfill({ response, json: { ...await response.json(), classification: { ...classification } } });
+  });
   await page.route(`**/api/v1/invoices/${record.id}/categories/classify`, async route => {
     expect(route.request().method()).toBe("POST");
     expect(route.request().postDataJSON()).toEqual({ version: classification.version });

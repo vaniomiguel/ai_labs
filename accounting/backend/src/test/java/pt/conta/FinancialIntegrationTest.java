@@ -998,6 +998,27 @@ class FinancialIntegrationTest {
   }
 
   @Test
+  void reconciliationBookmarkFollowsItsRecordThroughGroupChanges() {
+    var invoice = invoice("100.00", "2025-12-10", "ROUTE-ANCHOR-1");
+    UUID id = (UUID) invoice.get("id");
+    var unmatched = finance.entryByRecord(id);
+    assertThat(unmatched.movements()).isEmpty();
+    assertThat(finance.entries(Map.of("year", "2026")).items()).isEmpty();
+
+    var movement = movement("60.00", "2025-12-11", "Pagamento sem referência", "UNCLASSIFIED", "DEBIT");
+    var allocation = allocate(invoice, movement, "60.00");
+    var matched = finance.entryByRecord(id);
+    assertThat(matched.id()).isNotEqualTo(unmatched.id());
+    assertThat(finance.entryByRecord((UUID) movement.get("id"))).isEqualTo(matched);
+
+    book.unallocate((UUID) allocation.get("id"));
+    assertThat(finance.entryByRecord(id).id()).isEqualTo(unmatched.id());
+    book.delete("invoice", id, store.get(Invoice.class, id).version);
+    assertThatThrownBy(() -> finance.entryByRecord(id)).isInstanceOf(DomainException.class);
+    assertThatThrownBy(() -> finance.invoice(id)).isInstanceOf(DomainException.class);
+  }
+
+  @Test
   void filteringAndPagingKeepTheWholeCrossYearGroupAndItsPeriodEffect() {
     var i = invoice("100.00", "2025-12-10", "DATES-1001");
     var m = movement("60.00", "2026-02-12", "Pagamento DATES-1001", "UNCLASSIFIED", "DEBIT");

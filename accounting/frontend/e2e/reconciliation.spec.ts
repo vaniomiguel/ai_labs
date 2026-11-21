@@ -107,6 +107,60 @@ test("cross-year group shows full balance and filtered-period impact separately"
   await expect(rows(page)).toHaveCount(0);
 });
 
+test("a reconciliation link follows its record across refreshes and group changes", async ({ page }) => {
+  const a = await account(page);
+  const record = await invoice(page, 2096, "E2E-ROUTE-1001");
+  const path = `/reconciliation/${record.id}`;
+  await openYear(page, 2096);
+  await rows(page).getByRole("button", { name: "Ver detalhes" }).click();
+  await expect(page).toHaveURL(path);
+  await expect(page.locator("tr.reconciliation-detail")).toContainText("E2E-ROUTE-1001");
+  await page.goBack();
+  await expect(page.locator("tr.reconciliation-detail")).toHaveCount(0);
+  await page.goForward();
+  await expect(page.locator("tr.reconciliation-detail")).toBeVisible();
+
+  await movement(page, a.id, 2096, "Pagamento E2E-ROUTE-1001");
+  await page.reload();
+  await expect(page).toHaveURL(path);
+  await expect(page.locator("tr.reconciliation-detail")).toContainText("Pagamento E2E-ROUTE-1001");
+});
+
+test("association, exclusion and reversal open reloadable reconciliation forms", async ({ page }) => {
+  const a = await account(page);
+  const record = await invoice(page, 2097, "E2E-ROUTE-FORM-1001");
+  const payment = await movement(page, a.id, 2097, "Transferência para associação manual");
+  const groupPath = `/reconciliation/${record.id}`;
+  await page.route("**/api/v1/reconciliation/candidates", route => route.fulfill({ json: [{
+    invoiceId: record.id, movementId: payment.id, amount: "60.00",
+    movementDescription: "Transferência para associação manual", reason: "Sugestão de teste",
+  }] }));
+  await page.goto(groupPath);
+  await page.getByRole("button", { name: /Sugestão de teste/ }).click();
+  const assignment = page.getByRole("dialog", { name: "Associar pagamento" });
+  await expect(page).toHaveURL(`${groupPath}/assign?movementId=${payment.id}`);
+  await page.reload();
+  await expect(assignment.getByRole("combobox", { name: "Movimento", exact: true })).toHaveValue(payment.id);
+  await expect(assignment.getByLabel("Valor a atribuir")).toHaveValue("60.00");
+  await assignment.getByRole("button", { name: "Confirmar associação" }).click();
+  await expect(page).toHaveURL(groupPath);
+  const reversal = page.locator("tr.reconciliation-detail").getByRole("button", { name: "Estornar", exact: true });
+  await expect(reversal).toBeVisible();
+
+  await rows(page).filter({ hasText: "E2E-ROUTE-FORM-1001" }).getByRole("button", { name: "Excluir do saldo", exact: true }).click();
+  await expect(page).toHaveURL(`${groupPath}/exclude`);
+  await page.reload();
+  const exclusion = page.getByRole("dialog", { name: "Excluir do saldo" });
+  await expect(exclusion.getByLabel("Fatura · E2E-ROUTE-FORM-1001")).toBeVisible();
+  await exclusion.getByRole("button", { name: "Cancelar" }).click();
+  await expect(page).toHaveURL(groupPath);
+
+  await reversal.click();
+  await expect(page).toHaveURL(/\/reconciliation\/[0-9a-f-]+\/reverse$/);
+  await page.reload();
+  await expect(assignment.getByRole("heading", { name: "Estornar pagamento" })).toBeVisible();
+});
+
 test("mobile layout scrolls within the table and details open from the keyboard", async ({ page }, testInfo) => {
   const a = await account(page);
   await invoice(page, 2095, "E2E-MOBILE-1001");

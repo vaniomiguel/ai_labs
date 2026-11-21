@@ -4215,6 +4215,30 @@
         }
       }
     },
+    "/reconciliation/entries/by-record/{recordId}": {
+      "get": {
+        "summary": "Grupo de reconciliação atual de uma fatura ou movimento",
+        "description": "Identifica o grupo pelo registo persistido, independentemente dos filtros e da paginação.",
+        "parameters": [
+          {
+            "name": "recordId",
+            "in": "path",
+            "required": true,
+            "schema": { "type": "string", "format": "uuid" }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Grupo atual do registo",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/ReconciliationEntry" } }
+            }
+          },
+          "401": { "description": "Sessão necessária" },
+          "404": { "description": "Registo não encontrado" }
+        }
+      }
+    },
     "/reconciliation/entries": {
       "get": {
         "summary": "Grupos completos e registos sem correspondência, incluindo excluídos",

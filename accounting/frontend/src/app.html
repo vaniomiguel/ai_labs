@@ -1,3 +1,4 @@
+<router-outlet />
 @if(!user()){
 <main class="login-page">
   <section class="login-intro">
@@ -49,6 +50,7 @@
     <nav aria-label="Navegação principal">
       @for(item of navigation;track item[0]){<button
         [class.active]="view()===item[0]"
+        [attr.aria-current]="view()===item[0] ? 'page' : null"
         (click)="navigate(item[0])"
       >
         <span class="nav-icon">{{item[1]}}</span
@@ -106,6 +108,12 @@
           </button>
         </div>
       </div>
+      @if(routeLoading()){<p role="status">A carregar…</p>}
+      @if(routeMessage()){
+      <div class="notice banner" role="status">
+        {{routeMessage()}} <button class="text-button" (click)="closeRoute()">Voltar</button>
+      </div>
+      }
       @if(error()){
       <div class="error banner" role="alert">
         {{error()}}<button aria-label="Fechar mensagem" (click)="error.set('')">
@@ -238,11 +246,13 @@
       } @if(view()==='reconciliation'){
       <reconciliation-table [data]="state().reconciliation" [loading]="loading()" [working]="working()"
         [candidates]="state().candidates" [aiSuggestions]="state().aiSuggestions" [sources]="state().documents"
+        [focusedGroup]="routedGroup()" [exclusionGroup]="exclusionGroup()" (openGroup)="openGroup($event)"
+        (openExclusion)="openExclusion($event)" (closed)="closeRoute()"
         (reconcile)="reconcile()" (changed)="refresh()" (pageChange)="filters.page=$event;refresh()"
         (edit)="editRecord($event.kind,$event.record)" (original)="openDocument($event)"
         (remove)="requestRemoval($event.kind,$event.record)"
-        (categories)="categoryTarget.set($event)" (categoryFilter)="filters.category=$event;refresh()"
-        (assign)="assign($event.invoice,$event.candidate)" (assignMovement)="assignFromMovement($event)"
+        (categories)="openCategories($event.type,$event.record.id)" (categoryFilter)="filters.category=$event;refresh()"
+        (assign)="assign($event.invoice.id,$event.candidate?.movementId)" (assignMovement)="assign($event.id)"
         (undo)="undo($event)" (reverse)="reverse($event)" />
       } @if(view()==='invoices'){
       <section class="panel">
@@ -291,7 +301,7 @@
                 <td>
                   <category-tags [categories]="i.categoryDetails || []" [classification]="i.classification" [editable]="true"
                     [invoiceId]="i.id" (classificationRequested)="refresh()"
-                    (manage)="categoryTarget.set({type:'invoice',record:i})" (filter)="filters.category=$event;refresh()" />
+                    (manage)="openCategories('invoice',i.id)" (filter)="filters.category=$event;refresh()" />
                 </td>
                 <td class="number">{{money(i.total)}}@if(i.reviewStatus==='OPEN'){<small>Provisório · por validar</small>}</td>
                 <td class="number">{{i.reviewStatus==='OPEN'?'—':i.excluded?'—':money(i.remaining)}}</td>
@@ -420,7 +430,7 @@
                   >
                 </td>
                 <td><category-tags [categories]="m.categoryDetails || []" [classification]="m.classification" [editable]="true"
-                  (manage)="categoryTarget.set({type:'movement',record:m})" (filter)="filters.category=$event;refresh()" />
+                  (manage)="openCategories('movement',m.id)" (filter)="filters.category=$event;refresh()" />
                   <small>Natureza: {{labels[m.kind]}}</small></td>
                 <td class="number">
                   {{money(m.amount)}}<small
@@ -599,7 +609,7 @@
       <section class="panel job-detail" aria-labelledby="job-detail-heading">
         <div class="section-heading">
           <div><h2 id="job-detail-heading" tabindex="-1">{{labels[job.kind]||job.kind}}</h2><p>{{job.target.label}}</p></div>
-          <button class="icon-button" aria-label="Fechar detalhe da tarefa" (click)="closeJob()">×</button>
+          <button class="icon-button" aria-label="Fechar detalhe da tarefa" (click)="closeRoute()">×</button>
         </div>
         <div class="settings-body">
           <dl class="job-facts">
@@ -694,7 +704,7 @@
                 HH:mm'}}</small
               >}
             </div>
-            <button mat-stroked-button (click)="openAlert(a)">
+            <button mat-stroked-button (click)="openAlert(a.id)">
               Consultar →
             </button>
           </article>
@@ -1036,7 +1046,7 @@
   </main>
 </div>
 } @if(editor();as data){
-<div class="modal-backdrop" (keydown.escape)="!working() && closeEditor()">
+<div class="modal-backdrop" (keydown.escape)="!working() && closeRoute()">
   <section
     class="dialog wide"
     role="dialog"
@@ -1053,7 +1063,7 @@
       <button
         class="icon-button"
         aria-label="Fechar editor"
-        (click)="closeEditor()"
+        (click)="closeRoute()"
       >
         ×
       </button>
@@ -1071,7 +1081,7 @@
         />
         @if(data.id){<section class="record-categories"><h3>Categorias</h3>
           <category-tags [categories]="data.categoryDetails || []" [classification]="data.classification" [editable]="true"
-            (manage)="categoryTarget.set({type:recordKind==='INVOICE'?'invoice':'movement',record:data})" />
+            (manage)="openCategories(recordKind==='INVOICE'?'invoice':'movement',data.id)" />
         </section>}
         <label
           >Documento de suporte · opcional<input
@@ -1129,7 +1139,7 @@
       <button
         class="icon-button"
         aria-label="Fechar revisão"
-        (click)="closeReview()"
+        (click)="closeRoute()"
       >
         ×
       </button>
@@ -1233,7 +1243,7 @@
       <h2>{{data.reversesId?'Estornar pagamento':'Associar movimento'}}</h2>
       <button
         class="icon-button"
-        (click)="assignment.set(null)"
+        (click)="closeRoute()"
         aria-label="Fechar associação"
       >
         ×
@@ -1244,7 +1254,7 @@
       <p><strong>{{data.invoice.number||data.invoice.supplier}}</strong> · Por reconciliar {{money(data.invoice.remaining)}}</p>
       }
       @if(data.fromMovement){
-      <label>Procurar fatura<input #invoiceSearch (keyup.enter)="searchAssignmentInvoices(invoiceSearch.value)" placeholder="Fornecedor ou número; Enter para pesquisar" /></label>
+      <label>Procurar fatura<input #invoiceSearch (keyup.enter)="searchAssignment(invoiceSearch.value,'invoices')" placeholder="Fornecedor ou número; Enter para pesquisar" /></label>
       <label>Fatura<select [(ngModel)]="data.invoiceId"><option value="">Selecionar</option>
         @for(i of allInvoices();track i.id){<option [value]="i.id">{{i.issuedOn}} · {{i.number||i.supplier}} · {{money(i.remaining)}}</option>}
       </select></label>
@@ -1314,5 +1324,5 @@
 }
 
 @if(categoryTarget();as target){
-  <category-editor [type]="target.type" [record]="target.record" (closed)="categoryTarget.set(null)" (changed)="refresh()" />
+  <category-editor [type]="target.type" [record]="target.record" (closed)="closeRoute()" (changed)="refresh()" />
 }

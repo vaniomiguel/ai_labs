@@ -15,7 +15,7 @@
         <th class="number">Saldo do grupo</th><th>Estado</th><th><span class="sr-only">Ações</span></th>
       </tr></thead>
       <tbody>
-        @for(entry of data().items; track entry.id) {
+        @for(entry of visibleEntries(); track entry.id) {
           <tr class="reconciliation-entry" [class.excluded-entry]="entry.excluded" [class.pending]="entry.pendingReview || entry.status==='PENDING_REVIEW'" [attr.data-entry-id]="entry.id">
             <td class="reconciliation-documents">
               @if(entry.invoices.length === 1) {
@@ -28,7 +28,7 @@
                 <button class="row-title bank-description" (click)="edit.emit({kind:'MOVEMENT',record:entry.movements[0]})">{{recordName('MOVEMENT',entry.movements[0])}}</button>
               } @else if(entry.movements.length > 1) { <small>{{entry.movements.length}} movimentos</small> }
               <category-tags [categories]="groupCategories(entry)" (filter)="categoryFilter.emit($event)" />
-              <button class="text-button expand-entry" [attr.aria-expanded]="expanded().has(entry.id)" [attr.aria-controls]="'detail-'+entry.id" (click)="toggle(entry.id)">{{expanded().has(entry.id)?'Fechar detalhes':'Ver detalhes'}}</button>
+              <button class="text-button expand-entry" [attr.aria-expanded]="isExpanded(entry.id)" [attr.aria-controls]="'detail-'+entry.id" (click)="toggle(entry)">{{isExpanded(entry.id)?'Fechar detalhes':'Ver detalhes'}}</button>
             </td>
             <td class="nowrap">
               @if(entry.invoices.length === 1) { <span>Fatura <time>{{entry.invoices[0].issuedOn || 'Em falta'}}</time></span> }
@@ -59,7 +59,7 @@
               @for(m of entry.movements;track m.id){<button class="text-button" (click)="edit.emit({kind:'MOVEMENT',record:m})">Rever e validar</button>}
             }<button class="text-button participation-action" [disabled]="saving() || working()" (click)="participation(entry)">{{entry.excluded?'Voltar a incluir':'Excluir do saldo'}}</button></div></td>
           </tr>
-          @if(expanded().has(entry.id)) {
+          @if(isExpanded(entry.id)) {
             <tr class="reconciliation-detail" [id]="'detail-'+entry.id"><td colspan="7">
               @if(entry.excluded) { <p>Excluído dos cálculos e da procura de correspondências. O original e o histórico estão preservados.</p> }
               @if(entry.pendingReview || entry.status==='PENDING_REVIEW') { <p>Fora dos cálculos até os dados serem validados.</p> }
@@ -129,16 +129,16 @@
   </div></div>
 </section>
 @if(selection(); as selection) {
-  <div class="modal-backdrop" (keydown.escape)="!saving() && this.selection.set(null)">
+  <div class="modal-backdrop" (keydown.escape)="!saving() && closeSelection()">
     <section class="dialog compact" role="dialog" aria-modal="true" aria-labelledby="exclude-title" cdkTrapFocus [cdkTrapFocusAutoCapture]="true">
-      <header class="dialog-heading"><h2 id="exclude-title">Excluir do saldo</h2><button class="icon-button" aria-label="Fechar exclusão" [disabled]="saving()" (click)="this.selection.set(null)">×</button></header>
+      <header class="dialog-heading"><h2 id="exclude-title">Excluir do saldo</h2><button class="icon-button" aria-label="Fechar exclusão" [disabled]="saving()" (click)="closeSelection()">×</button></header>
       <div class="dialog-body">
         <p>Escolhe os registos a excluir. Os restantes voltam a procurar correspondências.</p>
         <div class="row-actions"><button class="text-button" (click)="select('invoice')">Só faturas</button><button class="text-button" (click)="select('movement')">Só movimentos</button><button class="text-button" (click)="select('all')">Ambos / todo o grupo</button></div>
         @for(item of selection.items; track item.id) { <label class="exclusion-option"><input type="checkbox" [(ngModel)]="item.selected" [disabled]="saving()" />{{item.type==='invoice'?'Fatura':'Movimento'}} · {{item.label}}</label> }
         @if(error()) { <p class="error" role="alert">{{error()}}</p> }
       </div>
-      <footer class="dialog-footer"><button mat-stroked-button [disabled]="saving()" (click)="this.selection.set(null)">Cancelar</button><button mat-flat-button [disabled]="saving() || !hasSelection()" (click)="applySelection()">Excluir selecionados</button></footer>
+      <footer class="dialog-footer"><button mat-stroked-button [disabled]="saving()" (click)="closeSelection()">Cancelar</button><button mat-flat-button [disabled]="saving() || !hasSelection()" (click)="applySelection()">Excluir selecionados</button></footer>
     </section>
   </div>
 }
