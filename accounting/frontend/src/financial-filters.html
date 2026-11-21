@@ -1,0 +1,88 @@
+<section class="filter-bar" aria-label="Filtros">
+  <div class="filter-controls">
+    <label class="filter-year">Ano
+      <input #yearInput type="number" min="2016" max="2100" [required]="requiresYear()"
+        [value]="filters().year ?? ''" (change)="applyYear(yearInput)" />
+    </label>
+    <label class="filter-month">Mês
+      <select aria-label="Mês" [ngModel]="filters().month" (ngModelChange)="changed.emit({ month: $event })">
+        <option value="">Todos os meses</option>
+        @for (month of months(); track month) {
+          <option [value]="$index + 1">{{ month }}</option>
+        }
+      </select>
+    </label>
+    @if (hasSearch()) {
+      <label class="search-field">Pesquisar
+        <input type="search" [ngModel]="searchDraft() ?? filters().q" (ngModelChange)="searchDraft.set($event)"
+          (keydown.enter)="search()" [placeholder]="view() === 'history' ? 'Descrição…' : 'Fornecedor, descrição, texto…'" />
+      </label>
+      <button type="button" mat-stroked-button (click)="search()">Pesquisar</button>
+    }
+    @if (hasAdvanced()) {
+      <div #advanced class="advanced-filters" (focusout)="dismissOnBlur($event, advanced)"
+        (keydown.escape)="closeAdvanced(advancedTrigger)">
+        <button #advancedTrigger type="button" mat-stroked-button [attr.aria-expanded]="advancedOpen()"
+          [attr.aria-controls]="advancedOpen() ? 'advanced-filter-panel' : null" (click)="toggleAdvanced()">
+          Mais filtros
+        </button>
+        @if (advancedOpen()) {
+          <form id="advanced-filter-panel" class="filter-popover" aria-label="Mais filtros"
+            ngNativeValidate (ngSubmit)="applyAdvanced(advancedTrigger)">
+            <div class="form-grid">
+              @if (view() === 'reconciliation') {
+                <label>Participação no saldo
+                  <select name="participation" [(ngModel)]="advancedDraft.participation">
+                    <option value="">Todos, incluindo excluídos</option>
+                    <option value="active">Incluídos</option>
+                    <option value="excluded">Excluídos</option>
+                  </select>
+                </label>
+              }
+              <label>Dia<input type="number" name="day" min="1" max="31" [(ngModel)]="advancedDraft.day" /></label>
+              <label>Desde<input type="date" name="from" [(ngModel)]="advancedDraft.from" /></label>
+              <label>Até<input type="date" name="to" [(ngModel)]="advancedDraft.to" /></label>
+              <label>Categoria
+                <select name="category" [(ngModel)]="advancedDraft.category">
+                  <option value="">Todas</option>
+                  @for (category of categories(); track category.id) {
+                    @if (!category.archived || category.id === filters().category) {
+                      <option [value]="category.id">{{ category.path }}</option>
+                    }
+                  }
+                </select>
+              </label>
+              <label>Revisão
+                <select name="status" [(ngModel)]="advancedDraft.status">
+                  <option value="">Todos</option>
+                  @for (status of reviewStatuses; track status) {
+                    <option [value]="status">{{ labels[status] }}</option>
+                  }
+                </select>
+              </label>
+              @if (hasMovementFields()) {
+                <label>Direção
+                  <select name="direction" [(ngModel)]="advancedDraft.direction">
+                    <option value="">Ambas</option>
+                    <option value="DEBIT">Débito</option>
+                    <option value="CREDIT">Crédito</option>
+                  </select>
+                </label>
+              }
+              <label>Montante mínimo<input name="min" inputmode="decimal" [(ngModel)]="advancedDraft.min" /></label>
+              <label>Montante máximo<input name="max" inputmode="decimal" [(ngModel)]="advancedDraft.max" /></label>
+              @if (hasMovementFields()) {
+                <label>Hora<input type="time" name="time" [(ngModel)]="advancedDraft.time" /></label>
+              }
+            </div>
+            <div class="filter-popover-actions">
+              <button type="button" mat-button (click)="closeAdvanced(advancedTrigger)">Cancelar</button>
+              <button type="submit" mat-flat-button>Aplicar filtros</button>
+            </div>
+          </form>
+        }
+      </div>
+    }
+  </div>
+  <applied-filters [items]="chips()" [canClear]="canClear()" (removed)="remove($event)" (cleared)="clear()" />
+</section>
