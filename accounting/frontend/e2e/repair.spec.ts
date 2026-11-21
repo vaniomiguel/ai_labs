@@ -147,8 +147,10 @@ test("closing stops polling and reopening restores the completed proposal",async
   await dialog.getByRole("button",{name:"Fechar revisão",exact:true}).click();
   await page.waitForTimeout(300);const gets=state.gets;
   await page.waitForTimeout(2200);expect(state.gets).toBe(gets);
-  state.result();await open();
+  state.result({...valid(),supplierTaxId:'500960046'});await open();
   await expect(dialog.getByText("Proposta disponível",{exact:true})).toBeVisible();expect(state.posts).toBe(1);
+  const taxIdChoice = dialog.getByRole('group', {name: 'Escolha para NIF do fornecedor', exact: true});
+  await expect(taxIdChoice.getByRole('button', {name: 'Aceitar valor da IA', exact: true})).toBeEnabled();
 });
 
 test("waiting and failed tasks explain the problem and allow a new attempt",async({page})=>{
@@ -264,10 +266,19 @@ test("incomplete draft additions are actionable on mobile with the keyboard",asy
   await page.setViewportSize({width:390,height:844});
   const {state,dialog}=await setup(page);state.submitted=()=>state.result({...valid(),issuedOn:null},'REVIEW_REQUIRED');
   await dialog.getByRole('button',{name:'✧ Pedir tentativa de correção à IA',exact:true}).click();
+  const supplierChoice = dialog.getByRole('group', {name: 'Escolha para Fornecedor', exact: true});
+  const acceptSupplier = supplierChoice.getByRole('button', {name: 'Aceitar valor da IA', exact: true});
+  await expect(acceptSupplier).toHaveAttribute('aria-pressed', 'false');
+  await expect(supplierChoice.getByRole('button', {name: 'Manter o meu valor', exact: true})).toHaveCount(0);
+  await acceptSupplier.press('Enter');
+  await expect(acceptSupplier).toHaveAttribute('aria-pressed', 'true');
+  await expect.poll(() => state.lastPreview?.acceptedFields).toEqual(['root:supplier']);
+  await expect(dialog.getByLabel('Fornecedor', {exact: true})).toHaveValue('');
   const save=dialog.getByRole('button',{name:'Aplicar ao rascunho',exact:true});await expect(save).toBeEnabled();
   await save.scrollIntoViewIfNeeded();await page.screenshot({path:testInfo.outputPath('repair-complements-mobile.png'),fullPage:true});
   await save.focus();await page.keyboard.press('Enter');await expect.poll(()=>state.applies).toBe(1);
-  expect(state.lastApply.validate).toBe(false);await expect(dialog.getByLabel('Fornecedor',{exact:true})).toHaveValue('Fornecedor IA');
+  expect(state.lastApply).toMatchObject({validate: false, acceptedFields: ['root:supplier']});
+  await expect(dialog.getByLabel('Fornecedor',{exact:true})).toHaveValue('Fornecedor IA');
   await expect(dialog.getByLabel('Data de emissão',{exact:true})).toHaveValue('');
 });
 
@@ -291,11 +302,21 @@ test("a multi-invoice proposal only validates the checked item and preserves edi
   await expect.poll(()=>state.lastPreview?.draft.invoices[0].issuedOn).toBe('2026-02-14');
   await expect(dialog.getByLabel('Data de emissão',{exact:true}).nth(0)).toHaveValue('2026-02-14');
   await expect(dialog.getByLabel('Data de emissão',{exact:true}).nth(1)).toHaveValue('');
-  await dialog.getByLabel('Fornecedor',{exact:true}).nth(1).fill('Edição local do segundo comprovativo');
+  const siblingSupplier = dialog.getByLabel('Fornecedor', {exact: true}).nth(1);
+  await siblingSupplier.fill('Edição local do segundo comprovativo');
+  await siblingSupplier.blur();
+  await expect.poll(() => state.lastPreview?.draft.invoices[1].supplier).toBe('Edição local do segundo comprovativo');
+  const dateChoice = repairItem.getByRole('group', {name: 'Escolha para Data de emissão', exact: true});
+  const acceptDate = dateChoice.getByRole('button', {name: 'Aceitar valor da IA', exact: true});
+  await acceptDate.click();
+  await expect.poll(() => state.lastPreview?.acceptedFields).toEqual([`${second}:issuedOn`]);
   await dialog.getByRole('checkbox',{name:'Comprovativo 2',exact:true}).uncheck();
+  await expect(acceptDate).toBeDisabled();
+  await expect.poll(() => state.lastPreview?.acceptedFields).toEqual([]);
   await expect(dialog.getByRole('button',{name:'Aplicar proposta e validar',exact:true})).toBeEnabled();
   await dialog.getByRole('button',{name:'Aplicar proposta e validar',exact:true}).click();
-  await expect.poll(()=>state.applies).toBe(1);expect(state.lastApply.selectedItems).toEqual([first]);
+  await expect.poll(()=>state.applies).toBe(1);
+  expect(state.lastApply).toMatchObject({selectedItems: [first], acceptedFields: []});
   expect(state.lastApply.draft.invoices[0]).toMatchObject({issuedOn:'2026-02-14'});
   expect(state.lastApply.draft.invoices[0]).not.toHaveProperty('dueOn');
   expect(state.lastApply.draft.invoices[1].issuedOn).toBeNull();

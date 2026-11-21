@@ -41,12 +41,12 @@ import { Api, AlertView, FieldSuggestion, RepairApplyRequest, RepairPreview, eur
                   @if(change.protected){<small class="human-decision">Valor definido ou confirmado por ti · protegido</small>}
                   <div><section><small>Atual</small><pre>{{format(change.field,change.current)}}</pre></section><span>→</span><section><small>Proposto pela IA</small><pre>{{format(change.field,change.proposed)}}</pre></section></div>
                   @if(evidence(change);as proof){<p class="hint">Evidência: {{proof}}</p>}
-                  @if(change.kind==='CONFLICT'){
-                    <div class="row-actions" [attr.aria-label]="'Escolha para '+fieldName(change.field)">
+                  <div class="row-actions" role="group" [attr.aria-label]="'Escolha para '+fieldName(change.field)">
+                    @if(change.kind==='CONFLICT'){
                       <button mat-stroked-button [attr.aria-pressed]="!accepted().has(change.key)" (click)="choose(change.key,false)">Manter o meu valor</button>
-                      <button mat-stroked-button [attr.aria-pressed]="accepted().has(change.key)" [disabled]="!included().has(item.id)" (click)="choose(change.key,true)">Aceitar valor da IA</button>
-                    </div>
-                  }
+                    }
+                    <button mat-stroked-button [attr.aria-pressed]="accepted().has(change.key)" [disabled]="!included().has(item.id)" (click)="choose(change.key,true)">Aceitar valor da IA</button>
+                  </div>
                 </div>}
               </section>
             }
@@ -137,7 +137,18 @@ export class RepairPanel implements OnChanges, OnDestroy {
     if(!this.canApply())return 'Podes guardar os complementos no rascunho. Para validar: '+(this.preview()?.blockingIssues||[]).join('; ');
     return 'A validação aplica-se apenas aos itens selecionados.';
   }
-  payload(validate:boolean):RepairApplyRequest{return {documentVersion:this.document().version,proposalId:this.current()?.proposal?.jobId||this.current()!.id,draft:structuredClone(this.document().draft),acceptedFields:[...this.accepted()],selectedItems:[...this.included()],validate};}
+  payload(validate: boolean): RepairApplyRequest {
+    const included = this.included();
+    const includedFieldKeys = new Set(this.changes().filter(change => included.has(change.itemId)).map(change => change.key));
+    return {
+      documentVersion: this.document().version,
+      proposalId: this.current()?.proposal?.jobId || this.current()!.id,
+      draft: structuredClone(this.document().draft),
+      acceptedFields: [...this.accepted()].filter(key => includedFieldKeys.has(key)),
+      selectedItems: [...included],
+      validate,
+    };
+  }
   choose(key:string,accept:boolean){const selected=new Set(this.accepted());accept?selected.add(key):selected.delete(key);this.accepted.set(selected);this.queuePreview();}
   toggleItem(id:string){const selected=new Set(this.included());selected.has(id)?selected.delete(id):selected.add(id);this.included.set(selected);this.queuePreview();}
   private queuePreview(){clearTimeout(this.previewTimer);this.previewing.set(true);const sequence=++this.previewSequence;this.previewTimer=setTimeout(()=>void this.loadPreview(sequence),200);}
