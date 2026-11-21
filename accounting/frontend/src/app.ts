@@ -6,7 +6,7 @@ import { FormsModule } from "@angular/forms";
 import { MatButtonModule } from "@angular/material/button";
 import { MatSnackBar, MatSnackBarModule } from "@angular/material/snack-bar";
 import { A11yModule } from "@angular/cdk/a11y";
-import { AlertView, Api, DocumentAttempt, euros, errorMessage, labels, JobCounts, JobItem, JobPage, ReconciliationEntry, ReconciliationPage, ReviewableRecord } from "./api";
+import { AiExecutionItem, AlertView, Api, contextUsagePercent, contextWarningLabels, DocumentAttempt, euros, errorMessage, labels, JobCounts, JobItem, JobPage, ReconciliationEntry, ReconciliationPage, ReviewableRecord } from "./api";
 import { AppliedFilters } from "./applied-filters";
 import { FinancialFilterBar } from "./financial-filters";
 import { DEFAULT_CATALOG_FILTERS, defaultFinancialFilters, financialQuery, initialFinancialFilters, isFinancialFilterView } from "./workspace-filters";
@@ -51,6 +51,8 @@ export class AppComponent implements OnDestroy {
   readonly working = computed(() => this.activeOperations() > 0);
   readonly money = euros;
   readonly labels = labels;
+  readonly contextWarningLabels = contextWarningLabels;
+  readonly contextUsagePercent = contextUsagePercent;
   readonly user = signal("");
   readonly loading = signal(false);
   readonly error = signal("");
@@ -83,7 +85,8 @@ export class AppComponent implements OnDestroy {
     reconciliation: EMPTY_RECONCILIATION_PAGE,
   });
   readonly assistant = signal<any>(null);
-  readonly executions = signal<any[]>([]);
+  readonly executions = signal<AiExecutionItem[]>([]);
+  private executionHistoryRequest = 0;
   readonly counts = signal<{jobs: number; alerts: number; jobStates?: JobCounts}>({ jobs: 0, alerts: 0 });
   readonly processing = signal<JobPage | null>(null);
   readonly jobDetail = signal<JobItem | null>(null);
@@ -516,13 +519,18 @@ export class AppComponent implements OnDestroy {
   async loadAssistant() {
     const request = this.routeRequest;
     await this.run(async () => {
-      const [assistant, executions] = await Promise.all([
-        this.api.get("/assistant"), this.api.get<any[]>("/assistant/executions"),
+      const [assistant] = await Promise.all([
+        this.api.get("/assistant"), this.loadExecutionHistory(),
       ]);
-      if (request !== this.routeRequest) return;
-      this.assistant.set(assistant);
-      this.executions.set(executions);
+      if (request === this.routeRequest) this.assistant.set(assistant);
     });
+  }
+
+  private async loadExecutionHistory() {
+    const route = this.routeRequest;
+    const request = ++this.executionHistoryRequest;
+    const executions = await this.api.get<AiExecutionItem[]>("/assistant/executions");
+    if (route === this.routeRequest && request === this.executionHistoryRequest) this.executions.set(executions);
   }
   async saveModels() {
     await this.run(async () => {
@@ -1064,7 +1072,10 @@ export class AppComponent implements OnDestroy {
         this.repairProgress.set(next.revision);
         this.counts.set(next);
         clearTimeout(this.refreshTimer);
-        this.refreshTimer = setTimeout(() => void this.refresh(), 800);
+        this.refreshTimer = setTimeout(() => {
+          if (this.view() === "assistant") void this.run(() => this.loadExecutionHistory());
+          else void this.refresh();
+        }, 800);
       }
     });
   }

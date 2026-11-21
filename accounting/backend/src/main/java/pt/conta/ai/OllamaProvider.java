@@ -2,6 +2,7 @@ package pt.conta.ai;
 
 import static pt.conta.shared.Inputs.map;
 
+import com.fasterxml.jackson.databind.JsonNode;
 import java.time.Duration;
 import java.util.*;
 import org.springframework.http.*;
@@ -13,6 +14,8 @@ import pt.conta.shared.*;
 /** Native Ollama adapter supporting local catalog, image input and JSON Schema output. */
 @Component
 public class OllamaProvider implements AiProvider {
+  private static final int OUTPUT_LIMIT_TOKENS = 8192;
+  private static final int CONTEXT_WARNING_PERCENT = 80;
   private final RestClient shortClient;
   private final RestClient modelClient;
   private final String endpoint;
@@ -69,7 +72,29 @@ public class OllamaProvider implements AiProvider {
 
   /** Requests bounded structured output; model content is never executed as instructions or SQL. */
   @Override
-  public String complete(Request request) {
+  public Completion complete(Request request) {
+    var body = chatBody(request);
+    try {
+      var response = Json.read(modelClient.post().uri("/api/chat")
+          .contentType(MediaType.APPLICATION_JSON).body(Json.write(body)).retrieve().body(String.class));
+      return completion(request, response);
+    } catch (org.springframework.web.client.ResourceAccessException e) {
+      throw unavailable(e);
+    } catch (org.springframework.web.client.HttpClientErrorException.NotFound e) {
+      throw new AiUnavailable("O modelo " + request.model() + " não está disponível em " + endpoint, e);
+    } catch (org.springframework.web.client.HttpClientErrorException.BadRequest e) {
+      if (e.getResponseBodyAsString().toLowerCase(Locale.ROOT)
+          .matches("(?s).*(context|token limit|too many images|input.{0,20}too long).*$")) {
+        var capacity = capacity(request.model());
+        throw new ContextExceeded(
+            "O modelo recusou o contexto integral por exceder a sua capacidade. Seleciona uma configuração com maior contexto ou revê o documento manualmente.",
+            new Usage(null, null, capacity.tokens(), capacity.source(), null, ContextWarning.CONTEXT_REJECTED));
+      }
+      throw e;
+    }
+  }
+
+  private Map<String, Object> chatBody(Request request) {
     var user = map("role", "user", "content", request.input());
     if (!request.images().isEmpty()) user.put("images", request.images());
     var body =
@@ -85,32 +110,62 @@ public class OllamaProvider implements AiProvider {
             "format",
             request.schema(),
             "options",
-            map("temperature", 0, "num_ctx", contextTokens, "num_predict", 8192));
-    if(request.requireFullContext()) { body.put("truncate",false); body.put("shift",false); }
-    try {
-      var response =
-          Json.read(
-              modelClient
-                  .post()
-                  .uri("/api/chat")
-                  .contentType(MediaType.APPLICATION_JSON)
-                  .body(Json.write(body))
-                  .retrieve()
-                  .body(String.class));
-      String content = response.path("message").path("content").asText();
-      if(request.requireFullContext()&&"length".equals(response.path("done_reason").asText()))
-        throw new AiProvider.ContextExceeded("O modelo atingiu o limite de contexto ou da resposta antes de concluir a proposta. Seleciona uma configuração com maior capacidade ou revê o documento manualmente.");
-      if (content.isBlank()) throw new IllegalArgumentException("Resposta vazia do modelo");
-      return content;
-    } catch (org.springframework.web.client.ResourceAccessException e) {
-      throw unavailable(e);
-    } catch (org.springframework.web.client.HttpClientErrorException.NotFound e) {
-      throw new AiUnavailable("O modelo " + request.model() + " não está disponível em " + endpoint, e);
-    } catch (org.springframework.web.client.HttpClientErrorException.BadRequest e) {
-      if(e.getResponseBodyAsString().toLowerCase(java.util.Locale.ROOT).matches("(?s).*(context|token limit|too many images|input.{0,20}too long).*$"))
-        throw new AiProvider.ContextExceeded("O modelo recusou o contexto integral por exceder a sua capacidade. Seleciona uma configuração com maior contexto ou revê o documento manualmente.");
-      throw e;
+            map("temperature", 0, "num_ctx", contextTokens, "num_predict", OUTPUT_LIMIT_TOKENS));
+    if (request.requireFullContext()) {
+      body.put("truncate", false);
+      body.put("shift", false);
     }
+    return body;
+  }
+
+  private Completion completion(Request request, JsonNode response) {
+    var capacity = capacity(request.model());
+    Integer prompt = tokenCount(response.path("prompt_eval_count"));
+    Integer generated = tokenCount(response.path("eval_count"));
+    String reason = response.path("done_reason").asText(null);
+    var warning = warning(prompt, generated, capacity.tokens(), reason);
+    var usage = new Usage(prompt, generated, capacity.tokens(), capacity.source(), reason, warning);
+    if (request.requireFullContext() && "length".equals(reason))
+      throw new ContextExceeded(
+          "O modelo atingiu o limite de contexto ou da resposta antes de concluir a proposta. Seleciona uma configuração com maior capacidade ou revê o documento manualmente.",
+          usage);
+    return new Completion(response.path("message").path("content").asText(), usage);
+  }
+
+  private ContextWarning warning(Integer prompt, Integer generated, int budget, String reason) {
+    Long total = prompt == null || generated == null ? null : (long) prompt + generated;
+    boolean interrupted = "length".equals(reason);
+    boolean atOutputCap = generated != null && generated >= OUTPUT_LIMIT_TOKENS;
+    if (total != null && total >= budget) {
+      return interrupted && atOutputCap ? ContextWarning.RESPONSE_INTERRUPTED : ContextWarning.CONTEXT_LIMIT_REACHED;
+    }
+    if (interrupted) {
+      return atOutputCap && total != null ? ContextWarning.OUTPUT_LIMIT_REACHED : ContextWarning.RESPONSE_INTERRUPTED;
+    }
+    return total != null && total * 100 >= (long) budget * CONTEXT_WARNING_PERCENT
+        ? ContextWarning.NEAR_CONTEXT_LIMIT : null;
+  }
+
+  private record Capacity(int tokens, CapacitySource source) {}
+
+  private Capacity capacity(String model) {
+    try {
+      var running = Json.read(shortClient.get().uri("/api/ps").retrieve().body(String.class));
+      for (var entry : running.path("models")) {
+        Integer tokens = tokenCount(entry.path("context_length"));
+        if (tokens != null && tokens > 0 && tokens <= contextTokens
+            && (model.equals(entry.path("model").asText()) || model.equals(entry.path("name").asText()))) {
+          return new Capacity(tokens, CapacitySource.RUNNING_MODEL);
+        }
+      }
+    } catch (org.springframework.web.client.RestClientException | IllegalArgumentException ignored) {
+      // Capacity discovery is optional and must not invalidate a chat response.
+    }
+    return new Capacity(contextTokens, CapacitySource.CONFIGURED);
+  }
+
+  private Integer tokenCount(JsonNode value) {
+    return value.isIntegralNumber() && value.canConvertToInt() && value.intValue() >= 0 ? value.intValue() : null;
   }
 
   /** Omits credentials and query strings from connection diagnostics. */

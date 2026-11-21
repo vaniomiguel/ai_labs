@@ -41,7 +41,10 @@ class CategoryIntegrationTest {
     int calls;
     Function<Request, String> program;
     public List<Model> models() { return List.of(new Model("qwen3.5:9b", "test-categories", false, true, true)); }
-    public String complete(Request request) { calls++; return program.apply(request); }
+    public Completion complete(Request request) {
+      calls++;
+      return new Completion(program.apply(request), new Usage(100, 30, 1000, CapacitySource.CONFIGURED, "stop", null));
+    }
   }
   @Autowired BookkeepingService book;
   @Autowired CategoryService categories;
@@ -209,9 +212,14 @@ class CategoryIntegrationTest {
       assertThat(Json.read(request.input()).path("reference").path("version").asText()).isEqualTo("OCC-SNC-2019-02-EXPENSES-2");
       return Json.write(result(List.of(label(reference("6263").toString(),"Seguro anual")),List.of()));
     };
-    worker.process(classificationJob("CLASSIFY_INVOICE", id));
+    var job = classificationJob("CLASSIFY_INVOICE", id);
+    worker.process(job);
     assertThat(names("invoice",id)).containsExactly("Seguros");assertThat(provider.calls).isEqualTo(1);
-    assertThat(store.all(AiExecution.class)).hasSize(1);
+    assertThat(store.all(AiExecution.class)).singleElement().satisfies(execution -> {
+      assertThat(execution.jobId).isEqualTo(job.id());
+      assertThat(execution.model).isEqualTo("qwen3.5:9b");
+      assertThat(execution.usage().responseTokens()).isEqualTo(30);
+    });
     worker.process(new JobQueue.Claim(UUID.randomUUID(),"NORMALIZE_CATEGORIES",id,0,"{}",0));
     assertThat(provider.calls).isEqualTo(1);
   }

@@ -39,17 +39,29 @@ class RepairIntegrationTest {
   @TestConfiguration static class Providers {@Bean @Primary FakeProvider repairProvider(){return new FakeProvider();}}
   static class FakeProvider implements AiProvider {
     int calls;boolean vision;Function<Request,String> program;
+    boolean varyUsage;
     public List<Model> models(){return List.of(new Model("qwen3.5:9b","repair-test-digest",vision,true,true));}
-    public String complete(Request request){calls++;return program.apply(request);}
+    public Completion complete(Request request) {
+      calls++;
+      var usage = !varyUsage ? new Usage(700, 100, 1000, CapacitySource.RUNNING_MODEL,
+          "stop", ContextWarning.NEAR_CONTEXT_LIMIT) : statementUsage();
+      return new Completion(program.apply(request), usage);
+    }
+    private Usage statementUsage() {
+      return calls == 1
+          ? new Usage(900, 100, 1000, CapacitySource.RUNNING_MODEL, "stop", ContextWarning.CONTEXT_LIMIT_REACHED)
+          : new Usage(700, 100, 1000, CapacitySource.RUNNING_MODEL, "stop", ContextWarning.NEAR_CONTEXT_LIMIT);
+    }
   }
   @Autowired Store store;@Autowired RepairService repairs;@Autowired RepairAiWorker worker;
   @Autowired FakeProvider provider;@Autowired DocumentStorage storage;@Autowired JdbcTemplate jdbc;
   @Autowired TransactionTemplate transactions;@Autowired JobQueue queue;
   @Autowired pt.conta.api.DocumentController controller;
   @Autowired AiOrchestrator orchestrator;
+  @Autowired JobMonitor jobMonitor;
   private record Fixture(UUID doc,UUID alert){}
 
-  @BeforeEach void setup(){provider.calls=0;provider.vision=false;provider.program=_->Json.write(response(valid(),List.of()));}
+  @BeforeEach void setup(){provider.calls=0;provider.vision=false;provider.varyUsage=false;provider.program=_->Json.write(response(valid(),List.of()));}
   private Map<String,Object> valid(){return map("issuedOn","2026-01-01","supplier","Fornecedor de teste","total","100.00",
       "currency","EUR","type","INVOICE","categories",List.of(),"lines",List.of());}
   private Map<String,Object> response(Map<String,Object> draft,List<String> issues){return map("draft",draft,"evidence",List.of(),"issues",issues);}
@@ -105,7 +117,15 @@ class RepairIntegrationTest {
     var f=fixture(source,1,"{\"pages\":[{\"page\":1,\"text\":\"excerto incompleto\"}]}");
     provider.program=request->{assertThat(Json.read(request.input()).path("sourceText").asText()).isEqualTo(source);
       assertThat(request.input()).contains("Falta a data da fatura");assertThat(request.images()).isEmpty();assertThat(request.requireFullContext()).isTrue();return Json.write(response(valid(),List.of()));};
-    process(request(f));assertThat(provider.calls).isEqualTo(1);assertNoMoney();
+    var job = request(f);
+    process(job);
+    assertThat(provider.calls).isEqualTo(1);
+    assertThat(store.all(AiExecution.class)).singleElement().satisfies(execution -> {
+      assertThat(execution.jobId).isEqualTo(job.id());
+      assertThat(execution.model).isEqualTo("qwen3.5:9b");
+      assertThat(execution.usage().contextTokens()).isEqualTo(1000);
+    });
+    assertNoMoney();
   }
 
   @Test void humanFieldProvenanceAndComplementOnlyInstructionsReachTheModel()throws Exception {
@@ -231,17 +251,37 @@ class RepairIntegrationTest {
     historicalAttempt.engine = "PDFBOX";
     store.add(historicalAttempt);
     var sent = new ArrayList<AiProvider.Request>();
+    provider.varyUsage = true;
     provider.program = request -> {
       sent.add(request);
       return Json.write(statementResponse());
     };
-    orchestrator.process(new JobQueue.Claim(UUID.randomUUID(), "AI_EXTRACT_DOCUMENT", doc.id, doc.version, "{}", 0));
+    queue.enqueue("AI_EXTRACT_DOCUMENT", doc.id, doc.version, "{}");
+    var job = queue.claim().orElseThrow();
+    orchestrator.process(job);
 
     assertThat(sent).hasSize(2);
     var attempts = controller.attempts(doc.id);
     assertThat(attempts).hasSize(2);
     assertThat(attempts.getFirst()).containsEntry("prompts", List.of());
     assertThat(attempts.getLast()).containsEntry("prompts", sent.stream().map(this::promptMessages).toList());
+    assertStatementUsage(job);
+  }
+
+  private void assertStatementUsage(JobQueue.Claim job) {
+    assertThat(store.all(AiExecution.class)).hasSize(2).allSatisfy(execution -> {
+      assertThat(execution.jobId).isEqualTo(job.id());
+      assertThat(execution.model).isEqualTo("qwen3.5:9b");
+    }).extracting(e -> e.contextWarning).containsExactly(
+        AiProvider.ContextWarning.CONTEXT_LIMIT_REACHED, AiProvider.ContextWarning.NEAR_CONTEXT_LIMIT);
+    store.flush();
+    var detail = Json.read(Json.write(jobMonitor.detail(job.id())));
+    assertThat(detail.path("contextWarning").path("usage").path("warning").asText()).isEqualTo("CONTEXT_LIMIT_REACHED");
+    queue.finish(job, null, false);
+    var active = Json.read(Json.write(jobMonitor.page("active", 0, 50)));
+    var latest = active.path("recentContextWarnings").get(0);
+    assertThat(latest.path("jobId").asText()).isEqualTo(job.id().toString());
+    assertThat(latest.path("warning").path("model").asText()).isEqualTo("qwen3.5:9b");
   }
 
   private Map<String, Object> promptMessages(AiProvider.Request request) {

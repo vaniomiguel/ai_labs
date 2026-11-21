@@ -98,6 +98,48 @@ export interface ExclusionRequest {
   reason?: string;
 }
 
+export const contextWarningLabels = {
+  NEAR_CONTEXT_LIMIT: "Contexto próximo do limite",
+  CONTEXT_LIMIT_REACHED: "Limite de contexto atingido",
+  CONTEXT_REJECTED: "Pedido recusado por exceder o limite de contexto",
+  OUTPUT_LIMIT_REACHED: "Resposta interrompida no limite de geração",
+  RESPONSE_INTERRUPTED: "Resposta interrompida pelo modelo",
+} as const;
+
+export interface AiContextUsage {
+  promptTokens: number | null;
+  responseTokens: number | null;
+  contextTokens: number;
+  capacitySource: "CONFIGURED" | "RUNNING_MODEL";
+  doneReason: string | null;
+  warning: keyof typeof contextWarningLabels | null;
+}
+
+export function contextUsagePercent(usage: AiContextUsage): number | null {
+  if (usage.promptTokens == null || usage.responseTokens == null) return null;
+  return Math.floor(100 * (usage.promptTokens + usage.responseTokens) / usage.contextTokens);
+}
+
+export interface AiExecutionItem {
+  id: string;
+  task: string;
+  model: string;
+  digest: string;
+  promptVersion: string;
+  durationMs: number;
+  outcome: string;
+  createdAt: string;
+  response: string | null;
+  error: string | null;
+  usage: AiContextUsage | null;
+}
+
+interface JobContextWarning {
+  model: string;
+  createdAt: string;
+  usage: AiContextUsage & { warning: keyof typeof contextWarningLabels };
+}
+
 export interface JobCounts {
   QUEUED: number;
   RUNNING: number;
@@ -133,6 +175,7 @@ export interface JobItem {
   updatedAt: string;
   availableAt: string | null;
   target: JobTarget;
+  contextWarning?: JobContextWarning | null;
 }
 export interface JobPage {
   items: JobItem[];
@@ -140,6 +183,7 @@ export interface JobPage {
   page: number;
   size: number;
   counts: JobCounts;
+  recentContextWarnings?: { jobId: string; kind: string; warning: JobContextWarning }[];
 }
 
 /** Same-origin API client. Angular supplies XSRF headers from the authenticated cookie. */

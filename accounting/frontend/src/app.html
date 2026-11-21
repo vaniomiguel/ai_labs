@@ -537,6 +537,22 @@
         <applied-filters class="panel-filters" [items]="processingFilterChips()" [canClear]="processingState() !== 'all'"
           (removed)="filterJobs('all')" (cleared)="filterJobs('all')" />
       </section>
+      <div aria-live="polite">
+        @if(processing()?.recentContextWarnings?.length){
+        <section class="panel" aria-labelledby="context-warnings-heading">
+          <div class="section-heading"><h2 id="context-warnings-heading">Avisos recentes do modelo</h2></div>
+          <ul>
+            @for(item of processing()?.recentContextWarnings ?? []; track item.jobId){
+            <li>
+              <button class="text-button" (click)="openJob(item.jobId)">{{labels[item.kind]||item.kind}}</button>
+              · {{item.warning.model}} · {{contextWarningLabels[item.warning.usage.warning]}}
+              <span class="hint"> · {{item.warning.createdAt|date:'dd/MM/yyyy HH:mm'}}</span>
+            </li>
+            }
+          </ul>
+        </section>
+        }
+      </div>
       @if(selectedJobId() && !jobDetail() && jobsLoading()){
       <p role="status">A carregar o detalhe da tarefa…</p>
       }
@@ -558,6 +574,11 @@
           </dl>
           @if(job.state==='WAITING'){<p class="hint">A tarefa retoma automaticamente quando o modelo estiver disponível. As esperas pelo modelo não contam como tentativas com erro.</p>}
           @if(job.error){<p class="notice job-error">{{job.error}}</p>}
+          @if(job.contextWarning; as warning){
+          <p class="notice"><strong>{{contextWarningLabels[warning.usage.warning]}}</strong> · {{warning.model}}
+            <ng-container *ngTemplateOutlet="contextUsageDetails; context: {$implicit: warning.usage}" />
+          </p>
+          }
           @if(!job.target.available){<p class="hint">O registo associado já não está disponível. O histórico desta tarefa mantém-se acessível.</p>}
           @if(job.target.type==='allocation'&&job.target.available){
           <div class="allocation-summary">
@@ -588,14 +609,21 @@
         <div class="section-heading"><h2>Tarefas <span class="count">{{processing()?.total??0}}</span></h2><span class="hint" role="status">{{jobsLoading()?'A atualizar…':'Atualização automática'}}</span></div>
         <div class="table-scroll">
           <table class="processing-table">
-            <thead><tr><th>Tarefa / registo associado</th><th>Estado</th><th>Última atualização</th><th>Espera ou erro</th></tr></thead>
+            <thead><tr><th>Tarefa / registo associado</th><th>Estado</th><th>Última atualização</th><th>Avisos ou erros</th></tr></thead>
             <tbody>
               @for(job of processing()?.items??[];track job.id){
               <tr [class.selected-job]="selectedJobId()===job.id">
                 <td><button class="text-button job-open" (click)="openJob(job.id)"><strong>{{labels[job.kind]||job.kind}}</strong><span>{{job.target.label}}</span><small>Consultar detalhe →</small></button></td>
                 <td><span class="badge" [class.warning]="job.state==='WAITING'||job.state==='FAILED'">{{labels[job.state]}}</span></td>
                 <td>{{job.updatedAt|date:'dd/MM/yyyy HH:mm:ss'}}</td>
-                <td class="job-error">{{job.error||(job.state==='WAITING'?'A aguardar disponibilidade do modelo.':'—')}}</td>
+                <td class="job-error">
+                  @if(job.contextWarning; as warning){
+                  <div><span class="badge warning">{{contextWarningLabels[warning.usage.warning]}}</span> · {{warning.model}}</div>
+                  }
+                  @if(job.error){<div>{{job.error}}</div>}
+                  @else if(job.state==='WAITING'){<div>A aguardar disponibilidade do modelo.</div>}
+                  @else if(!job.contextWarning){—}
+                </td>
               </tr>
               }@empty{
               <tr><td colspan="4" class="empty-state">{{jobsLoading()?'A carregar tarefas…':'Não existem tarefas neste estado.'}}</td></tr>
@@ -958,13 +986,20 @@
         <details class="execution">
           <summary>
             <span>{{e.task}} · <strong>{{e.model}}</strong></span
-            ><span>{{e.outcome}} · {{e.durationMs}} ms</span>
+            ><span>
+              @if(e.usage?.warning; as warning){<span class="badge warning">{{contextWarningLabels[warning]}}</span> ·}
+              {{e.outcome}} · {{e.durationMs}} ms
+            </span>
           </summary>
           <p class="hint">
             {{e.createdAt|date:'dd/MM/yyyy HH:mm'}} · prompt {{e.promptVersion}}
             · modelo {{e.digest}}
           </p>
-          <pre>{{e.response}}</pre>
+          @if(e.usage; as usage){
+          <p><ng-container *ngTemplateOutlet="contextUsageDetails; context: {$implicit: usage}" /></p>
+          }
+          @if(e.error){<p class="notice job-error">{{e.error}}</p>}
+          @if(e.response !== null){<pre>{{e.response}}</pre>}
         </details>
         }@empty{
         <div class="empty-state">
@@ -974,6 +1009,16 @@
         }
       </section>
       } }
+      <ng-template #contextUsageDetails let-usage>
+        <span>
+          Entrada: {{usage.promptTokens != null ? (usage.promptTokens | number) : 'indisponível'}} ·
+          Resposta: {{usage.responseTokens != null ? (usage.responseTokens | number) : 'indisponível'}} ·
+          {{usage.capacitySource === 'RUNNING_MODEL' ? 'Contexto do modelo em execução' : 'Contexto configurado'}}:
+          {{usage.contextTokens | number}} tokens
+          @if(contextUsagePercent(usage) !== null){ · {{contextUsagePercent(usage)}}% usados}
+          @if(usage.doneReason === 'length' && usage.warning === 'CONTEXT_LIMIT_REACHED'){ · Resposta interrompida}
+        </span>
+      </ng-template>
       <footer class="content-footer">
         Conta · Documentos e decisões com história
         <span>EUR · Europe/Lisbon</span>

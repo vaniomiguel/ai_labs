@@ -73,9 +73,10 @@ class AutomaticReviewIntegrationTest {
     public List<Model> models() {
       return List.of(new Model("qwen3.5:9b", "review-test-digest", true, true, true));
     }
-    public String complete(Request request) {
+    public Completion complete(Request request) {
       requests.add(request);
-      return program.apply(request);
+      return new Completion(program.apply(request), new Usage(700, 100, 1000, CapacitySource.CONFIGURED,
+          "stop", ContextWarning.NEAR_CONTEXT_LIMIT));
     }
   }
 
@@ -110,15 +111,23 @@ class AutomaticReviewIntegrationTest {
       assertThat(field(input, "lines[0].total")).containsEntry("recordedValue", "100.00");
       return result("CONCERN", finding("total", "100.00", "120.00", "invoice", TOTAL));
     };
-    var report = run("REVIEW_INVOICE", invoice);
+    var job = claim("REVIEW_INVOICE", invoice);
+    orchestrator.process(job);
+    queue.finish(job, null, false);
+    var report = report(job);
     assertThat(report).containsEntry("verdict", "CONCERN").containsEntry("coverage", "FULL");
     assertThat(rows(report, "concerns").getFirst()).containsEntry("verified", true).containsEntry("page", null);
     assertThat(invoice.reviewStatus).isEqualTo(ReviewStatus.OPEN);
     assertThat(invoice.total).isEqualByComparingTo("100.00");
     assertThat(sibling.reviewStatus).isEqualTo(ReviewStatus.AUTOMATIC);
     assertThat(store.all(Alert.class)).anyMatch(alert -> alert.entityId.equals(invoice.id) && alert.code.equals("AI_CONCERN"));
-    assertThat(store.all(AiExecution.class)).anyMatch(execution -> execution.task.equals("automatic-review")
-        && execution.response.contains(TOTAL));
+    assertThat(store.all(AiExecution.class)).anySatisfy(execution -> {
+      assertThat(execution.task).isEqualTo("automatic-review");
+      assertThat(execution.jobId).isEqualTo(job.id());
+      assertThat(execution.model).isEqualTo("qwen3.5:9b");
+      assertThat(execution.usage().warning()).isEqualTo(AiProvider.ContextWarning.NEAR_CONTEXT_LIMIT);
+      assertThat(execution.response).contains(TOTAL);
+    });
   }
 
   @Test

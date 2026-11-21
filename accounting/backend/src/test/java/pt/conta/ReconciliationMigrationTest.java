@@ -29,8 +29,14 @@ class ReconciliationMigrationTest {
       posting(jdbc, invoicePosting, "INVOICE", invoice, "2025-12-10", "100.00");
       posting(jdbc, allocationPosting, "ALLOCATION", allocation, "2026-02-12", "-100.00");
       posting(jdbc, transferPosting, "MOVEMENT", transfer, "2026-02-14", "-10.00");
+      UUID execution = UUID.randomUUID();
+      jdbc.update("insert into ai_execution(id,created_at,updated_at,model,outcome) values(?,now(),now(),'legacy-model','VALID')",
+          execution);
       Flyway flyway = Flyway.configure().dataSource(source).load();
-      assertThat(flyway.migrate().migrationsExecuted).isEqualTo(6);
+      assertThat(flyway.migrate().migrationsExecuted).isEqualTo(7);
+      assertThat(jdbc.queryForMap("select model, job_id, context_tokens, context_warning from ai_execution where id=?",
+          execution)).containsEntry("model", "legacy-model").containsEntry("job_id", null)
+          .containsEntry("context_tokens", null).containsEntry("context_warning", null);
       assertThat(jdbc.queryForObject("select count(*) from ledger_entry where id in (?,?,?)", Integer.class, invoicePosting, allocationPosting, transferPosting)).isEqualTo(3);
       assertThat(jdbc.queryForObject("select count(*) from ledger_entry where reverses_id in (?,?)", Integer.class, allocationPosting, transferPosting)).isEqualTo(2);
       assertThat(jdbc.queryForObject("select active from allocation where id=?", Boolean.class, allocation)).isTrue();

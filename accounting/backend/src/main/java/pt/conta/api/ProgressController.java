@@ -65,7 +65,9 @@ public class ProgressController {
                     + " allocation),'epoch'::timestamptz),coalesce((select max(updated_at) from"
                     + " ledger_entry),'epoch'::timestamptz),coalesce((select max(updated_at) from category),'epoch'::timestamptz),"
                     + "coalesce((select max(updated_at) from record_classification),'epoch'::timestamptz),"
-                    + "coalesce((select max(updated_at) from category_catalog),'epoch'::timestamptz))::text",
+                    + "coalesce((select max(updated_at) from category_catalog),'epoch'::timestamptz))::text"
+                    + " || '|' || coalesce((select id::text from ai_execution"
+                    + " order by created_at desc,id desc limit 1),'')",
                 String.class));
   }
 

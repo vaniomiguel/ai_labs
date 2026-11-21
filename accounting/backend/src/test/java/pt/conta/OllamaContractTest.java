@@ -6,6 +6,7 @@ import static pt.conta.shared.Inputs.map;
 import com.sun.net.httpserver.HttpServer;
 import java.net.*;
 import java.nio.file.Path;
+import java.nio.charset.StandardCharsets;
 import java.util.*;
 import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.Test;
@@ -26,11 +27,95 @@ class OllamaContractTest {
       var provider=new OllamaProvider(new AccountingProperties(Path.of("/tmp"),"owner","unused",
           "http://127.0.0.1:"+server.getAddress().getPort(),"http://localhost:8090","",3,false,100,1000000,1000000));
       assertThatThrownBy(()->provider.complete(new AiProvider.Request("test","Instructions","Full input",map("type","object"),List.of())))
-          .isInstanceOf(AiProvider.ContextExceeded.class).hasMessageContaining("contexto integral");
+          .isInstanceOfSatisfying(AiProvider.ContextExceeded.class, error -> {
+            assertThat(error.getMessage()).contains("contexto integral");
+            assertThat(error.usage()).isEqualTo(new AiProvider.Usage(null, null, 16384,
+                AiProvider.CapacitySource.CONFIGURED, null, AiProvider.ContextWarning.CONTEXT_REJECTED));
+          });
       reject.set(false);
       assertThatThrownBy(()->provider.complete(new AiProvider.Request("test","Instructions","Full input",map("type","object"),List.of(),true)))
-          .isInstanceOf(AiProvider.ContextExceeded.class).hasMessageContaining("antes de concluir");
+          .isInstanceOfSatisfying(AiProvider.ContextExceeded.class, error -> {
+            assertThat(error.getMessage()).contains("antes de concluir");
+            assertThat(error.usage().warning()).isEqualTo(AiProvider.ContextWarning.RESPONSE_INTERRUPTED);
+          });
     }finally{server.stop(0);}
+  }
+
+  @Test
+  void measuresEachCallAgainstTheSelectedRunningModelAndUsesExactThresholds() throws Exception {
+    var chat = new AtomicReference<Map<String, Object>>();
+    var processes = map("models", List.of(
+        map("model", "other:test", "context_length", 100),
+        map("model", "selected:test", "context_length", 1000)));
+    var server = usageServer(chat, processes);
+    try {
+      var provider = stubProvider(server);
+      chat.set(chatResponse(799, 0, "stop"));
+      assertThat(provider.complete(usageRequest()).usage().warning()).isNull();
+      chat.set(chatResponse(739, 61, "stop"));
+      assertThat(provider.complete(usageRequest()).usage()).isEqualTo(new AiProvider.Usage(
+          739, 61, 1000, AiProvider.CapacitySource.RUNNING_MODEL, "stop", AiProvider.ContextWarning.NEAR_CONTEXT_LIMIT));
+      chat.set(chatResponse(900, 100, "length"));
+      assertThat(provider.complete(usageRequest()).usage().warning())
+          .isEqualTo(AiProvider.ContextWarning.CONTEXT_LIMIT_REACHED);
+    } finally {
+      server.stop(0);
+    }
+  }
+
+  @Test
+  void toleratesMissingCountsAndDistinguishesTheOutputCapFromTheWindow() throws Exception {
+    var chat = new AtomicReference<Map<String, Object>>();
+    var server = usageServer(chat, map("models", List.of(map("name", "unrelated:test", "context_length", 1000))));
+    try {
+      var provider = stubProvider(server);
+      chat.set(chatResponse(500, null, "stop"));
+      assertThat(provider.complete(usageRequest()).usage()).isEqualTo(new AiProvider.Usage(
+          500, null, 16384, AiProvider.CapacitySource.CONFIGURED, "stop", null));
+      chat.set(chatResponse(500, 8192, "length"));
+      assertThat(provider.complete(usageRequest()).usage().warning())
+          .isEqualTo(AiProvider.ContextWarning.OUTPUT_LIMIT_REACHED);
+      chat.set(chatResponse(8192, 8192, "length"));
+      assertThat(provider.complete(usageRequest()).usage().warning())
+          .isEqualTo(AiProvider.ContextWarning.RESPONSE_INTERRUPTED);
+    } finally {
+      server.stop(0);
+    }
+  }
+
+  private Map<String, Object> chatResponse(int prompt, Integer generated, String reason) {
+    return map("message", map("content", "{}"), "done_reason", reason,
+        "prompt_eval_count", prompt, "eval_count", generated);
+  }
+
+  private AiProvider.Request usageRequest() {
+    return new AiProvider.Request("selected:test", "Instructions", "Document", map("type", "object"), List.of());
+  }
+
+  private OllamaProvider stubProvider(HttpServer server) {
+    return new OllamaProvider(new AccountingProperties(Path.of("/tmp"), "owner", "unused",
+        "http://127.0.0.1:" + server.getAddress().getPort(), "http://localhost:8090", "", 3, false, 100, 1000000, 1000000));
+  }
+
+  private HttpServer usageServer(AtomicReference<Map<String, Object>> chat, Map<String, Object> processes)
+      throws Exception {
+    var server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+    server.createContext("/api/chat", exchange -> {
+      exchange.getRequestBody().readAllBytes();
+      respond(exchange, chat.get());
+    });
+    server.createContext("/api/ps", exchange -> respond(exchange, processes));
+    server.start();
+    return server;
+  }
+
+  private void respond(com.sun.net.httpserver.HttpExchange exchange, Map<String, Object> payload)
+      throws java.io.IOException {
+    try (exchange) {
+      byte[] body = Json.write(payload).getBytes(StandardCharsets.UTF_8);
+      exchange.sendResponseHeaders(200, body.length);
+      exchange.getResponseBody().write(body);
+    }
   }
 
   @Test
@@ -139,7 +224,7 @@ class OllamaContractTest {
       assertThat(
               provider.complete(
                   new AiProvider.Request(
-                      "vision:test", "Instructions", "Document", schema, List.of("aW1hZ2U="))))
+                      "vision:test", "Instructions", "Document", schema, List.of("aW1hZ2U="))).content())
           .isEqualTo("{\"ok\":true}");
       var sent = Json.read(request.get());
       assertThat(sent.path("format").path("type").asText()).isEqualTo("object");

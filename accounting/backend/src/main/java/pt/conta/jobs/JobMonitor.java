@@ -9,12 +9,35 @@ import java.util.*;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import pt.conta.ai.AiProvider;
 import pt.conta.shared.DomainException;
 
 /** Small queue projections, independent of financial date filters and archived document contents. */
 @Service
 public class JobMonitor {
   private static final Set<String> STATES = Set.of("QUEUED", "RUNNING", "WAITING", "DONE", "FAILED");
+  private static final String WARNING_JOIN = """
+      left join lateral (
+        select e.model as warning_model, e.created_at as warning_at, e.prompt_tokens,
+          e.response_tokens, e.context_tokens, e.capacity_source, e.done_reason, e.context_warning
+        from ai_execution e
+        where e.job_id=j.id and e.context_warning is not null
+        order by (e.context_warning='NEAR_CONTEXT_LIMIT'), e.created_at desc, e.id desc
+        limit 1
+      ) warning on true
+      """;
+  private static final String RECENT_WARNINGS = """
+      select j.id, j.kind, warning.*
+      from (
+        select job_id, max(created_at) as latest_warning
+        from ai_execution
+        where job_id is not null and context_warning is not null
+        group by job_id
+        order by latest_warning desc, job_id desc
+        limit 5
+      ) recent
+      join job j on j.id=recent.job_id
+      """ + WARNING_JOIN + "order by recent.latest_warning desc, j.id desc";
   private static final String PROJECTION = """
       select j.*, i.id as invoice_id, i.number as invoice_number, i.supplier,
         i.deleted as invoice_deleted, m.id as movement_id, m.description,
@@ -23,7 +46,7 @@ public class JobMonitor {
         a.invoice_id as allocation_invoice_id, a.movement_id as allocation_movement_id,
         a.amount as allocation_amount, a.active as allocation_active, a.evidence as allocation_evidence,
         ai.deleted as allocation_invoice_deleted, am.deleted as allocation_movement_deleted,
-        original.id as original_id
+        original.id as original_id, warning.*
       from (%s) j
       left join invoice i on i.id=j.target_id
         and j.kind in ('REVIEW_INVOICE','NORMALIZE_CATEGORIES','CLASSIFY_INVOICE','SUGGEST_RECONCILIATION')
@@ -36,8 +59,7 @@ public class JobMonitor {
       left join bank_movement am on am.id=a.movement_id
       left join source_document original on original.id=coalesce(i.document_id,m.document_id,d.id,al.document_id)
         and not original.deleted
-      order by j.created_at desc,j.id desc
-      """;
+      """ + WARNING_JOIN + "order by j.created_at desc,j.id desc";
   private final JdbcTemplate jdbc;
 
   public JobMonitor(JdbcTemplate jdbc) {
@@ -78,7 +100,7 @@ public class JobMonitor {
         PROJECTION.formatted("select * from job " + where + " order by created_at desc,id desc limit ? offset ?"),
         (rs, n) -> view(rs), arguments);
     return map("items", items, "total", counts.get(state.equals("all") ? "total" : state),
-        "page", page, "size", size, "counts", counts);
+        "page", page, "size", size, "counts", counts, "recentContextWarnings", recentWarnings());
   }
 
   /** Retains job metadata even when its associated business record no longer exists. */
@@ -86,6 +108,25 @@ public class JobMonitor {
   public Map<String, Object> detail(UUID id) {
     return jdbc.query(PROJECTION.formatted("select * from job where id=?"), (rs, n) -> view(rs), id)
         .stream().findFirst().orElseThrow(DomainException::missing);
+  }
+
+  private record WarningSummary(String model, Instant createdAt, AiProvider.Usage usage) {}
+
+  private record RecentWarning(UUID jobId, String kind, WarningSummary warning) {}
+
+  private List<RecentWarning> recentWarnings() {
+    return jdbc.query(RECENT_WARNINGS, (rs, n) ->
+        new RecentWarning(rs.getObject("id", UUID.class), rs.getString("kind"), warning(rs)));
+  }
+
+  private WarningSummary warning(ResultSet rs) throws SQLException {
+    String warning = rs.getString("context_warning");
+    if (warning == null) return null;
+    var usage = new AiProvider.Usage(rs.getObject("prompt_tokens", Integer.class),
+        rs.getObject("response_tokens", Integer.class), rs.getInt("context_tokens"),
+        AiProvider.CapacitySource.valueOf(rs.getString("capacity_source")),
+        rs.getString("done_reason"), AiProvider.ContextWarning.valueOf(warning));
+    return new WarningSummary(rs.getString("warning_model"), instant(rs, "warning_at"), usage);
   }
 
   private Map<String, Object> view(ResultSet rs) throws SQLException {
@@ -123,7 +164,7 @@ public class JobMonitor {
         "targetVersion", rs.getLong("target_version"), "state", rs.getString("state"),
         "attempts", rs.getInt("attempts"), "error", rs.getString("error"),
         "createdAt", instant(rs, "created_at"), "updatedAt", instant(rs, "updated_at"),
-        "availableAt", instant(rs, "available_at"), "target", target);
+        "availableAt", instant(rs, "available_at"), "target", target, "contextWarning", warning(rs));
   }
 
   private Instant instant(ResultSet rs, String name) throws SQLException {

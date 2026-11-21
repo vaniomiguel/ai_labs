@@ -46,7 +46,7 @@ class InvoiceExtractionTest {
     when(settings.get(anyString(), anyString())).thenAnswer(call -> call.getArgument(1));
     when(provider.models()).thenReturn(List.of(
         new AiProvider.Model("qwen3.5:9b", "invoice-test-digest", true, true, true)));
-    when(provider.complete(any())).thenAnswer(_ -> Json.write(response()));
+    when(provider.complete(any())).thenAnswer(_ -> completion(response()));
     when(store.all(AiExecution.class)).thenReturn(executions);
     doAnswer(call -> { executions.add(call.getArgument(0)); return null; }).when(results).record(any());
     doc = new SourceDocument();
@@ -56,9 +56,14 @@ class InvoiceExtractionTest {
     doc.sha256 = "original-document-hash";
     doc.text = SOURCE;
     when(store.get(SourceDocument.class, doc.id)).thenReturn(doc);
-    orchestrator = new AiOrchestrator(store, new AiModelExecution(store, provider, results, settings),
+    orchestrator = new AiOrchestrator(store, new AiModelExecution(store, provider, new AiCall(provider, results), settings),
         prompts, settings, publisher, storage, mock(BookkeepingService.class), mock(CategoryAiWorker.class),
         mock(RepairAiWorker.class), requests, null);
+  }
+
+  private AiProvider.Completion completion(Map<String, Object> response) {
+    return new AiProvider.Completion(Json.write(response), new AiProvider.Usage(
+        700, 100, 1000, AiProvider.CapacitySource.CONFIGURED, "stop", AiProvider.ContextWarning.NEAR_CONTEXT_LIMIT));
   }
 
   private Map<String, Object> invoice() {
@@ -79,9 +84,10 @@ class InvoiceExtractionTest {
     return map("draft", invoice(), "evidence", evidence(), "issues", List.of());
   }
 
-  private void process() throws Exception {
-    orchestrator.process(new JobQueue.Claim(
-        UUID.randomUUID(), "AI_EXTRACT_DOCUMENT", doc.id, doc.version, "{}", 0));
+  private UUID process() throws Exception {
+    UUID jobId = UUID.randomUUID();
+    orchestrator.process(new JobQueue.Claim(jobId, "AI_EXTRACT_DOCUMENT", doc.id, doc.version, "{}", 0));
+    return jobId;
   }
 
   private Map<String, Object> publishedDraft() {
@@ -135,9 +141,14 @@ class InvoiceExtractionTest {
 
   @Test
   void validCacheIsReusedButSystemAndFieldOverridesInvalidateIt() throws Exception {
-    process();
+    UUID firstJob = process();
     process();
     verify(provider, times(1)).complete(any());
+    assertThat(executions).singleElement().satisfies(execution -> {
+      assertThat(execution.jobId).isEqualTo(firstJob);
+      assertThat(execution.model).isEqualTo("qwen3.5:9b");
+      assertThat(execution.usage().promptTokens()).isEqualTo(700);
+    });
     Files.writeString(overrides.resolve("extract-invoice.md"), "Custom system instructions\n");
     process();
     Files.writeString(overrides.resolve("extract-invoice-fields.md"), "Custom requested fields\n");
@@ -159,7 +170,7 @@ class InvoiceExtractionTest {
   void missingEvidencePreventsAutomaticValidation() throws Exception {
     var response = response();
     response.put("evidence", List.of());
-    when(provider.complete(any())).thenReturn(Json.write(response));
+    when(provider.complete(any())).thenReturn(completion(response));
     process();
     assertThat(publishedDraft()).containsEntry("validate", false);
   }
@@ -171,7 +182,7 @@ class InvoiceExtractionTest {
     draft.put("description", null);
     draft.put("lines", List.of());
     var headerEvidence = evidence().subList(0, 3);
-    when(provider.complete(any())).thenReturn(Json.write(
+    when(provider.complete(any())).thenReturn(completion(
         map("draft", draft, "evidence", headerEvidence, "issues", List.of())));
 
     process();
@@ -197,7 +208,7 @@ class InvoiceExtractionTest {
         proof.add(indexed);
       }
     }
-    when(provider.complete(any())).thenReturn(Json.write(
+    when(provider.complete(any())).thenReturn(completion(
         map("draft", outer, "evidence", proof, "issues", List.of())));
     process();
     var draft = publishedDraft();
@@ -208,7 +219,7 @@ class InvoiceExtractionTest {
 
   @Test
   void malformedOutputIsRecordedAndNeverPublishedOrCached() {
-    when(provider.complete(any())).thenReturn("{\"draft\":\"invalid\"}");
+    when(provider.complete(any())).thenReturn(completion(map("draft", "invalid")));
     assertThatThrownBy(this::process).isInstanceOf(IllegalArgumentException.class);
     assertThatThrownBy(this::process).isInstanceOf(IllegalArgumentException.class);
     assertThat(executions).hasSize(2).allSatisfy(e -> assertThat(e.outcome).isEqualTo("INVALID"));
@@ -234,9 +245,15 @@ class InvoiceExtractionTest {
 
   @Test
   void providerContextFailurePropagatesWithoutPublication() {
-    when(provider.complete(any())).thenThrow(new AiProvider.ContextExceeded("context window"));
+    var usage = new AiProvider.Usage(null, null, 1000, AiProvider.CapacitySource.CONFIGURED, null,
+        AiProvider.ContextWarning.CONTEXT_REJECTED);
+    when(provider.complete(any())).thenThrow(new AiProvider.ContextExceeded("context window", usage));
     assertThatThrownBy(this::process).isInstanceOf(AiProvider.ContextExceeded.class);
     verifyNoInteractions(publisher);
+    assertThat(executions).singleElement().satisfies(execution -> {
+      assertThat(execution.outcome).isEqualTo("FAILED");
+      assertThat(execution.usage()).isEqualTo(usage);
+    });
   }
 
   @Test

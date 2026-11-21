@@ -24,13 +24,14 @@ public class RepairAiWorker {
   private final Settings settings;
   private final DocumentStorage storage;
   private final AiResults results;
+  private final AiCall calls;
   private final InvoiceExtractionRequests invoiceRequests;
   private final int maxInput;
   private final int maxPages;
 
   public RepairAiWorker(
       RepairService repairs, AiProvider provider, PromptCatalog prompts, Settings settings,
-      DocumentStorage storage, AiResults results, InvoiceExtractionRequests invoiceRequests,
+      DocumentStorage storage, AiResults results, AiCall calls, InvoiceExtractionRequests invoiceRequests,
       @Value("${accounting.repair-max-input-characters:50000}") int maxInput,
       @Value("${accounting.repair-max-image-pages:16}") int maxPages) {
     this.repairs = repairs;
@@ -39,6 +40,7 @@ public class RepairAiWorker {
     this.settings = settings;
     this.storage = storage;
     this.results = results;
+    this.calls = calls;
     this.invoiceRequests = invoiceRequests;
     this.maxInput = maxInput;
     this.maxPages = maxPages;
@@ -129,32 +131,11 @@ public class RepairAiWorker {
   private void execute(
       JobQueue.Claim job, RepairService.Snapshot source, AiProvider.Model model, PreparedRepair prepared) {
     var request = prepared.request();
-    long start = System.nanoTime();
-    String raw = provider.complete(request);
-    var execution = new AiExecution();
-    execution.targetId = job.target();
-    execution.targetVersion = job.revision();
-    execution.task = "repair";
-    execution.model = model.name();
-    execution.modelDigest = model.digest();
-    execution.promptVersion = "repair-v1:" + Hashes.sha256(request.instructions());
-    execution.inputHash = Hashes.sha256(request.input() + request.instructions() + job.id());
-    execution.request = request.input();
-    execution.response = raw;
-    execution.durationMs = (System.nanoTime() - start) / 1_000_000;
-    Map<String, Object> parsed;
-    try {
-      parsed = StructuredOutput.parse(raw, request.schema());
-      execution.outcome = "VALID";
-    } catch (RuntimeException e) {
-      execution.outcome = "INVALID";
-      results.record(execution);
-      throw e;
-    }
-    results.record(execution);
+    String inputHash = Hashes.sha256(request.input() + request.instructions() + job.id());
+    var result = calls.execute(job, model, request, new AiCall.Provenance("repair", "repair-v1:", inputHash));
     var prompt = new ExtractionAttempt.Prompt(request.instructions(), request.input());
-    if (!repairs.complete(job, source, parsed, prepared.context(), prompt))
-      results.categoryOutcome(execution.id, "STALE");
+    if (!repairs.complete(job, source, result.output(), prepared.context(), prompt))
+      results.categoryOutcome(result.execution().id, "STALE");
   }
 
   private void checkSize(String input, String prompt, String task) {

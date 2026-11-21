@@ -15,14 +15,16 @@ public class CategoryAiWorker {
   private final PromptCatalog prompts;
   private final Settings settings;
   private final AiResults results;
+  private final AiCall calls;
 
   public CategoryAiWorker(CategoryService categories, AiProvider provider, PromptCatalog prompts,
-      Settings settings, AiResults results) {
+      Settings settings, AiResults results, AiCall calls) {
     this.categories = categories;
     this.provider = provider;
     this.prompts = prompts;
     this.settings = settings;
     this.results = results;
+    this.calls = calls;
   }
 
   public void process(JobQueue.Claim job) {
@@ -106,30 +108,9 @@ public class CategoryAiWorker {
   private record Response(UUID id, Map<String, Object> output) {}
 
   private Response execute(JobQueue.Claim job, AiProvider.Model model, AiProvider.Request request) {
-    long start = System.nanoTime();
-    String raw = provider.complete(request);
-    var execution = new AiExecution();
-    execution.task = "categories";
-    execution.targetId = job.target();
-    execution.targetVersion = job.revision();
-    execution.model = model.name();
-    execution.modelDigest = model.digest();
-    execution.promptVersion = "v3:" + Hashes.sha256(request.instructions());
-    execution.inputHash = Hashes.sha256(request.input() + request.instructions() + model.digest());
-    execution.request = request.input();
-    execution.response = raw;
-    execution.durationMs = (System.nanoTime() - start) / 1_000_000;
-    Map<String, Object> parsed;
-    try {
-      parsed = StructuredOutput.parse(raw, request.schema());
-      execution.outcome = "VALID";
-    } catch (RuntimeException e) {
-      execution.outcome = "INVALID";
-      results.record(execution);
-      throw e;
-    }
-    results.record(execution);
-    return new Response(execution.id, parsed);
+    String inputHash = Hashes.sha256(request.input() + request.instructions() + model.digest());
+    var result = calls.execute(job, model, request, new AiCall.Provenance("categories", "v3:", inputHash));
+    return new Response(result.execution().id, result.output());
   }
 
   private void apply(JobQueue.Claim job, CategoryService.Snapshot snapshot, Response response) {

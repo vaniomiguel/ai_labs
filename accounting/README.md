@@ -189,6 +189,8 @@ Cada correção recebe o texto integral extraído, o rascunho e o motivo do aler
 
 O limite inicial da aplicação é de 50 000 caracteres para o pedido completo, incluindo prompt e esquema, e 16 páginas visuais. `REPAIR_MAX_INPUT_CHARACTERS`, `REPAIR_MAX_IMAGE_PAGES` e `AI_CONTEXT_TOKENS` permitem ajustar a capacidade, sendo 16 384 tokens o contexto pedido por omissão ao Ollama. Uma entrada demasiado grande falha com explicação, sem enviar um subconjunto do texto ou das páginas nem repetir automaticamente o pedido inviável. Nas correções, o transporte envia `truncate=false` e `shift=false`, opções do [contrato oficial do Ollama](https://github.com/ollama/ollama/blob/main/api/types.go), para recusar a perda de contexto.
 
+**Processamento** e **Assistente de IA → Histórico de IA** mostram avisos a partir de 80% de ocupação, quando o limite é atingido ou quando o modelo recusa ou interrompe um pedido por limite. O histórico mostra os tokens de entrada e de resposta comunicados pelo Ollama após cada chamada. A capacidade usada é o menor valor entre o contexto configurado e o contexto do modelo em execução, quando disponível. Cada parte e cada repetição é medida separadamente. Quando faltam contagens, a percentagem fica indisponível.
+
 ### Categorias de despesas
 
 Faturas e movimentos aceitam várias etiquetas, organizadas em famílias. A IA usa descrições, artigos, fornecedores, sinónimos e exemplos anteriores; os movimentos associados herdam a união das etiquetas das suas faturas. Sem etiquetas nas faturas, a classificação bancária permanece provisória. Desassociar ou alterar as faturas atualiza a herança. Registos excluídos do saldo também são classificados.

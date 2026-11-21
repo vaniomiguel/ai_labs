@@ -27,6 +27,94 @@ async function mockInvoice(page: Page) {
   await page.route(`**/api/v1/audit/invoice/${invoiceId}`, route => route.fulfill({ json: [] }));
 }
 
+const contextUsage = {
+  promptTokens: 750, responseTokens: 50, contextTokens: 1000,
+  capacitySource: "RUNNING_MODEL", doneReason: "stop", warning: "NEAR_CONTEXT_LIMIT",
+};
+
+async function mockContextSession(page: Page) {
+  await page.route("**/api/v1/me", route => route.fulfill({ json: { username: "gestor" } }));
+  await page.route("**/api/v1/csrf", route => route.fulfill({ json: { token: "test-csrf-token" } }));
+}
+
+test("processing keeps a model warning after the task leaves the active list", async ({ page }) => {
+  await mockContextSession(page);
+  const createdAt = "2026-01-01T10:00:00Z";
+  const warning = { model: "test-model:9b", createdAt, usage: contextUsage };
+  const job = {
+    id: jobId, kind: "REVIEW_INVOICE", state: "RUNNING", attempts: 0, error: null, createdAt,
+    updatedAt: createdAt, target: { type: "invoice", id: invoiceId, label: "Fatura longa", available: true },
+  };
+  let warned = false;
+  let finished = false;
+  await page.route("**/api/v1/events", route => route.fulfill({
+    contentType: "text/event-stream",
+    body: `retry: 300\nevent: progress\ndata: {"revision":"${warned}-${finished}","jobs":${finished ? 0 : 1},"alerts":0}\n\n`,
+  }));
+  await page.route(jobsPageUrl, route => route.fulfill({ json: {
+    ...emptyJobsPage, items: finished ? [] : [{ ...job, contextWarning: warned ? warning : null }],
+    total: finished ? 0 : 1, recentContextWarnings: warned ? [{ jobId, kind: job.kind, warning }] : [],
+  }}));
+  await page.route(`**/api/v1/jobs/${jobId}`, route =>
+    route.fulfill({ json: { ...job, contextWarning: warning, state: finished ? "DONE" : "RUNNING" } }));
+
+  await page.goto("/processing");
+  const row = page.getByRole("row").filter({ hasText: "Fatura longa" });
+  await expect(row).toBeVisible();
+  await expect(row).not.toContainText("Contexto próximo do limite");
+  warned = true;
+  await expect(row).toContainText("Contexto próximo do limite");
+  finished = true;
+  await expect(row).toHaveCount(0);
+  const recent = page.getByRole("region", { name: "Avisos recentes do modelo" });
+  await expect(recent).toContainText("test-model:9b");
+  await recent.getByRole("button").click();
+  await expect(page).toHaveURL(`/processing/${jobId}`);
+  const detail = page.locator(".job-detail");
+  await expect(detail).toContainText("80% usados");
+  await expect(detail).toContainText("Contexto do modelo em execução");
+});
+
+test("assistant history shows measured usage, failed requests and older executions", async ({ page }) => {
+  await mockContextSession(page);
+  let measuredCallFinished = false;
+  await page.route("**/api/v1/events", route => route.fulfill({
+    contentType: "text/event-stream",
+    body: `retry: 300\nevent: progress\ndata: {"revision":"${measuredCallFinished}","jobs":1,"alerts":0}\n\n`,
+  }));
+  await page.route("**/api/v1/assistant", route => route.fulfill({ json: {
+    endpoint: "http://localhost:11434", models: [], selected: {}, crossYearMonths: 3,
+    recommendations: { models: [], ocrCandidates: [] },
+  }}));
+  const execution = { task: "extract-invoice", digest: "test-digest", promptVersion: "v1:test",
+    durationMs: 50, createdAt: "2026-01-01T10:00:00Z", outcome: "VALID", error: null, response: "{}" };
+  await page.route("**/api/v1/assistant/executions", route => route.fulfill({ json: [
+    ...(measuredCallFinished ? [{ ...execution, id: "new", model: "test-model:9b", usage: contextUsage }] : []),
+    { ...execution, id: "rejected", model: "small-model:1b", outcome: "FAILED", response: null,
+      error: "O pedido excedeu a capacidade deste modelo.",
+      usage: { ...contextUsage, promptTokens: null, responseTokens: null, doneReason: null,
+        capacitySource: "CONFIGURED", warning: "CONTEXT_REJECTED" } },
+    { ...execution, id: "legacy", model: "legacy-model:1b", usage: null },
+  ] }));
+  await page.goto("/assistant");
+  const details = page.locator("details.execution");
+  const legacy = details.filter({ hasText: "legacy-model:1b" });
+  await legacy.locator("summary").click();
+  await expect(legacy).not.toContainText("% usados");
+  measuredCallFinished = true;
+  const measured = details.filter({ hasText: "test-model:9b" });
+  await expect(measured).toContainText("Contexto próximo do limite");
+  await measured.locator("summary").click();
+  await expect(measured).toContainText("Entrada: 750");
+  await expect(measured).toContainText("Resposta: 50");
+  await expect(measured).toContainText("80% usados");
+  const rejected = details.filter({ hasText: "small-model:1b" });
+  await rejected.locator("summary").click();
+  await expect(rejected).toContainText("O pedido excedeu a capacidade deste modelo.");
+  await expect(rejected).toContainText("Contexto configurado");
+  await expect(rejected).not.toContainText("% usados");
+});
+
 test("every sidebar section has its own URL", async ({ page }) => {
   await signIn(page);
   await page.goto("/");
