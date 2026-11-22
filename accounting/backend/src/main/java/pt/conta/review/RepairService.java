@@ -55,7 +55,7 @@ public class RepairService {
     store.lockFinancialWrites();
     var alert=store.get(Alert.class,id);
     if (alert.documentId==null) throw DomainException.invalid("Este alerta não tem um documento para análise");
-    if (!open(alert)) throw DomainException.invalid("O alerta já está resolvido");
+    if (!open(alert)) throw DomainException.invalid("O alerta já não está disponível para revisão.");
     var doc=store.get(SourceDocument.class,alert.documentId);
     if (doc.deleted) throw DomainException.invalid("O documento já foi eliminado");
     var current=latest(id);
@@ -73,13 +73,18 @@ public class RepairService {
     return view(alert, latest(alert.id));
   }
 
+  public Map<String, Object> dismiss(UUID id, long version) {
+    var alert = review.dismiss(id, version);
+    return view(alert, latest(id));
+  }
+
   @Transactional(readOnly=true)
   public List<Map<String,Object>> list() {
     var latest=new HashMap<UUID,Map<String,Object>>();
     jdbc.queryForList("select distinct on (target_id) * from job where kind='REPAIR_ALERT' order by target_id,target_version desc,created_at desc,id desc")
         .forEach(j->latest.put((UUID)j.get("target_id"),j));
     return store.all(Alert.class).stream().filter(alert -> alert.mergedInto == null)
-        .sorted(Comparator.comparing((Alert a)->!a.status.equals("OPEN"))
+        .sorted(Comparator.comparing((Alert a)->!a.actionable())
         .thenComparing(a->a.createdAt,Comparator.reverseOrder())).map(a->view(a,latest.get(a.id))).toList();
   }
 
@@ -102,7 +107,7 @@ public class RepairService {
     if(job!=null) {
       var doc=alert.documentId==null?null:store.get(SourceDocument.class,alert.documentId);
       long source=sourceVersion(job,proposal!=null&&proposal.get("documentVersion") instanceof Number n?n.longValue():doc==null?-1:doc.version);
-      boolean stale=doc==null||doc.deleted||!alert.status.equals("OPEN")||source!=doc.version
+      boolean stale=doc==null||doc.deleted||!alert.actionable()||source!=doc.version
           ||active(job)&&metadata(job).get("outcome")==null&&((Number)job.get("target_version")).longValue()!=alert.version;
       var errors=proposal==null||doc==null?List.<String>of():previewErrors(doc,proposal,alert);
       if(proposal!=null&&doc!=null)enrich(doc,proposal,alert);
@@ -124,7 +129,8 @@ public class RepairService {
       enrich(store.get(SourceDocument.class,alert.documentId),proposal,alert);
     return map("id",alert.id,"version",alert.version,"documentId",alert.documentId,"entityType",alert.entityType,
         "entityId",alert.entityId,"code",alert.code,"message",alert.message,"concerns",alert.concerns(),"status",alert.status,
-        "proposal",proposal,"resolvedBy",alert.resolvedBy,"resolvedAt",alert.resolvedAt,"repair",repair);
+        "proposal",proposal,"resolvedBy",alert.resolvedBy,"resolvedAt",alert.resolvedAt,
+        "dismissedAt",alert.dismissedAt,"repair",repair);
   }
 
   private Instant instant(Object value) { return value instanceof java.sql.Timestamp t?t.toInstant():value instanceof Instant i?i:null; }
@@ -136,8 +142,8 @@ public class RepairService {
     var job=latest(claim.target());
     if(job==null||!job.get("id").equals(claim.id())) { mark(claim,"STALE",null);return null; }
     if(metadata(job).get("outcome")!=null) return null; // Already applied before a lease was reclaimed.
-    var alert=store.get(Alert.class,claim.target());
-    if(alert.documentId==null||!open(alert)||alert.version!=claim.revision()) {mark(claim,"STALE",null);return null;}
+    var alert=store.find(Alert.class,claim.target()).orElse(null);
+    if(alert==null||alert.documentId==null||!open(alert)||alert.version!=claim.revision()) {mark(claim,"STALE",null);return null;}
     var doc=store.get(SourceDocument.class,alert.documentId);
     if(doc.deleted||sourceVersion(job,doc.version)!=doc.version) {mark(claim,"STALE",null);return null;}
     var data=metadata(job);data.put("sourceVersion",doc.version);
@@ -152,25 +158,21 @@ public class RepairService {
       Map<String, Object> context, ExtractionAttempt.Prompt prompt) {
     store.lockFinancialWrites();
     var current=latest(claim.target());
-    if(current!=null&&current.get("id").equals(claim.id())&&metadata(current).get("outcome")!=null) return false;
-    var alert=store.get(Alert.class,claim.target());var doc=store.get(SourceDocument.class,snapshot.documentId());
-    if(current==null||!current.get("id").equals(claim.id())||!ownsLease(claim)||!open(alert)
-        ||alert.version!=claim.revision()||doc.deleted||doc.version!=snapshot.sourceVersion()) {
-      if (ownsLease(claim)) {
-        mark(claim, "STALE", context);
-        attempt(snapshot, response, context, "STALE", prompt);
-      }
+    if(current==null||!ownsLease(claim)) return false;
+    boolean latestClaim = current.get("id").equals(claim.id());
+    if(latestClaim&&metadata(current).get("outcome")!=null) return false;
+    var alert=store.find(Alert.class,claim.target()).filter(Alert::visible).orElse(null);
+    if(alert==null) {
+      mark(claim,"STALE",context);
       return false;
     }
-    var proposal=new LinkedHashMap<>(response);
-    if(response.get("draft") instanceof Map<?,?> raw) {
-      var draft=DraftSanitizer.sanitize(doc.kind,Json.object(Json.write(raw)));
-      Set<Object> issues=new LinkedHashSet<>();
-      if(response.get("issues") instanceof List<?> list)issues.addAll(list);
-      if(draft.get("issues") instanceof List<?> list)issues.addAll(list);
-      draft.put("issues",new ArrayList<>(issues));proposal.put("draft",draft);proposal.put("issues",new ArrayList<>(issues));
+    var doc=store.get(SourceDocument.class,snapshot.documentId());
+    if(!latestClaim||!matchesSnapshot(claim, snapshot, alert, doc)) {
+      mark(claim, "STALE", context);
+      attempt(snapshot, response, context, "STALE", prompt);
+      return false;
     }
-    proposal.put("documentVersion",snapshot.sourceVersion());proposal.put("jobId",claim.id().toString());
+    var proposal=repairProposal(claim, snapshot, doc, response);
     var errors=previewErrors(doc,proposal,alert);String outcome=outcome(doc,proposal,errors);
     alert.proposal = Json.write(proposal);
     review.openAll(alert.documentId, alert.entityType, alert.entityId, "AI_REPAIR_REVIEW",
@@ -178,6 +180,27 @@ public class RepairService {
     mark(claim, outcome, context);
     attempt(snapshot, proposal, context, outcome, prompt);
     return true;
+  }
+
+  private boolean matchesSnapshot(JobQueue.Claim claim, Snapshot snapshot, Alert alert, SourceDocument doc) {
+    return open(alert) && alert.version == claim.revision() && !doc.deleted && doc.version == snapshot.sourceVersion();
+  }
+
+  private Map<String, Object> repairProposal(JobQueue.Claim claim, Snapshot snapshot,
+      SourceDocument doc, Map<String, Object> response) {
+    var proposal = new LinkedHashMap<>(response);
+    if (response.get("draft") instanceof Map<?, ?> raw) {
+      var draft = DraftSanitizer.sanitize(doc.kind, Json.object(Json.write(raw)));
+      Set<Object> issues = new LinkedHashSet<>();
+      if (response.get("issues") instanceof List<?> list) issues.addAll(list);
+      if (draft.get("issues") instanceof List<?> list) issues.addAll(list);
+      draft.put("issues", new ArrayList<>(issues));
+      proposal.put("draft", draft);
+      proposal.put("issues", new ArrayList<>(issues));
+    }
+    proposal.put("documentVersion", snapshot.sourceVersion());
+    proposal.put("jobId", claim.id().toString());
+    return proposal;
   }
 
   private void attempt(Snapshot snapshot, Map<String, Object> result, Map<String, Object> context,
@@ -353,7 +376,7 @@ public class RepairService {
   }
 
   private boolean open(Alert alert) {
-    return "OPEN".equals(alert.status) && !review.protectedRecord(alert.entityType, alert.entityId);
+    return alert.actionable() && !review.protectedRecord(alert.entityType, alert.entityId);
   }
 
   private Set<String> targetKeys(Alert alert, SourceDocument doc, Map<String, Object> draft) {

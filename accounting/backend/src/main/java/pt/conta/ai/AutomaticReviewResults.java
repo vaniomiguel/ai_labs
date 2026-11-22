@@ -13,6 +13,7 @@ import pt.conta.invoice.Invoice;
 import pt.conta.jobs.JobQueue;
 import pt.conta.ledger.BookkeepingService;
 import pt.conta.reconciliation.Allocation;
+import pt.conta.review.Alert.Concern;
 import pt.conta.review.ReviewService;
 import pt.conta.shared.*;
 import pt.conta.shared.Types.ReviewStatus;
@@ -63,16 +64,25 @@ class AutomaticReviewResults {
           : new AlertTarget(snapshot.target(), snapshot.alertDocument());
       groups.computeIfAbsent(target, ignored -> new ArrayList<>()).add(finding);
     }
-    groups.forEach((target, findings) -> {
-      var revision = target.revision();
-      var alert = review.openAll(target.documentId(), revision.kind().name().toLowerCase(Locale.ROOT),
-          revision.id(), code, findings.stream().map(this::concernMessage).toList());
-      if (alert == null || alert.proposal != null && Json.read(alert.proposal).has("draft")) return;
-      var scoped = new LinkedHashMap<>(result);
-      scoped.put("concerns", findings.stream().map(Finding::detail).toList());
-      if (groups.size() > 1) scoped.remove("suggestions");
-      alert.proposal = Json.write(scoped);
-    });
+    groups.forEach((target, findings) -> publishTargetConcerns(target, findings, code, result, groups.size() > 1));
+  }
+
+  private void publishTargetConcerns(
+      AlertTarget target, List<Finding> findings, String code, Map<String, Object> result, boolean multipleTargets) {
+    var revision = target.revision();
+    var alert = review.openAll(target.documentId(), revision.kind().name().toLowerCase(Locale.ROOT),
+        revision.id(), code, findings.stream().map(this::concernMessage).toList());
+    if (alert == null || alert.proposal != null && Json.read(alert.proposal).has("draft")) return;
+    var visibleConcerns = new HashSet<>(alert.concerns());
+    var visibleDetails = findings.stream()
+        .filter(finding -> visibleConcerns.contains(new Concern(code, concernMessage(finding).strip())))
+        .map(Finding::detail).toList();
+    var scoped = new LinkedHashMap<>(result);
+    scoped.put("concerns", visibleDetails);
+    boolean filteredFindings = visibleDetails.size() < findings.size();
+    if (filteredFindings) scoped.remove("summary");
+    if (multipleTargets || filteredFindings) scoped.remove("suggestions");
+    alert.proposal = Json.write(scoped);
   }
 
   private record AlertTarget(Revision revision, UUID documentId) {}

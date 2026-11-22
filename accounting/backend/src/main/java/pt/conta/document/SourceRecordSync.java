@@ -92,7 +92,7 @@ public class SourceRecordSync {
     edit.row.putAll(fields);edit.row.put("validate",status!=ReviewStatus.OPEN);
     edit.row.put("issues",status==ReviewStatus.OPEN?errors:List.of());
     complete=complete&&protection.entries(edit.document.kind,edit.draft).stream().noneMatch(row->Boolean.FALSE.equals(row.get("validate")));
-    complete = complete && review.openFor("document", edit.document.id).isEmpty();
+    complete = complete && !review.hasPendingReview("document", edit.document.id);
     edit.draft.put("validate", complete);
     edit.document.draft=Json.write(edit.draft);edit.document.status=complete?"DONE":"OPEN";
     store.flush();

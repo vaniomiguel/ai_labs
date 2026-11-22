@@ -163,7 +163,9 @@ Os montantes extraídos dos pendentes são provisórios. Até à validação, n�
 
 As edições individuais sincronizam apenas a entrada correspondente no rascunho original, conservando as restantes entradas e metadados. Os clientes atuais enviam a versão do registo e `documentVersion`; uma edição concorrente ou uma identidade antiga ambígua devolve conflito, sem substituir outro item. Os clientes antigos podem omitir `documentVersion`. Depois de validar, as listas e os saldos atualizam-se; se a data corrigida pertencer a outro período, é mostrada uma confirmação sem alterar os filtros selecionados.
 
-Cada fatura ou movimento tem até um alerta aberto com todas as questões identificadas. O editor de alertas permite editar os campos e experimentar sugestões da IA no rascunho. **Descartar alterações** fecha o editor sem guardar. **Guardar sem resolver** conserva o rascunho por validar. **Validar e resolver** publica os valores e encerra o alerta. Depois da validação manual, o registo fica protegido de novos alertas. Podem ser validadas novas edições pelo editor normal, com os saldos e as reconciliações atualizados.
+Cada fatura ou movimento tem até um alerta aberto visível com as questões atuais. O editor de alertas permite editar os campos e experimentar sugestões da IA no rascunho. **Descartar alterações** fecha o editor sem guardar. **Guardar sem resolver** conserva o rascunho por validar. **Validar e resolver** publica os valores e encerra o alerta. Depois da validação manual, o registo fica protegido de novos alertas. Podem ser validadas novas edições pelo editor normal, com os saldos e as reconciliações atualizados.
+
+Na lista de alertas, **Ocultar** retira o alerta da lista normal e do contador. Usa o filtro **Ocultados** para o consultar. Questões novas podem gerar um alerta visível. **Eliminar** pede confirmação e remove o alerta em definitivo. A validação financeira continua disponível no editor do registo ou do documento.
 
 As importações são assíncronas e persistentes. Cada documento é arquivado com SHA-256. Os estados de processamento, revisão e reconciliação são independentes.
 

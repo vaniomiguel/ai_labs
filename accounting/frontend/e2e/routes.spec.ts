@@ -1,5 +1,5 @@
 import { expect, Page, test } from "@playwright/test";
-import type { CategoryDetail, Classification, JobTarget } from "../src/api";
+import type { AlertView, CategoryDetail, Classification, JobTarget } from "../src/api";
 
 const invoiceId = "e245b1ab-5314-4ad8-a91f-c75510594001";
 const documentId = "e245b1ab-5314-4ad8-a91f-c75510594002";
@@ -296,6 +296,96 @@ test("alert status filter defaults to open and preserves the selection when retu
   await expect(filter).toHaveValue("OPEN");
   await expect(openCard).toBeVisible();
   await expect(resolvedCard).toHaveCount(0);
+});
+
+async function createAlertForDismissal(page: Page) {
+  await signIn(page);
+  const { token } = await (await page.request.get("/api/v1/csrf")).json();
+  const headers = { "X-XSRF-TOKEN": token };
+  const filename = `lifecycle-${Date.now()}.pdf`;
+  const upload = await page.request.post("/api/v1/documents", {
+    headers,
+    multipart: { kind: "SUPPORT", files: { name: filename, mimeType: "application/pdf", buffer: Buffer.from(filename) } },
+  });
+  expect(upload.ok()).toBeTruthy();
+  const [source] = await upload.json();
+  const invoice = await page.request.post("/api/v1/invoices", {
+    headers, data: { ...draft, total: "100.00", documentId: source.id },
+  });
+  expect(invoice.ok()).toBeTruthy();
+  const { id } = await invoice.json();
+  const alerts: AlertView[] = await (await page.request.get("/api/v1/alerts")).json();
+  const alert = alerts.find(alert => alert.entityId === id);
+  if (!alert) throw new Error("O alerta da fatura de teste não foi criado.");
+  return { alert, filename };
+}
+
+test("dismissal persists and permanent deletion requires confirmation", async ({ page }) => {
+  const { alert, filename } = await createAlertForDismissal(page);
+  await page.goto("/alert");
+  const filter = page.getByRole("combobox", { name: "Estado", exact: true });
+  const card = page.getByRole("article").filter({ hasText: filename });
+  const remove = card.getByRole("button", { name: "Eliminar", exact: true });
+  const confirmation = page.getByRole("alertdialog", { name: "Eliminar este alerta?" });
+
+  await remove.click();
+  await expect(confirmation).toContainText("O alerta será eliminado permanentemente. Esta ação é irreversível.");
+  await expect(confirmation).toContainText(alert.message);
+  await expect(confirmation.getByRole("button", { name: "Cancelar" })).toBeFocused();
+  await page.keyboard.press("Enter");
+  await expect(confirmation).toHaveCount(0);
+  await expect(card).toBeVisible();
+  await expect(remove).toBeFocused();
+
+  await card.getByRole("button", { name: "Ocultar" }).click();
+  await expect(card).toHaveCount(0);
+  await filter.selectOption({ label: "Todos" });
+  await expect(card).toHaveCount(0);
+  await page.reload();
+  await expect(filter).toHaveValue("OPEN");
+  await filter.selectOption({ label: "Ocultados" });
+  await expect(card).toBeVisible();
+
+  await card.getByRole("button", { name: "Consultar →" }).click();
+  const detail = page.getByRole("dialog", { name: "Alerta ocultado" });
+  await expect(detail).toContainText(alert.message);
+  await detail.getByRole("button", { name: "Fechar" }).click();
+  await expect(filter).toHaveValue("dismissed");
+
+  await remove.click();
+  await confirmation.getByRole("button", { name: "Eliminar permanentemente" }).click();
+  await expect(confirmation).toHaveCount(0);
+  await expect(filter).toHaveValue("dismissed");
+  await expect(card).toHaveCount(0);
+  expect((await page.request.get(`/api/v1/alerts/${alert.id}`)).status()).toBe(404);
+  expect((await page.request.get(`/api/v1/audit/alert/${alert.id}`)).status()).toBe(404);
+});
+
+test("a rejected alert mutation keeps the alert and shows the server error", async ({ page }) => {
+  await signIn(page);
+  const alert = { id: alertId, status: "RESOLVED", version: 1, message: "Alerta com revisão concorrente" };
+  const failure = { status: 409, json: { detail: "O registo foi alterado. Atualiza a página." } };
+  await page.route("**/api/v1/events", route => route.fulfill({ status: 204 }));
+  await page.route("**/api/v1/alerts", route => route.fulfill({ json: [alert] }));
+  await page.route(`**/api/v1/alerts/${alert.id}/dismiss`, route => route.fulfill(failure));
+  await page.route(`**/api/v1/alerts/${alert.id}?version=1`, route => route.fulfill(failure));
+
+  await page.goto("/alert");
+  const filter = page.getByRole("combobox", { name: "Estado", exact: true });
+  await filter.selectOption({ label: "Resolvidos" });
+  const card = page.getByRole("article").filter({ hasText: alert.message });
+  await card.getByRole("button", { name: "Ocultar" }).click();
+  await expect(page.getByRole("alert")).toContainText(failure.json.detail);
+  await expect(card).toBeVisible();
+
+  await card.getByRole("button", { name: "Eliminar", exact: true }).click();
+  const confirmation = page.getByRole("alertdialog", { name: "Eliminar este alerta?" });
+  await confirmation.getByRole("button", { name: "Eliminar permanentemente" }).click();
+  await expect(confirmation.getByRole("alert")).toContainText(failure.json.detail);
+  await page.keyboard.press("Escape");
+  await expect(confirmation).toHaveCount(0);
+  await expect(card).toBeVisible();
+  await expect(filter).toHaveValue("RESOLVED");
 });
 
 test("alert status filter shows an empty resolved list and resets at sign-out", async ({ page }) => {

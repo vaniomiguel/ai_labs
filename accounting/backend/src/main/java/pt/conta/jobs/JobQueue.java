@@ -109,9 +109,22 @@ public class JobQueue {
   /** Restarts a failed task explicitly, retaining its audit history in the database. */
   public void retry(UUID id) {
     jdbc.update(
-        "update job set state='QUEUED',attempts=0,available_at=now(),error=null,updated_at=now()"
-            + " where id=? and state in ('FAILED','WAITING')",
+        """
+        update job j set state='QUEUED',attempts=0,available_at=now(),error=null,updated_at=now()
+        where j.id=? and j.state in ('FAILED','WAITING')
+          and (j.kind is distinct from 'REPAIR_ALERT' or exists (select 1 from alert a where a.id=j.target_id
+            and a.status='OPEN' and a.dismissed_at is null and a.merged_into is null))
+        """,
         id);
+  }
+
+  /** Ends pending repair work and revokes any worker lease in the caller's transaction. */
+  public void invalidateAlertRepairs(UUID target) {
+    jdbc.update("""
+        update job set state='DONE', lease_token=null, leased_until=null, error=null, updated_at=now(),
+          payload=jsonb_set(coalesce(payload::jsonb,'{}'::jsonb), '{outcome}', '"STALE"'::jsonb)::text
+        where kind='REPAIR_ALERT' and target_id=? and state in ('QUEUED','RUNNING','WAITING')
+        """, target);
   }
 
   public void failPermanently(Claim job,String error) {

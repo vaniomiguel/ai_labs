@@ -62,6 +62,8 @@ class RepairIntegrationTest {
   @Autowired JobMonitor jobMonitor;
   @Autowired BookkeepingService book;
   @Autowired ReviewService review;
+  @Autowired pt.conta.api.ProgressController progress;
+  @Autowired pt.conta.audit.AuditService audit;
   private record Fixture(UUID doc,UUID alert){}
 
   @BeforeEach void setup(){provider.calls=0;provider.vision=false;provider.varyUsage=false;provider.program=_->Json.write(response(valid(),List.of()));}
@@ -111,6 +113,113 @@ class RepairIntegrationTest {
     assertThat(second.get("version")).isEqualTo(first.get("version"));
     assertThat(task(controller.alert(f.alert)).get("state")).isEqualTo("QUEUED");
     assertThat(jdbc.queryForObject("select count(*) from job where target_id=?",Integer.class,f.alert)).isEqualTo(1);assertNoMoney();
+  }
+
+  @Test void dismissalKeepsReviewAndSuppressesOnlyPreviouslyDismissedConcerns() {
+    UUID invoice = (UUID) book.saveInvoice(null, valid()).get("id");
+    var first = review.open(null, "invoice", invoice, "TEST_CONCERN", "Questão anterior");
+    store.flush();
+    long version = first.version;
+    assertThat(progress.snapshot()).containsEntry("alerts", 1L);
+
+    var dismissed = controller.dismissAlert(first.id, map("version", version));
+    assertThat(dismissed).containsEntry("status", "OPEN").hasEntrySatisfying("dismissedAt", value ->
+        assertThat(value).isInstanceOf(java.time.Instant.class));
+    assertThat(progress.snapshot()).containsEntry("alerts", 0L);
+    assertThat(controller.alerts()).contains(dismissed);
+    assertThat(review.hasPendingReview("invoice", invoice)).isTrue();
+    assertThatThrownBy(() -> controller.deleteAlert(first.id, version))
+        .isInstanceOfSatisfying(DomainException.class, error -> assertThat(error.status).isEqualTo(409));
+    assertThat(review.open(null, "invoice", invoice, "TEST_CONCERN", " Questão anterior ")).isNull();
+
+    var next = review.openAll(null, "invoice", invoice, "TEST_CONCERN", List.of("Questão anterior", "Nova questão"));
+    store.flush();
+    assertThat(next.id).isNotEqualTo(first.id);
+    assertThat(next.concerns()).extracting(Alert.Concern::message).containsExactly("Nova questão");
+    assertThat(first.concerns()).extracting(Alert.Concern::message).containsExactly("Questão anterior");
+    assertThat(progress.snapshot()).containsEntry("alerts", 1L);
+    assertThat(store.get(Invoice.class, invoice).manuallyConfirmed).isFalse();
+    assertThat(store.all(LedgerEntry.class)).isEmpty();
+  }
+
+  @Test void deletingAliasesErasesAlertContentsAndRevokesRepairs() throws Exception {
+    var fixture = fixture();
+    var alert = store.get(Alert.class, fixture.alert);
+    var alias = mergedAlias(alert);
+    audit.record("OPEN", "alert", alert.id, null, map("message", alert.message));
+    store.flush();
+    assertThat(controller.alert(alias.id)).containsEntry("id", alert.id);
+    var claim = request(fixture);
+    var snapshot = repairs.begin(claim);
+
+    controller.deleteAlert(alert.id, alert.version);
+    store.flush();
+    assertRemovedAlert(alert.id);
+    assertRemovedAlert(alias.id);
+    assertThat(jdbc.queryForList("select action, before_value, after_value from audit_event where entity_type='alert'"))
+        .containsExactly(map("action", "DELETE", "before_value", null, "after_value", null));
+    assertThat(controller.alerts()).isEmpty();
+    assertThat(progress.snapshot()).containsEntry("alerts", 0L);
+    assertThat(repairs.begin(claim)).isNull();
+    assertThat(repairs.complete(claim, snapshot, response(valid(), List.of()), Map.of(), null)).isFalse();
+    assertThat(jobMonitor.detail(claim.id()).get("target")).isInstanceOfSatisfying(Map.class,
+        target -> assertThat(target.get("available")).isEqualTo(false));
+    assertThat(review.open(fixture.doc, "document", fixture.doc, alert.code, alert.message).id).isNotEqualTo(alert.id);
+    assertNoMoney();
+  }
+
+  private Alert mergedAlias(Alert alert) {
+    var alias = new Alert();
+    alias.entityType = alert.entityType;
+    alias.entityId = alert.entityId;
+    alias.status = "RESOLVED";
+    alias.mergedInto = alert.id;
+    store.add(alias);
+    audit.record("OPEN", "alert", alias.id, null, map("message", "Antigo aviso"));
+    return alias;
+  }
+
+  private void assertRemovedAlert(UUID id) {
+    assertThatThrownBy(() -> controller.alert(id))
+        .isInstanceOfSatisfying(DomainException.class, error -> assertThat(error.status).isEqualTo(404));
+    assertThatThrownBy(() -> controller.audit("alert", id))
+        .isInstanceOfSatisfying(DomainException.class, error -> assertThat(error.status).isEqualTo(404));
+  }
+
+  @Test void dismissalInvalidatesARepairAlreadyInFlight() throws Exception {
+    var fixture = fixture();
+    var claim = request(fixture);
+    var snapshot = repairs.begin(claim);
+
+    var dismissed = controller.dismissAlert(fixture.alert, map("version", claim.revision()));
+
+    assertThat(task(dismissed)).containsEntry("outcome", "STALE").containsEntry("canApply", false);
+    assertThat(repairs.begin(claim)).isNull();
+    assertThat(repairs.complete(claim, snapshot, response(valid(), List.of()), Map.of(), null)).isFalse();
+    assertThat(store.get(Alert.class, fixture.alert).proposal).isNull();
+  }
+
+  @Test void deletingAnUnresolvedAlertKeepsTheInvoicePendingUntilHumanValidation() {
+    var draft = valid();
+    UUID id = (UUID) book.saveInvoice(null, draft).get("id");
+    var alert = review.open(null, "invoice", id, "TEST_CONCERN", "Questão anterior");
+    store.flush();
+    controller.deleteAlert(alert.id, alert.version);
+
+    var invoice = store.get(Invoice.class, id);
+    assertThat(invoice.manuallyConfirmed).isFalse();
+    assertThat(store.all(LedgerEntry.class)).isEmpty();
+    draft.put("validate", true);
+    var automatic = book.saveInvoice(id, draft, "AI", false);
+    assertThat(automatic).containsEntry("reviewStatus", Types.ReviewStatus.OPEN);
+    assertThat(review.hasPendingReview("invoice", id)).isTrue();
+    assertThat(store.all(LedgerEntry.class)).isEmpty();
+
+    draft.put("version", invoice.version);
+    book.saveInvoice(id, draft);
+    assertThat(invoice.manuallyConfirmed).isTrue();
+    assertThat(review.hasPendingReview("invoice", id)).isFalse();
+    assertThat(store.all(LedgerEntry.class)).isNotEmpty();
   }
 
   @Test void aLateItemRepairRemainsStaleAfterHumanValidation() throws Exception {

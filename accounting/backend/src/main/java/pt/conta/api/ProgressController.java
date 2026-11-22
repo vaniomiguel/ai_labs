@@ -54,7 +54,9 @@ public class ProgressController {
             counts.get("active"),
             "jobStates", counts,
             "alerts",
-            jdbc.queryForObject("select count(*) from alert where status='OPEN'", Long.class),
+            jdbc.queryForObject("""
+                select count(*) from alert where status='OPEN' and dismissed_at is null and merged_into is null
+                """, Long.class),
             "revision",
             jdbc.queryForObject(
                 "select greatest(coalesce((select max(updated_at) from"
@@ -67,7 +69,8 @@ public class ProgressController {
                     + "coalesce((select max(updated_at) from record_classification),'epoch'::timestamptz),"
                     + "coalesce((select max(updated_at) from category_catalog),'epoch'::timestamptz))::text"
                     + " || '|' || coalesce((select id::text from ai_execution"
-                    + " order by created_at desc,id desc limit 1),'')",
+                    + " order by created_at desc,id desc limit 1),'')"
+                    + " || '|' || (select count(*) from alert where merged_into is null)",
                 String.class));
   }
 

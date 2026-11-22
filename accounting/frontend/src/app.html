@@ -658,7 +658,7 @@
             <h2>
               Lista de alertas <span class="count">{{visibleAlerts().length}}</span>
             </h2>
-            @if(alertStatusFilter()!=='RESOLVED'){
+            @if(alertStatusFilter()==='OPEN' || alertStatusFilter()==='all'){
             <p>
               Guardar alterações não resolve o alerta. Valida os dados quando
               estiverem corretos.
@@ -670,6 +670,7 @@
             <select [ngModel]="alertStatusFilter()" (ngModelChange)="alertStatusFilter.set($event)">
               <option value="OPEN">Em aberto</option>
               <option value="RESOLVED">Resolvidos</option>
+              <option value="dismissed">Ocultados</option>
               <option value="all">Todos</option>
             </select>
           </label>
@@ -677,19 +678,23 @@
         <div class="alert-list">
           @for(a of visibleAlerts();track a.id){
           <article class="alert-item" [class.resolved]="a.status==='RESOLVED'">
-            <span class="alert-icon">{{a.status==='OPEN'?'!':'✓'}}</span>
+            <span class="alert-icon" aria-hidden="true">{{a.dismissedAt?'–':a.status==='OPEN'?'!':'✓'}}</span>
             <div>
               <strong>{{a.message}}</strong
               >@if((a.concerns?.length ?? 0) > 1){<small>{{a.concerns?.length}} questões</small>}<small
                 >{{a.documentId?sourceName(a.documentId):'Registo manual ou
-                tarefa'}} · {{labels[a.status]}}</small
+                tarefa'}} · {{a.dismissedAt?'Ocultado':labels[a.status]}}</small
               >@if(a.resolvedAt){
               <small>{{a.resolvedBy}} · {{a.resolvedAt|date:'dd/MM/yyyy HH:mm'}}</small>
               }
             </div>
-            <button mat-stroked-button (click)="openAlert(a.id)">
-              Consultar →
-            </button>
+            <div class="row-actions alert-actions">
+              <button mat-stroked-button [disabled]="alertActionPending()" (click)="openAlert(a.id)">Consultar →</button>
+              @if(!a.dismissedAt){
+                <button mat-stroked-button [disabled]="alertActionPending()" (click)="dismissAlert(a)">Ocultar</button>
+              }
+              <button class="text-button danger" [disabled]="alertActionPending()" (click)="requestAlertDeletion(a)">Eliminar</button>
+            </div>
           </article>
           }@empty{
           <p class="empty-state" role="status">
@@ -1369,4 +1374,46 @@
 
 @if(categoryTarget();as target){
   <category-editor [type]="target.type" [record]="target.record" (closed)="closeRoute()" (changed)="refresh()" />
+}
+
+@if(dismissedAlertDetail();as alert){
+  <div class="modal-backdrop" (keydown.escape)="closeRoute()">
+    <section class="dialog compact" role="dialog" aria-modal="true" aria-labelledby="dismissed-alert-title"
+      cdkTrapFocus [cdkTrapFocusAutoCapture]="true">
+      <div class="dialog-body">
+        <h2 id="dismissed-alert-title">Alerta ocultado</h2>
+        @if(alert.concerns?.length){
+          <ul>@for(concern of alert.concerns;track $index){<li>{{concern.message}}</li>}</ul>
+        }@else{
+          <p>{{alert.message}}</p>
+        }
+      </div>
+      <footer class="dialog-footer">
+        <button mat-stroked-button cdkFocusInitial (click)="closeRoute()">Fechar</button>
+      </footer>
+    </section>
+  </div>
+}
+
+@if(alertRemoval();as alert){
+  <div class="modal-backdrop" (keydown.escape)="cancelAlertDeletion()">
+    <section class="dialog compact" role="alertdialog" aria-modal="true" aria-labelledby="delete-alert-title"
+      aria-describedby="delete-alert-warning delete-alert-message" cdkTrapFocus [cdkTrapFocusAutoCapture]="true">
+      <div class="dialog-body">
+        <h2 id="delete-alert-title">Eliminar este alerta?</h2>
+        <p id="delete-alert-warning">O alerta será eliminado permanentemente. Esta ação é irreversível.</p>
+        <strong id="delete-alert-message">{{alert.message}}</strong>
+        @if(alertRemovalError()){
+          <p class="error" role="alert">{{alertRemovalError()}}</p>
+        }
+      </div>
+      <footer class="dialog-footer">
+        <button mat-stroked-button cdkFocusInitial [disabled]="alertActionPending()" (click)="cancelAlertDeletion()">Cancelar</button>
+        <button mat-stroked-button class="danger" [disabled]="alertActionPending()" [disabledInteractive]="true"
+          (click)="confirmAlertDeletion()">
+          {{alertActionPending()?'A eliminar…':'Eliminar permanentemente'}}
+        </button>
+      </footer>
+    </section>
+  </div>
 }

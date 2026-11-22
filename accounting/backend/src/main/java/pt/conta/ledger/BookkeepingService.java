@@ -279,7 +279,7 @@ public class BookkeepingService {
   private boolean validationRequested(
       Map<String, Object> input, boolean human, ReviewStatus previous, String type, UUID id) {
     if (!flag(input, "validate") || !human && !review.messages(input.get("issues")).isEmpty()) return false;
-    return human || previous != ReviewStatus.OPEN || review.openFor(type, id).isEmpty();
+    return human || previous != ReviewStatus.OPEN || !review.hasPendingReview(type, id);
   }
 
   private void recordConcerns(

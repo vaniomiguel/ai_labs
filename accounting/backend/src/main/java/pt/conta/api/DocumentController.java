@@ -29,6 +29,7 @@ public class DocumentController {
   private final DocumentPublisher publisher;
   private final JobQueue jobs;
   private final RepairService repairs;
+  private final ReviewService review;
   private final HistoryService history;
   private final pt.conta.ledger.BookkeepingService book;
 
@@ -39,8 +40,9 @@ public class DocumentController {
       DocumentPublisher publisher,
       JobQueue jobs,
       HistoryService history,
-      pt.conta.ledger.BookkeepingService book, RepairService repairs) {
+      pt.conta.ledger.BookkeepingService book, RepairService repairs, ReviewService review) {
     this.repairs = repairs;
+    this.review = review;
     this.store = store;
     this.documents = documents;
     this.storage = storage;
@@ -177,7 +179,7 @@ public class DocumentController {
         .toList();
   }
 
-  /** Lists both open and resolved review issues. */
+  /** Lists alerts for the workspace status filters. */
   @GetMapping("/alerts")
   @Transactional(readOnly = true)
   public List<Map<String, Object>> alerts() {
@@ -186,6 +188,17 @@ public class DocumentController {
 
   @GetMapping("/alerts/{id}")
   public Map<String,Object> alert(@PathVariable UUID id) { return repairs.view(id); }
+
+  @PostMapping("/alerts/{id}/dismiss")
+  public Map<String, Object> dismissAlert(@PathVariable UUID id, @RequestBody Map<String, Object> body) {
+    return repairs.dismiss(id, version(body));
+  }
+
+  @DeleteMapping("/alerts/{id}")
+  @ResponseStatus(HttpStatus.NO_CONTENT)
+  public void deleteAlert(@PathVariable UUID id, @RequestParam long version) {
+    review.delete(id, version);
+  }
 
   /** An accepted repair is asynchronous; repeated clicks reuse the current active request. */
   @PostMapping("/alerts/{id}/ai")
@@ -311,6 +324,7 @@ public class DocumentController {
   @GetMapping("/audit/{type}/{id}")
   @Transactional(readOnly = true)
   public List<Map<String, Object>> audit(@PathVariable String type, @PathVariable UUID id) {
+    if ("alert".equals(type)) store.get(Alert.class, id);
     return store.all(AuditEvent.class).stream()
         .filter(a -> a.entityType.equals(type) && a.entityId.equals(id))
         .map(

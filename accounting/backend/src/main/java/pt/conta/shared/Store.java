@@ -16,9 +16,11 @@ public class Store {
 
   /** Retrieves one entity or returns a user-facing not-found error. */
   public <T> T get(Class<T> type, UUID id) {
-    T result = em.find(type, id);
-    if (result == null) throw DomainException.missing();
-    return result;
+    return find(type, id).orElseThrow(DomainException::missing);
+  }
+
+  public <T> Optional<T> find(Class<T> type, UUID id) {
+    return Optional.ofNullable(em.find(type, id));
   }
 
   /** Reads domain records in stable creation order. */

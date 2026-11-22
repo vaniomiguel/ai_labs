@@ -313,7 +313,7 @@ public class DocumentPublisher {
     if(!human&&Set.of("INVOICE","STATEMENT").contains(doc.kind)&&protection.entries(doc.kind,draft).stream().anyMatch(row->Boolean.FALSE.equals(row.get("validate"))))doc.status="OPEN";
     if (doc.status.equals("DONE")) {
       if (human || !financial(doc)) review.resolveFor("document", doc.id);
-      else if (review.openFor("document", doc.id).isPresent()) doc.status = "OPEN";
+      else if (review.hasPendingReview("document", doc.id)) doc.status = "OPEN";
       if (human) {
         draft.put("issues", List.of());
         for (String key : List.of("lines", "invoices", "movements", "rows"))
@@ -437,7 +437,7 @@ public class DocumentPublisher {
     if (!errors.isEmpty()) review.openAll(doc.id, "document", doc.id, "STATEMENT_INTEGRITY", errors);
     statement.validated = errors.isEmpty() && rows.stream().allMatch(row -> flag(row, "validate"))
         && (human || review.messages(draft.get("issues")).isEmpty()
-            && review.openFor("document", doc.id).isEmpty());
+            && !review.hasPendingReview("document", doc.id));
     doc.status = statement.validated ? "DONE" : "OPEN";
     doc.draft = Json.write(draft);
   }

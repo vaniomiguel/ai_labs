@@ -23,7 +23,12 @@ import { DEFAULT_WORKSPACE_URL, RecordKind, recordView, WORKSPACE_PATHS, Workspa
 
 interface WorkspaceOrigin { url: string; view: WorkspaceView }
 interface SuspendedEditor { url: string; draft: ReviewableRecord }
-type AlertStatusFilter = "OPEN" | "RESOLVED" | "all";
+type AlertStatusFilter = "OPEN" | "RESOLVED" | "dismissed" | "all";
+type AlertAction = "dismiss" | "delete";
+
+function isVisibleOpenAlert(alert: AlertView): boolean {
+  return alert.status === "OPEN" && !alert.dismissedAt;
+}
 interface RecordAlertSource {
   id: string; version: number; kind: string; mediaType: string; draft: Record<string, unknown>;
 }
@@ -98,13 +103,19 @@ export class AppComponent implements OnDestroy {
   readonly visibleAlerts = computed(() => {
     const alerts: AlertView[] = this.state().alerts;
     const status = this.alertStatusFilter();
-    return status === "all" ? alerts : alerts.filter(alert => alert.status === status);
+    if (status === "dismissed") return alerts.filter(alert => alert.dismissedAt);
+    return alerts.filter(alert => !alert.dismissedAt && (status === "all" || alert.status === status));
   });
   readonly alertEmptyMessages: Record<AlertStatusFilter, string> = {
     OPEN: "Não existem alertas em aberto.",
     RESOLVED: "Não existem alertas resolvidos.",
+    dismissed: "Não existem alertas ocultados.",
     all: "Não existem alertas.",
   };
+  readonly alertRemoval = signal<AlertView | null>(null);
+  readonly alertActionPending = signal(false);
+  readonly alertRemovalError = signal("");
+  readonly dismissedAlertDetail = signal<AlertView | null>(null);
   readonly processing = signal<JobPage | null>(null);
   readonly jobDetail = signal<JobItem | null>(null);
   readonly selectedJobId = signal<string | null>(null);
@@ -370,6 +381,9 @@ export class AppComponent implements OnDestroy {
     this.editorClassification.set(null);
     this.reviewDocument.set(null);
     this.activeAlert.set(null);
+    this.dismissedAlertDetail.set(null);
+    this.alertRemoval.set(null);
+    this.alertRemovalError.set("");
     this.alertSource.set(null);
     this.stagedRepairs = [];
     this.reviewEdits.set(0);
@@ -435,7 +449,7 @@ export class AppComponent implements OnDestroy {
       const previous = this.state();
       const resultFilters = records ? { ...previous.resultFilters, [view]: records.filters } : previous.resultFilters;
       this.state.set({ ...previous, ...shared, ...records?.data, ...summary, resultFilters });
-      this.counts.update(counts => ({ ...counts, alerts: shared.alerts.filter(alert => alert.status === "OPEN").length }));
+      this.updateAlertCount(shared.alerts);
       if (!this.uploadAccount && shared.accounts.length) this.uploadAccount = shared.accounts[0].id;
     } catch (error) {
       if (request === this.financialRequest) this.error.set(errorMessage(error));
@@ -826,9 +840,73 @@ export class AppComponent implements OnDestroy {
   }
   openAlert(id: string) { this.openRoute(["alert", id, "review"]); }
 
+  dismissAlert(alert: AlertView) { return this.changeAlert(alert, "dismiss"); }
+
+  requestAlertDeletion(alert: AlertView) {
+    this.alertRemovalError.set("");
+    this.alertRemoval.set(alert);
+  }
+
+  cancelAlertDeletion() {
+    if (!this.alertActionPending()) this.alertRemoval.set(null);
+  }
+
+  confirmAlertDeletion() {
+    const alert = this.alertRemoval();
+    if (alert) return this.changeAlert(alert, "delete");
+  }
+
+  private async changeAlert(alert: AlertView, action: AlertAction) {
+    if (this.alertActionPending()) return;
+    const request = this.routeRequest;
+    this.alertActionPending.set(true);
+    this.alertRemovalError.set("");
+    this.error.set("");
+    try {
+      const updated = await this.mutateAlert(alert, action);
+      if (request !== this.routeRequest) return;
+      this.replaceAlert(alert.id, updated);
+      this.alertRemoval.set(null);
+      this.notice.set(action === "dismiss" ? "Alerta ocultado." : "Alerta eliminado permanentemente.");
+      await this.refresh();
+    } catch (error) {
+      if (request !== this.routeRequest) return;
+      const message = errorMessage(error);
+      if (action === "delete") this.alertRemovalError.set(message);
+      else this.error.set(message);
+    } finally {
+      this.alertActionPending.set(false);
+    }
+  }
+
+  private async mutateAlert(alert: AlertView, action: AlertAction): Promise<AlertView | null> {
+    const path = `/alerts/${alert.id}`;
+    const revision = { version: alert.version };
+    if (action === "dismiss") return this.api.post<AlertView>(`${path}/dismiss`, revision);
+    await this.api.delete(path, revision);
+    return null;
+  }
+
+  private replaceAlert(id: string, updated: AlertView | null) {
+    const alerts: AlertView[] = this.state().alerts;
+    const next = updated
+      ? alerts.map(alert => alert.id === id ? updated : alert)
+      : alerts.filter(alert => alert.id !== id);
+    this.state.update(state => ({ ...state, alerts: next }));
+    this.updateAlertCount(next);
+  }
+
+  private updateAlertCount(alerts: AlertView[]) {
+    this.counts.update(counts => ({ ...counts, alerts: alerts.filter(isVisibleOpenAlert).length }));
+  }
+
   private async loadAlert(id: string, request: number) {
     const alert = await this.api.get<AlertView>("/alerts/" + id);
     if (request !== this.routeRequest) return;
+    if (alert.dismissedAt) {
+      this.dismissedAlertDetail.set(alert);
+      return;
+    }
     if (alert.entityType === "invoice" || alert.entityType === "movement")
       return this.loadRecordAlert(alert, request);
     if (alert.documentId) return this.loadDocument(alert.documentId, request, alert);

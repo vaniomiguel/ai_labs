@@ -26,12 +26,21 @@ public class Alert extends BaseEntity {
   public UUID mergedInto;
 
   public String status = "OPEN";
+  public Instant dismissedAt;
 
   @Column(columnDefinition = "text")
   public String proposal;
 
   public String resolvedBy;
   public Instant resolvedAt;
+
+  public boolean visible() {
+    return mergedInto == null && dismissedAt == null;
+  }
+
+  public boolean actionable() {
+    return visible() && "OPEN".equals(status);
+  }
 
   public List<Concern> concerns() {
     var entries = new ArrayList<Concern>();

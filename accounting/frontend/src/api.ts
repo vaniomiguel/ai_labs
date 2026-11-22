@@ -33,6 +33,7 @@ export interface AlertView {
   message: string; code: string; entityType: string; entityId: string;
   concerns?: AlertConcern[]; proposal: any; repair: RepairTask | null;
   resolvedBy: string | null; resolvedAt: string | null;
+  dismissedAt: string | null;
 }
 
 export interface DocumentAttempt {

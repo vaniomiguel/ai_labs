@@ -15,7 +15,7 @@ import { Api, AlertView, FieldSuggestion, RepairApplyRequest, RepairPreview, eur
         }@else{<strong>{{current()?.message || alert().message}}</strong>}
       }
       <div class="row-actions">
-        <button mat-stroked-button [attr.aria-busy]="submitting()" [disabled]="pending() || current()?.status==='RESOLVED'" (click)="request()">
+        <button mat-stroked-button [attr.aria-busy]="submitting()" [disabled]="pending() || !actionable()" (click)="request()">
           @if(submitting()){<mat-spinner diameter="18" aria-label="A enviar pedido" />}{{submitting()?'A enviar pedido…':current()?.repair?'Pedir nova análise à IA':'✧ Pedir tentativa de correção à IA'}}
         </button>
         <button class="text-button" [disabled]="submitting()" (click)="refresh()">Atualizar proposta</button>
@@ -131,7 +131,7 @@ export class RepairPanel implements OnChanges, OnDestroy {
     finally{if(sequence===this.sequence){this.fetching=false;this.schedule();}}
   }
   async request() {
-    if(this.pending())return;
+    if(this.pending() || !this.actionable())return;
     clearTimeout(this.timer);const sequence=++this.sequence,id=this.alert().id;
     const previousJob = this.current()?.repair?.jobId;
     this.fetching=false;this.submitting.set(true);this.error.set("");
@@ -145,7 +145,11 @@ export class RepairPanel implements OnChanges, OnDestroy {
     catch(e){if(!this.destroyed&&sequence===this.sequence)this.error.set(errorMessage(e));}
     finally{if(sequence===this.sequence){this.submitting.set(false);this.schedule();if(this.current()?.proposal?.draft&&!this.pending())this.queuePreview();}}
   }
-  private fresh(){return !this.pending()&&this.current()?.status==='OPEN'&&this.current()?.proposal?.documentVersion===this.document().version&&this.current()?.repair?.outcome!=='STALE';}
+  actionable() {
+    const alert = this.current() ?? this.alert();
+    return alert.status === "OPEN" && !alert.dismissedAt;
+  }
+  private fresh(){return !this.pending()&&this.actionable()&&this.current()?.proposal?.documentVersion===this.document().version&&this.current()?.repair?.outcome!=='STALE';}
   canDraft(){return this.fresh()&&!this.previewing()&&!!this.preview()?.canApplyDraft;}
   canApply(){return this.canDraft()&&!!this.preview()?.canValidate;}
   issues():string[]{return [...new Set<string>([...(this.current()?.proposal?.issues||[]),...(this.preview()?.blockingIssues||this.current()?.repair?.blockingIssues||[])])];}
