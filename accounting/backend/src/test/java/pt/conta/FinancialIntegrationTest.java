@@ -3,6 +3,7 @@ package pt.conta;
 import static org.assertj.core.api.Assertions.*;
 import static org.assertj.core.api.InstanceOfAssertFactories.MAP;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
+import static pt.conta.document.SourceDocument.INVOICE_ARCHIVE;
 import static pt.conta.shared.Inputs.map;
 import static pt.conta.shared.Inputs.rows;
 
@@ -14,6 +15,8 @@ import java.nio.file.Files;
 import java.time.*;
 import java.util.*;
 import java.util.concurrent.*;
+import java.util.zip.ZipEntry;
+import java.util.zip.ZipOutputStream;
 import org.junit.jupiter.api.*;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
@@ -1011,6 +1014,80 @@ class FinancialIntegrationTest {
             store.all(pt.conta.review.Alert.class).stream()
                 .filter(a -> a.entityType.equals("legacy") && a.status.equals("OPEN")))
         .isEmpty();
+  }
+
+  @Test
+  void invoiceArchiveQueuesOnlyInvoicePdfsAndCanResume() throws Exception {
+    String invoicePath = "2026/faturas/fatura-janeiro.PDF";
+    byte[] archive = zip(Map.of(
+        invoicePath, pdf("Fornecedor: Exemplo ZIP", "Data: 12/01/2026", "Fatura: FT2026/12", "Total: 123,45"),
+        "2026/extrato.pdf", pdf("Extrato bancário"),
+        "2026/historico.xlsx", new byte[] {1},
+        "2026/notas.txt", new byte[] {2}));
+    UUID archiveId = uploadZip(archive, INVOICE_ARCHIVE, null);
+    assertThat(uploadZip(archive, INVOICE_ARCHIVE, null)).isEqualTo(archiveId);
+    assertQueuedJob(archiveId, "IMPORT_ZIP");
+
+    zipImporter.run(archiveId);
+    zipImporter.run(archiveId);
+
+    var original = store.get(SourceDocument.class, archiveId);
+    assertThat(original.status).isEqualTo("DONE");
+    assertThat(original.accountId).isNull();
+    var children = store.all(SourceDocument.class).stream().filter(doc -> !doc.id.equals(archiveId)).toList();
+    assertThat(children).singleElement().satisfies(child -> {
+      assertThat(child.kind).isEqualTo("INVOICE");
+      assertThat(child.sourcePath).isEqualTo(invoicePath);
+      assertThat(child.batchId).isEqualTo(original.batchId);
+      assertThat(child.accountId).isNull();
+      assertQueuedJob(child.id, "EXTRACT");
+    });
+  }
+
+  @Test
+  void invoiceArchiveWithNoEligiblePdfsReportsAnImportErrorOnRetry() throws Exception {
+    byte[] archive = zip(Map.of("statement.pdf", pdf("Extrato"), "historico.xlsx", new byte[] {1}));
+    UUID archiveId = uploadZip(archive, INVOICE_ARCHIVE, null);
+    assertThatThrownBy(() -> zipImporter.run(archiveId))
+        .isInstanceOf(DomainException.class).hasMessageContaining("não contém PDFs de faturas");
+    assertThatThrownBy(() -> zipImporter.run(archiveId))
+        .isInstanceOf(DomainException.class).hasMessageContaining("não contém PDFs de faturas");
+    assertThat(store.all(SourceDocument.class)).extracting(doc -> doc.id).containsExactly(archiveId);
+  }
+
+  @Test
+  void invoiceArchiveRejectsABankAccount() {
+    assertThatThrownBy(() -> uploadZip(new byte[0], INVOICE_ARCHIVE, account))
+        .isInstanceOf(DomainException.class).hasMessageContaining("não aceita uma conta bancária");
+  }
+
+  @Test
+  void invoiceArchiveRequiresAZip() {
+    assertThatThrownBy(() -> documents.upload(
+        new ByteArrayInputStream(new byte[0]), "fatura.pdf", INVOICE_ARCHIVE, null, null, null))
+        .isInstanceOf(DomainException.class).hasMessageContaining("deve ser ZIP");
+  }
+
+  private static byte[] zip(Map<String, byte[]> entries) throws IOException {
+    var bytes = new ByteArrayOutputStream();
+    try (var zip = new ZipOutputStream(bytes)) {
+      for (var entry : entries.entrySet()) {
+        zip.putNextEntry(new ZipEntry(entry.getKey()));
+        zip.write(entry.getValue());
+        zip.closeEntry();
+      }
+    }
+    return bytes.toByteArray();
+  }
+
+  private UUID uploadZip(byte[] bytes, String kind, UUID accountId) throws IOException {
+    return (UUID) documents.upload(
+        new ByteArrayInputStream(bytes), "faturas.zip", kind, accountId, null, null).get("id");
+  }
+
+  private void assertQueuedJob(UUID documentId, String kind) {
+    assertThat(queue.taskIds(documentId)).singleElement().satisfies(jobId ->
+        assertThat(jobMonitor.detail(jobId)).containsEntry("kind", kind).containsEntry("state", "QUEUED"));
   }
 
   /** Builds a real legacy workbook with one fully paid invoice and its original formula. */

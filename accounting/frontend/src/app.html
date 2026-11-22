@@ -190,9 +190,22 @@
             </h2>
             <p>O valor por reconciliar é independente do saldo anual. Pendentes sem data aparecem em qualquer período e ficam fora dos cálculos.</p>
           </div>
-          <button mat-flat-button type="button" (click)="newRecord('INVOICE')">
-            + Nova fatura
-          </button>
+          <div class="record-list-actions">
+            <input #invoicePdfs type="file" multiple accept=".pdf" hidden
+              [disabled]="uploading()" (change)="upload(invoicePdfs, 'INVOICE', null)" />
+            <input #invoiceZips type="file" multiple accept=".zip" hidden
+              [disabled]="uploading()" (change)="upload(invoiceZips, 'INVOICE_ARCHIVE', null)" />
+            <button mat-stroked-button type="button" [disabled]="uploading()" (click)="invoicePdfs.click()">
+              Importar PDF
+            </button>
+            <button mat-stroked-button type="button" [disabled]="uploading()" (click)="invoiceZips.click()">
+              Importar ZIP
+            </button>
+            <button mat-flat-button type="button" (click)="newRecord('INVOICE')">
+              + Nova fatura
+            </button>
+          </div>
+          @if(uploading()){<p role="status">A enviar…</p>}
         </div>
         <div class="table-scroll">
           <table>
@@ -277,9 +290,6 @@
                       Importa os documentos ou cria a primeira fatura
                       manualmente.
                     </p>
-                    <button mat-stroked-button (click)="navigate('documents')">
-                      Importar documentos
-                    </button>
                   </div>
                   }
                 </td>
@@ -464,11 +474,12 @@
             </select></label
           >}<label class="file-button" [class.disabled]="uploading()"
             >{{uploading()?'A enviar…':'Escolher ficheiros'}}<input
+              #documentFiles
               type="file"
               multiple
               accept=".pdf,.xlsx,.xls,.zip"
               [disabled]="uploading()"
-              (change)="upload($event)"
+              (change)="upload(documentFiles)"
           /></label>
         </div>
       </section>
@@ -501,6 +512,7 @@
             </thead>
             <tbody>
               @for(d of filteredDocuments();track d.id){
+              @let status = d.kind === 'INVOICE_ARCHIVE' ? archiveImportJobs().get(d.id)?.state ?? d.status : d.status;
               <tr>
                 <td>
                   <button class="row-title" (click)="openDocument(d.id)">
@@ -509,14 +521,16 @@
                 </td>
                 <td>{{labels[d.kind]}}</td>
                 <td>
-                  <span class="badge" [class.warning]="d.status==='OPEN'"
-                    >{{labels[d.status]}}</span
+                  <span class="badge" [class.warning]="status==='OPEN'||status==='FAILED'"
+                    >{{labels[status]}}</span
                   >
                 </td>
                 <td>{{d.createdAt|date:'dd/MM/yyyy HH:mm'}}</td>
                 <td>
                   <div class="row-actions">
-                    <button class="text-button" (click)="openDocument(d.id)">Consultar e editar →</button>
+                    <button class="text-button" (click)="openDocument(d.id)">
+                      {{d.kind==='INVOICE_ARCHIVE' ? 'Consultar original →' : 'Consultar e editar →'}}
+                    </button>
                     @if(d.cleanupAvailable){
                       <button class="text-button danger" (click)="requestRemoval('DOCUMENT',d.id)">Eliminar extração</button>
                     }
@@ -1198,21 +1212,26 @@
   </section>
 </div>
 } @if(reviewDocument();as doc){
+@let invoiceArchive = doc.kind === 'INVOICE_ARCHIVE';
+@let importJob = invoiceArchive ? archiveImportJobs().get(doc.id) : undefined;
 <div class="modal-backdrop">
   <section
-    class="dialog review-dialog"
+    class="dialog"
+    [class.compact]="invoiceArchive"
+    [class.review-dialog]="!invoiceArchive"
     role="dialog"
     aria-modal="true"
-    aria-label="Rever extração"
+    [attr.aria-label]="invoiceArchive ? 'Consultar arquivo de faturas' : 'Rever extração'"
   >
     <header class="dialog-heading">
       <div>
-        <p class="eyebrow">ORIGINAL E DADOS EXTRAÍDOS</p>
+        <p class="eyebrow">{{invoiceArchive ? 'ARQUIVO ZIP DE FATURAS' : 'ORIGINAL E DADOS EXTRAÍDOS'}}</p>
         <h2>{{doc.filename}}</h2>
-        <small
-          >{{labels[doc.status]}} · {{doc.pages||'—'}} páginas · Original
-          preservado</small
-        >
+        <small>
+          {{labels[importJob?.state ?? doc.status]}} ·
+          @if(!invoiceArchive){ {{doc.pages||'—'}} páginas · }
+          Original preservado
+        </small>
       </div>
       <button
         class="icon-button"
@@ -1222,6 +1241,17 @@
         ×
       </button>
     </header>
+    @if(invoiceArchive){
+    <div class="dialog-body">
+      <a class="text-button" [href]="'/api/v1/documents/'+doc.id+'/original'" target="_blank">Descarregar original ↗</a>
+      @if(importJob?.error || activeAlert()?.message; as message){
+        <p class="error" role="alert">{{message}}</p>
+      }
+      @if(importJob?.id || activeAlert()?.entityId; as jobId){
+        <button type="button" class="text-button" (click)="openJob(jobId)">Consultar tarefa</button>
+      }
+    </div>
+    } @else {
     <div class="dialog-body split-editor">
       <div class="source-column">
         @if(doc.mediaType==='application/pdf'){<source-pdf
@@ -1316,6 +1346,7 @@
         Validar e resolver
       </button>
     </footer>
+    }
   </section>
 </div>
 } @if(assignment();as data){

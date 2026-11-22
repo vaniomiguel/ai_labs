@@ -3299,12 +3299,14 @@
                       "STATEMENT",
                       "HISTORY",
                       "ARCHIVE",
+                      "INVOICE_ARCHIVE",
                       "SUPPORT"
                     ]
                   },
                   "accountId": {
                     "type": "string",
-                    "format": "uuid"
+                    "format": "uuid",
+                    "description": "Obrigatório para STATEMENT e ARCHIVE. Omitir para INVOICE_ARCHIVE."
                   }
                 }
               }

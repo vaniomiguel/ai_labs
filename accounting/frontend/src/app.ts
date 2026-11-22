@@ -28,6 +28,8 @@ interface WorkspaceOrigin { url: string; view: WorkspaceView }
 interface SuspendedEditor { url: string; draft: ReviewableRecord }
 type AlertStatusFilter = "OPEN" | "RESOLVED" | "dismissed" | "all";
 type AlertAction = "dismiss" | "delete";
+type DocumentUploadKind = "INVOICE" | "STATEMENT" | "HISTORY" | "ARCHIVE" | "INVOICE_ARCHIVE";
+type WorkspaceJob = Pick<JobItem, "id" | "kind" | "targetId" | "state" | "error">;
 
 function isVisibleOpenAlert(alert: AlertView): boolean {
   return alert.status === "OPEN" && !alert.dismissedAt;
@@ -122,6 +124,10 @@ export class AppComponent implements OnDestroy {
     aiSuggestions: [],
     reconciliation: EMPTY_RECONCILIATION_PAGE,
   });
+  readonly archiveImportJobs = computed(() => {
+    const jobs: WorkspaceJob[] = this.state().jobs;
+    return new Map(jobs.filter(job => job.kind === "IMPORT_ZIP").map(job => [job.targetId, job]));
+  });
   readonly assistant = signal<any>(null);
   readonly executions = signal<AiExecutionItem[]>([]);
   private executionHistoryRequest = 0;
@@ -211,7 +217,7 @@ export class AppComponent implements OnDestroy {
   readonly deletionTarget = signal<DeletionTarget | null>(null);
   username = "gestor";
   password = "";
-  uploadKind = "INVOICE";
+  uploadKind: DocumentUploadKind = "INVOICE";
   uploadAccount = "";
   uploading = signal(false);
   recordKind: RecordKind = "INVOICE";
@@ -534,7 +540,7 @@ export class AppComponent implements OnDestroy {
       this.api.get("/categories", includeArchived ? { archived: true } : {}),
       this.api.get("/documents"),
       this.api.get<AlertView[]>("/alerts"),
-      this.api.get("/jobs"),
+      this.api.get<WorkspaceJob[]>("/jobs"),
       this.api.get("/history"),
       this.api.get("/imports"),
       this.api.get("/reconciliation/ai-suggestions"),
@@ -693,23 +699,25 @@ export class AppComponent implements OnDestroy {
       await this.refresh();
     });
   }
-  async upload(event: Event) {
-    const input = event.target as HTMLInputElement;
-    if (!input.files?.length) return;
+  async upload(input: HTMLInputElement, kind = this.uploadKind, accountId: string | null = this.uploadAccount) {
+    const files = input.files;
+    if (this.uploading() || !files?.length) return;
     this.uploading.set(true);
-    await this.run(async () => {
-      const form = new FormData();
-      for (const file of Array.from(input.files!)) form.append("files", file);
-      form.append("kind", this.uploadKind);
-      if (this.uploadAccount) form.append("accountId", this.uploadAccount);
-      await this.api.post("/documents", form);
-      this.notice.set(
-        "Documentos arquivados. O processamento continua em segundo plano.",
-      );
-      await this.refresh();
-    });
-    input.value = "";
-    this.uploading.set(false);
+    this.notice.set("");
+    try {
+      await this.run(async () => {
+        const form = new FormData();
+        for (const file of Array.from(files)) form.append("files", file);
+        form.append("kind", kind);
+        if (accountId) form.append("accountId", accountId);
+        await this.api.post("/documents", form);
+        this.notice.set("Documentos arquivados. O processamento continua em segundo plano.");
+        await this.refresh();
+      });
+    } finally {
+      input.value = "";
+      this.uploading.set(false);
+    }
   }
   newRecord(kind: RecordKind) {
     this.openRoute([WORKSPACE_PATHS[recordView(kind)], "new"]);

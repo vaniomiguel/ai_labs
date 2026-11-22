@@ -1,5 +1,7 @@
 package pt.conta.history;
 
+import static pt.conta.document.SourceDocument.INVOICE_ARCHIVE;
+
 import java.io.*;
 import java.nio.file.Path;
 import java.util.*;
@@ -36,7 +38,10 @@ public class ZipImporter {
   public void run(UUID id) throws Exception {
     var document = store.get(SourceDocument.class, id);
     var batch = state.begin(id);
-    long[] expanded = {0};
+    // An account-free archive has its own manifest under the existing hash/account key.
+    boolean invoiceOnly = INVOICE_ARCHIVE.equals(document.kind);
+    boolean foundInvoicePdf = false;
+    long expanded = 0;
     long index = 0;
     try (var zip = new ZipFile(storage.path(document.storageKey).toFile())) {
       var entries = zip.entries();
@@ -47,59 +52,67 @@ public class ZipImporter {
           throw DomainException.invalid("O ZIP excede o número de entradas permitido");
         String path = entry.getName().replace('\\', '/');
         validatePath(path);
-        if (entry.getSize() > properties.maxDocumentBytes())
-          throw DomainException.invalid("Uma entrada excede o limite de documento");
-        if (entry.getSize() > 0) {
-          expanded[0] += entry.getSize();
-          if (expanded[0] > properties.maxExpandedBytes())
-            throw DomainException.invalid("O ZIP descomprimido excede o limite");
-        }
-        if (index <= batch.completedEntries || entry.isDirectory()) continue;
-        String filename = Path.of(path).getFileName().toString();
-        String lower = filename.toLowerCase(Locale.ROOT);
-        if (lower.startsWith(".")
-            || path.contains("__MACOSX/")
-            || !lower.matches(".*\\.(pdf|xlsx|xls)$")) {
-          state.checkpoint(batch.id, index);
-          continue;
-        }
-        String kind =
-            lower.endsWith(".pdf")
-                ? lower.contains("extrato")
-                        || lower.contains("extracto")
-                        || lower.contains("statement")
-                    ? "STATEMENT"
-                    : "INVOICE"
-                : "HISTORY";
-        long before = expanded[0];
         long declared = Math.max(0, entry.getSize());
-        long[] actual = {0};
-        try (var input =
-            new FilterInputStream(zip.getInputStream(entry)) {
-              @Override
-              public int read(byte[] b, int off, int len) throws IOException {
-                int n = in.read(b, off, len);
-                if (n > 0) {
-                  actual[0] += n;
-                  if (before - declared + actual[0] > properties.maxExpandedBytes())
-                    throw new IOException("Limite de descompressão excedido");
-                }
-                return n;
-              }
-            }) {
-          documents.upload(
-              input,
-              filename,
-              kind,
-              kind.equals("STATEMENT") ? document.accountId : null,
-              batch.id,
-              path);
+        long expandedBeforeEntry = expanded;
+        expanded = expandedWithEntry(expanded, declared);
+        if (entry.isDirectory()) continue;
+        String kind = entryKind(path, invoiceOnly);
+        foundInvoicePdf |= "INVOICE".equals(kind);
+        if (index <= batch.completedEntries) continue;
+        if (kind != null) {
+          long remainingBytes = properties.maxExpandedBytes() - expandedBeforeEntry;
+          expanded = expandedBeforeEntry + uploadEntry(
+              zip, entry, path, kind, document.accountId, batch.id, remainingBytes);
         }
-        expanded[0] = before - declared + actual[0];
         state.checkpoint(batch.id, index);
       }
     }
+    if (invoiceOnly && !foundInvoicePdf)
+      throw DomainException.invalid("O ZIP não contém PDFs de faturas para importar.");
     state.complete(batch.id, id);
+  }
+
+  private long expandedWithEntry(long expanded, long declared) {
+    if (declared > properties.maxDocumentBytes())
+      throw DomainException.invalid("Uma entrada excede o limite de documento");
+    if (declared > properties.maxExpandedBytes() - expanded)
+      throw DomainException.invalid("O ZIP descomprimido excede o limite");
+    return expanded + declared;
+  }
+
+  private static String entryKind(String path, boolean invoiceOnly) {
+    String lower = Path.of(path).getFileName().toString().toLowerCase(Locale.ROOT);
+    if (lower.startsWith(".") || path.contains("__MACOSX/") || !lower.matches(".*\\.(pdf|xlsx|xls)$"))
+      return null;
+    if (lower.endsWith(".pdf")) {
+      boolean statement = lower.contains("extrato") || lower.contains("extracto") || lower.contains("statement");
+      if (!statement) return "INVOICE";
+      return invoiceOnly ? null : "STATEMENT";
+    }
+    return invoiceOnly ? null : "HISTORY";
+  }
+
+  private long uploadEntry(ZipFile zip, ZipEntry entry, String path, String kind, UUID archiveAccount,
+      UUID batchId, long remainingBytes) throws IOException {
+    String filename = Path.of(path).getFileName().toString();
+    UUID account = kind.equals("STATEMENT") ? archiveAccount : null;
+    try (var input = new FilterInputStream(zip.getInputStream(entry)) {
+      long bytesRead;
+
+      @Override
+      public int read(byte[] buffer, int offset, int length) throws IOException {
+        int count = in.read(buffer, offset, length);
+        if (count > 0) {
+          bytesRead += count;
+          if (bytesRead > remainingBytes)
+            throw new IOException("Limite de descompressão excedido");
+        }
+        return count;
+      }
+    }) {
+      documents.upload(input, filename, kind, account, batchId, path);
+      return input.bytesRead;
+    }
   }
 
   /** Validates virtual archive paths even though entries are stored with opaque UUID keys. */

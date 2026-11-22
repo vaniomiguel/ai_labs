@@ -10,6 +10,8 @@ import pt.conta.shared.Types.*;
 @Entity
 @Table(name = "source_document")
 public class SourceDocument extends BaseEntity {
+  public static final String INVOICE_ARCHIVE = "INVOICE_ARCHIVE";
+
   @Column(columnDefinition = "text")
   public String fieldProvenance = "{}";
 

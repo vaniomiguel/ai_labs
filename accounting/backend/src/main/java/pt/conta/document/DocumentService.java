@@ -1,5 +1,7 @@
 package pt.conta.document;
 
+import static pt.conta.document.SourceDocument.INVOICE_ARCHIVE;
+
 import java.io.*;
 import java.util.*;
 import org.springframework.stereotype.Service;
@@ -42,6 +44,8 @@ public class DocumentService {
 
   public SourceDocument reprocessable(UUID id) {
     var doc = active(id);
+    if (INVOICE_ARCHIVE.equals(doc.kind))
+      throw DomainException.invalid("O arquivo ZIP não tem um rascunho de extração.");
     if (!deletion.canExtract(doc))
       throw DomainException.invalid("Esta extração já não tem itens ativos para reprocessar.");
     return doc;
@@ -57,19 +61,9 @@ public class DocumentService {
   public Map<String, Object> upload(
       InputStream input, String filename, String kind, UUID account, UUID batch, String sourcePath)
       throws IOException {
-    if (!Set.of("INVOICE", "STATEMENT", "HISTORY", "ARCHIVE", "SUPPORT").contains(kind))
-      throw DomainException.invalid("Tipo de documento desconhecido");
     String lower = filename.toLowerCase(Locale.ROOT);
-    if (!lower.matches(".*\\.(pdf|xlsx|xls|zip)$"))
-      throw DomainException.invalid("Usa PDF, XLSX, XLS ou ZIP");
-    if (kind.equals("INVOICE") && !lower.endsWith(".pdf"))
-      throw DomainException.invalid("As faturas importadas devem estar em PDF");
-    if (kind.equals("HISTORY") && !lower.matches(".*\\.(xlsx|xls)$"))
-      throw DomainException.invalid("O histórico deve ser um ficheiro Excel");
-    if (kind.equals("ARCHIVE") != lower.endsWith(".zip"))
-      throw DomainException.invalid("Um arquivo deve ser ZIP");
-    if (Set.of("STATEMENT", "ARCHIVE").contains(kind) && account == null)
-      throw DomainException.invalid("Seleciona a conta bancária");
+    boolean archive = kind.equals("ARCHIVE") || kind.equals(INVOICE_ARCHIVE);
+    validateUpload(lower, kind, archive, account);
     if (account != null) store.get(BankAccount.class, account);
     var file = storage.put(input, properties.maxDocumentBytes());
     store.lockFinancialWrites();
@@ -98,10 +92,27 @@ public class DocumentService {
     store.add(doc);
     store.flush();
     if (!kind.equals("SUPPORT"))
-      jobs.enqueue(kind.equals("ARCHIVE") ? "IMPORT_ZIP" : "EXTRACT", doc.id, doc.version, "{}");
+      jobs.enqueue(archive ? "IMPORT_ZIP" : "EXTRACT", doc.id, doc.version, "{}");
     else doc.status = "DONE";
     audit.record("UPLOAD", "document", doc.id, null, view(doc));
     return view(doc);
+  }
+
+  private static void validateUpload(String filename, String kind, boolean archive, UUID account) {
+    if (!Set.of("INVOICE", "STATEMENT", "HISTORY", "ARCHIVE", INVOICE_ARCHIVE, "SUPPORT").contains(kind))
+      throw DomainException.invalid("Tipo de documento desconhecido");
+    if (!filename.matches(".*\\.(pdf|xlsx|xls|zip)$"))
+      throw DomainException.invalid("Usa PDF, XLSX, XLS ou ZIP");
+    if (kind.equals("INVOICE") && !filename.endsWith(".pdf"))
+      throw DomainException.invalid("As faturas importadas devem estar em PDF");
+    if (kind.equals("HISTORY") && !filename.matches(".*\\.(xlsx|xls)$"))
+      throw DomainException.invalid("O histórico deve ser um ficheiro Excel");
+    if (archive != filename.endsWith(".zip"))
+      throw DomainException.invalid("Um arquivo deve ser ZIP");
+    if (Set.of("STATEMENT", "ARCHIVE").contains(kind) && account == null)
+      throw DomainException.invalid("Seleciona a conta bancária");
+    if (kind.equals(INVOICE_ARCHIVE) && account != null)
+      throw DomainException.invalid("Um ZIP de faturas não aceita uma conta bancária");
   }
 
   /** Returns public metadata and editable extracted content without exposing storage paths. */

@@ -371,5 +371,6 @@ export const labels: Record<string, string> = {
   STATEMENT: "Extrato",
   HISTORY: "Excel histórico",
   ARCHIVE: "Arquivo ZIP",
+  INVOICE_ARCHIVE: "Arquivo ZIP de faturas",
   SUPPORT: "Suporte",
 };
