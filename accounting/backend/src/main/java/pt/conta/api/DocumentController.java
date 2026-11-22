@@ -85,14 +85,14 @@ public class DocumentController {
   @GetMapping("/documents/{id}")
   @Transactional(readOnly = true)
   public Map<String, Object> document(@PathVariable UUID id) {
-    return documents.view(store.get(SourceDocument.class, id));
+    return documents.view(documents.active(id));
   }
 
   /** Returns all business records produced by an original for audit and corpus evaluation. */
   @GetMapping("/documents/{id}/records")
   @Transactional(readOnly = true)
   public Map<String, Object> records(@PathVariable UUID id) {
-    store.get(SourceDocument.class, id);
+    documents.active(id);
     return map(
         "invoices",
         store.all(pt.conta.invoice.Invoice.class).stream()
@@ -109,7 +109,7 @@ public class DocumentController {
   /** Streams the immutable original through authenticated same-origin access. */
   @GetMapping("/documents/{id}/original")
   public ResponseEntity<Resource> original(@PathVariable UUID id) {
-    var d = store.get(SourceDocument.class, id);
+    var d = documents.active(id);
     return ResponseEntity.ok()
         .contentType(MediaType.parseMediaType(d.mediaType))
         .header(
@@ -125,7 +125,7 @@ public class DocumentController {
   @GetMapping("/documents/{id}/pages/{page}")
   public ResponseEntity<byte[]> page(@PathVariable UUID id, @PathVariable int page)
       throws IOException {
-    var d = store.get(SourceDocument.class, id);
+    var d = documents.active(id);
     if (!d.mediaType.equals("application/pdf"))
       throw DomainException.invalid("O documento não é PDF");
     try (var pdf = Loader.loadPDF(storage.path(d.storageKey).toFile())) {
@@ -146,7 +146,8 @@ public class DocumentController {
   @PostMapping("/documents/{id}/reprocess")
   @Transactional
   public void reprocess(@PathVariable UUID id, @RequestBody Map<String, Object> body) {
-    var d = store.get(SourceDocument.class, id);
+    store.lockFinancialWrites();
+    var d = documents.reprocessable(id);
     store.checkVersion(d, version(body));
     d.status = "QUEUED";
     d.updatedAt = java.time.Instant.now();

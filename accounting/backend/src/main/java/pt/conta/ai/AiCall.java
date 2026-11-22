@@ -23,7 +23,7 @@ public class AiCall {
   public Result execute(JobQueue.Claim job, AiProvider.Model model, AiProvider.Request request,
       Provenance provenance) {
     var execution = execution(job, model, request, provenance);
-    var completion = complete(request, execution);
+    var completion = complete(request, execution, job);
     execution.response = completion.content();
     execution.recordUsage(completion.usage());
     Map<String, Object> output;
@@ -33,15 +33,15 @@ public class AiCall {
     } catch (RuntimeException e) {
       execution.outcome = "INVALID";
       execution.error = "A resposta do modelo está vazia ou não respeita o formato esperado.";
-      results.record(execution);
+      results.record(execution, job);
       throw e;
     }
     execution.outcome = "VALID";
-    results.record(execution);
+    results.record(execution, job);
     return new Result(execution, output);
   }
 
-  private AiProvider.Completion complete(AiProvider.Request request, AiExecution execution) {
+  private AiProvider.Completion complete(AiProvider.Request request, AiExecution execution, JobQueue.Claim job) {
     long started = System.nanoTime();
     try {
       var completion = provider.complete(request);
@@ -58,7 +58,7 @@ public class AiCall {
         case OllamaProvider.AiUnavailable unavailable -> unavailable.getMessage();
         default -> "Não foi possível obter uma resposta do modelo.";
       };
-      results.record(execution);
+      results.record(execution, job);
       throw e;
     }
   }

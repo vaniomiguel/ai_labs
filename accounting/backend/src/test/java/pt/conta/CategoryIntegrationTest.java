@@ -231,14 +231,14 @@ class CategoryIntegrationTest {
         label(insurance.toString(), "Seguro anual")), List.of()));
     worker.process(classificationJob("CLASSIFY_INVOICE", id));
     var labels = rows(finance.invoice(id), "categoryDetails");
-    assertThat(labels).extracting(tag -> tag.get("id")).containsExactlyInAnyOrder(materials, manual);
+    assertThat(labels).extracting(tag -> tag.get("id")).containsExactlyInAnyOrder(materials, manual, insurance);
     assertThat(labels).filteredOn(tag -> materials.equals(tag.get("id"))).singleElement().satisfies(tag -> {
       assertThat(tag).containsEntry("origins", List.of("MANUAL"));
       assertThat(rows(tag, "evidence")).singleElement().satisfies(evidence -> assertThat(evidence)
           .containsEntry("reason", "Papel A4").containsEntry("origin", "MANUAL")
           .hasEntrySatisfying("executionId", execution -> assertThat(execution).isNotNull()));
     });
-    assertThat(categories.view("invoice", id)).containsEntry("rejectedCategoryIds", List.of(insurance));
+    assertThat(categories.view("invoice", id)).containsEntry("rejectedCategoryIds", List.of());
   }
 
   @Test void aMovementDraftLeavesAiLabelsAutomaticUntilValidation() {
@@ -546,7 +546,7 @@ class CategoryIntegrationTest {
     assertThat(provider.calls).isEqualTo(2);
   }
 
-  @Test void retryCoalescesRequestsAndKeepsARejectedCategoryRemoved() {
+  @Test void retryCoalescesRequestsAndCanRestoreARemovedCategory() {
     UUID id = invoice("Seguro anual");
     UUID insurance = reference("6263");
     classify("invoice", id, insurance, "Seguro anual");
@@ -559,9 +559,9 @@ class CategoryIntegrationTest {
     assertThat(requested).containsEntry("state", "PENDING").containsEntry("jobState", "QUEUED");
     provider.program = request -> Json.write(result(List.of(label(insurance.toString(), "Seguro anual")), List.of()));
     worker.process(job);
-    assertThat(categories.view("invoice", id)).containsEntry("state", "REVIEW")
-        .containsEntry("rejectedCategoryIds", List.of(insurance));
-    assertThat(names("invoice", id)).isEmpty();
+    assertThat(categories.view("invoice", id)).containsEntry("state", "CLASSIFIED")
+        .containsEntry("rejectedCategoryIds", List.of());
+    assertThat(names("invoice", id)).containsExactly("Seguros");
   }
 
   @Test void reclassifyingAnInvoiceReplacesAiLabelsAndPreservesManualDecisions() {
@@ -590,10 +590,10 @@ class CategoryIntegrationTest {
         label(stationery.toString(), "Papel A4"), label(telephone.toString(), "serviço telefónico")), List.of()));
     worker.process(job);
     var tags = categories.details("invoice", id);
-    assertThat(tags).extracting(tag -> tag.get("id")).containsExactlyInAnyOrder(insurance, telephone);
+    assertThat(tags).extracting(tag -> tag.get("id")).containsExactlyInAnyOrder(insurance, stationery, telephone);
     assertThat(tags).anySatisfy(tag -> assertThat(tag).containsEntry("id", insurance)
         .containsEntry("origins", List.of("MANUAL")));
-    assertThat(categories.view("invoice", id)).containsEntry("rejectedCategoryIds", List.of(stationery));
+    assertThat(categories.view("invoice", id)).containsEntry("rejectedCategoryIds", List.of());
     assertThat(store.get(Invoice.class, id).version).isEqualTo(financialVersion);
   }
 

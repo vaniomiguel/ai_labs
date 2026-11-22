@@ -14,6 +14,78 @@ import org.springframework.core.io.ClassPathResource;
 import pt.conta.shared.Json;
 
 class CategoryMigrationTest {
+  @Test void invoiceRejectionMigrationKeepsHiddenAssignmentsRemovedAndPreservesMovementDecisions() throws Exception {
+    try (var postgres = EmbeddedPostgres.builder().setPort(0).start()) {
+      var source = new DriverManagerDataSource(postgres.getJdbcUrl("postgres", "postgres"), "postgres", "postgres");
+      Flyway.configure().dataSource(source).target("10").load().migrate();
+      var jdbc = new JdbcTemplate(source);
+      UUID telecom = category(jdbc, "6262"), office = category(jdbc, "6233");
+      UUID redirect = addCategory(jdbc, "Telecomunicações antigas", null, telecom);
+      UUID child = addCategory(jdbc, "Telemóvel", redirect, null);
+      var invoiceState = classificationFixture(jdbc, true);
+      var movementState = classificationFixture(jdbc, false);
+      addAssignment(jdbc, invoiceState, redirect, "MANUAL", true);
+      addAssignment(jdbc, invoiceState, telecom, "AI", false);
+      addAssignment(jdbc, invoiceState, child, "AI", false);
+      addAssignment(jdbc, invoiceState, office, "AI", false);
+      addAssignment(jdbc, movementState, telecom, "MANUAL", true);
+      addAssignment(jdbc, movementState, child, "AI", false);
+
+      assertThat(Flyway.configure().dataSource(source).target("11").load().migrate().migrationsExecuted).isEqualTo(1);
+
+      assertThat(jdbc.queryForList("select category_id from category_assignment where classification_id=?", UUID.class,
+          invoiceState)).containsExactly(office);
+      assertThat(jdbc.queryForObject("select reason from record_classification where id=?", String.class, invoiceState))
+          .isNull();
+      assertThat(jdbc.queryForList("select category_id from category_assignment where classification_id=?", UUID.class,
+          movementState)).containsExactlyInAnyOrder(telecom, child);
+      assertThat(jdbc.queryForObject("select rejected from category_assignment where classification_id=? and category_id=?",
+          Boolean.class, movementState, telecom)).isTrue();
+    }
+  }
+
+  private UUID classificationFixture(JdbcTemplate jdbc, boolean invoice) {
+    UUID id = UUID.randomUUID(), state = UUID.randomUUID();
+    if (invoice) {
+      jdbc.update("""
+          insert into invoice(id,created_at,updated_at,issued_on,total,currency,type,review_status)
+          values(?,now(),now(),'2026-01-01',100,'EUR','INVOICE','MANUAL')
+          """, id);
+      jdbc.update("""
+          insert into record_classification(id,created_at,updated_at,invoice_id,status,reason)
+          values(?,now(),now(),?,'REVIEW','Categoria bloqueada')
+          """, state, id);
+    } else {
+      jdbc.update("""
+          insert into bank_movement(id,created_at,updated_at,booked_on,amount,currency,direction,review_status)
+          values(?,now(),now(),'2026-01-02',50,'EUR','DEBIT','AUTOMATIC')
+          """, id);
+      jdbc.update("insert into record_classification(id,created_at,updated_at,movement_id) values(?,now(),now(),?)",
+          state, id);
+    }
+    return state;
+  }
+
+  private UUID category(JdbcTemplate jdbc, String code) {
+    return jdbc.queryForObject("select id from category where reference_code=?", UUID.class, code);
+  }
+
+  private UUID addCategory(JdbcTemplate jdbc, String name, UUID parent, UUID redirect) {
+    var id = UUID.randomUUID();
+    jdbc.update("""
+        insert into category(id,created_at,updated_at,name,aliases,parent_id,merged_into_id)
+        values(?,now(),now(),?,'[]',?,?)
+        """, id, name, parent, redirect);
+    return id;
+  }
+
+  private void addAssignment(JdbcTemplate jdbc, UUID state, UUID category, String origin, boolean rejected) {
+    jdbc.update("""
+        insert into category_assignment(id,created_at,updated_at,classification_id,category_id,origin,rejected)
+        values(?,now(),now(),?,?,?,?)
+        """, UUID.randomUUID(), state, category, origin, rejected);
+  }
+
   @Test void existingNamesAliasesIdentitiesAndFinancialPostingsSurviveTheCategoryMigration() throws Exception {
     try(var postgres=EmbeddedPostgres.builder().setPort(0).start()) {
       var source=new DriverManagerDataSource(postgres.getJdbcUrl("postgres","postgres"),"postgres","postgres");

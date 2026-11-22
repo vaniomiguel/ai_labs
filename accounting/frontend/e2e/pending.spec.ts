@@ -50,7 +50,98 @@ async function source(page:Page,kind:'INVOICE'|'STATEMENT',name:string){
 test.beforeEach(async({page})=>{
   created=[];const csrf=await get(page,'/csrf');const r=await page.request.post('/api/v1/session',{form:{username:'gestor',password:'conta-e2e-dev'},headers:{'X-XSRF-TOKEN':csrf.token}});expect(r.ok()).toBeTruthy();
 });
-test.afterEach(async({page})=>{for(const row of created){const current=await get(page,`/${row.resource}/${row.id}`);const csrf=await get(page,'/csrf');const response=await page.request.delete(`/api/v1/${row.resource}/${row.id}?version=${current.version}`,{headers:{'X-XSRF-TOKEN':csrf.token}});expect(response.ok(),await response.text()).toBeTruthy();}});
+test.afterEach(async ({page}) => {
+  for (const row of created) {
+    const path = `/api/v1/${row.resource}/${row.id}`;
+    const preview = await page.request.get(`${path}/deletion-impact`);
+    if (preview.status() === 404) continue;
+    expect(preview.ok(), await preview.text()).toBeTruthy();
+    const { record, impactToken } = await preview.json();
+    const csrf = await get(page, '/csrf');
+    const response = await page.request.delete(path, {
+      params: { version: record.version, impactToken }, headers: { 'X-XSRF-TOKEN': csrf.token },
+    });
+    expect(response.ok(), await response.text()).toBeTruthy();
+  }
+});
+
+test('deleting a pending invoice erases its exclusive source and alert after confirmation', async ({page}) => {
+  const filename = 'mistaken-invoice-deletion.pdf';
+  const document = await upload(page, 'INVOICE', filename);
+  const invoice = await create(page, 'invoices', {
+    supplier: 'Fornecedor importado por engano', number: 'E2E-DELETE-PENDING',
+    issuedOn: '2076-01-01', validate: false,
+  });
+  const path = `/invoices/${invoice.id}`;
+  await write(page, `/documents/${document.id}/draft`, { version: document.version, draft: invoice }, 'PUT');
+  await write(page, path, { ...invoice, documentId: document.id, validate: false }, 'PUT');
+  const alerts = await get(page, '/alerts');
+  const recordAlert = alerts.find((alert: { entityId: string }) => alert.entityId === invoice.id);
+
+  await page.goto('/alert');
+  const alertRow = page.getByRole('article').filter({hasText: recordAlert.message, has: page.getByText(filename, {exact: false})});
+  await expect(alertRow).toBeVisible();
+  await page.goto(`/invoice/${invoice.id}/edit`);
+  const editor = page.getByRole('dialog', {name: 'Editar registo'});
+  await editor.getByRole('button', {name: 'Eliminar', exact: true}).click();
+  const warning = page.getByRole('alertdialog', {name: 'Eliminar esta fatura?'});
+  await expect(warning).toContainText(filename);
+  await expect(warning).toContainText('serão eliminados permanentemente');
+  await expect(warning).toContainText(recordAlert.message);
+  await warning.getByRole('button', {name: 'Cancelar'}).press('Escape');
+  await expect(warning).toHaveCount(0);
+  await expect(editor).toBeVisible();
+  await expect(await page.request.get(`/api/v1${path}`)).toBeOK();
+
+  await editor.getByRole('button', {name: 'Eliminar', exact: true}).click();
+  await warning.getByRole('button', {name: 'Eliminar', exact: true}).click();
+  await expect(warning).toHaveCount(0);
+  await expect(editor).toHaveCount(0);
+  await openSection(page, '▧ Extrações');
+  await expect(page.getByText(filename, {exact: false})).toHaveCount(0);
+  expect((await page.request.get(`/api/v1/documents/${document.id}/original`)).status()).toBe(404);
+  expect((await page.request.get(`/api/v1/alerts/${recordAlert.id}`)).status()).toBe(404);
+  expect((await page.request.get(`/api/v1${path}`)).status()).toBe(404);
+  await page.goto('/alert');
+  await expect(page.getByRole('heading', {name: /Lista de alertas/})).toBeVisible();
+  await expect(alertRow).toHaveCount(0);
+});
+
+test('movement deletion links to invoices and asks again after the reconciliation changes', async ({page}) => {
+  const account = await write(page, '/accounts', {name: 'Conta de eliminação'});
+  const invoice = await create(page, 'invoices', {
+    supplier: 'Fornecedor de teste', number: 'E2E-DELETE-PAID', issuedOn: '2078-01-01', total: '100.00', validate: true,
+  });
+  const movement = await create(page, 'movements', {
+    accountId: account.id, description: 'Transferência parcial', bookedOn: '2078-01-02', amount: '40.00',
+    direction: 'DEBIT', validate: true,
+  });
+  await open(page, '↗ Movimentos', 2078);
+  const row = page.getByRole('row').filter({hasText: 'Transferência parcial'});
+  await row.getByRole('button', {name: 'Eliminar movimento'}).click();
+  const warning = page.getByRole('alertdialog', {name: 'Eliminar este movimento?'});
+  await expect(warning).toContainText('40,00');
+  await write(page, '/allocations', {invoiceId: invoice.id, movementId: movement.id, amount: '40.00'});
+  await warning.getByRole('button', {name: 'Eliminar', exact: true}).click();
+  await expect(warning).toContainText('Revê os dados atualizados e confirma novamente');
+  const linked = warning.getByRole('link', {name: /E2E-DELETE-PAID/});
+  await expect(linked).toHaveAttribute('target', '_blank');
+  const opened = page.waitForEvent('popup');
+  await linked.click();
+  const detail = await opened;
+  await expect(detail).toHaveURL(`/invoice/${invoice.id}/edit`);
+  await detail.close();
+  await expect(warning).toBeVisible();
+  await warning.getByRole('button', {name: 'Eliminar', exact: true}).click();
+  await expect(row).toHaveCount(0);
+  expect(await get(page, `/invoices/${invoice.id}`)).toMatchObject({remaining: '100.00'});
+  expect(await get(page, '/allocations')).toEqual([]);
+  await openSection(page, '⇄ Reconciliação');
+  await setYear(page, 2078);
+  const reconciliation = page.locator('reconciliation-table');
+  await expect(reconciliation).toContainText('E2E-DELETE-PAID');
+  await expect(reconciliation).not.toContainText('Transferência parcial');
+});
 
   test('manual invoices edit and save only the invoice date', async ({page}) => {
     await open(page, '▤ Faturas', 2077);

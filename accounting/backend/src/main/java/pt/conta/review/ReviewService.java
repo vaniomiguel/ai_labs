@@ -93,6 +93,51 @@ public class ReviewService {
     store.remove(alert);
   }
 
+  /** Finds obsolete alerts, including failures of background tasks for the deleted records. */
+  public List<Alert> deletionAlerts(Collection<UUID> targets, UUID erasedSource) {
+    var affected = new HashSet<>(targets);
+    if (erasedSource != null) affected.add(erasedSource);
+    var taskIds = affected.stream().flatMap(target -> jobs.taskIds(target).stream()).toList();
+    affected.addAll(taskIds);
+    var direct = store.all(Alert.class).stream().filter(alert -> affected.contains(alert.entityId)
+        || erasedSource != null && erasedSource.equals(alert.documentId)).toList();
+    var repairs = new HashSet<UUID>();
+    direct.forEach(alert -> repairs.addAll(jobs.taskIds(alert.id)));
+    var ids = new HashSet<UUID>();
+    direct.forEach(alert -> ids.add(alert.id));
+    return store.all(Alert.class).stream().filter(alert -> ids.contains(alert.id)
+        || ids.contains(alert.mergedInto) || repairs.contains(alert.entityId)).toList();
+  }
+
+  /** Removes obsolete review data without creating the follow-up marker used by manual alert deletion. */
+  public void purgeDeletion(Collection<UUID> targets, UUID erasedSource) {
+    var obsolete = deletionAlerts(targets, erasedSource);
+    obsolete.stream().filter(alert -> alert.mergedInto != null).forEach(this::purgeAlert);
+    store.flush();
+    obsolete.stream().filter(alert -> alert.mergedInto == null).forEach(this::purgeAlert);
+    for (UUID id : targets) purgeTarget(id);
+    if (erasedSource != null) purgeTarget(erasedSource);
+  }
+
+  private void purgeAlert(Alert alert) {
+    jobs.purgeTarget(alert.id);
+    removeAlert(alert);
+  }
+
+  private void purgeTarget(UUID id) {
+    jdbc.update("delete from pending_financial_review where entity_id=?", id);
+    jobs.purgeTarget(id);
+  }
+
+  /** Keeps shared-source alerts while invalidating proposals built against the previous draft. */
+  public void invalidateSourceProposals(UUID document) {
+    for (var alert : store.all(Alert.class)) {
+      if (!document.equals(alert.documentId)) continue;
+      alert.proposal = null;
+      jobs.invalidateAlertRepairs(alert.id);
+    }
+  }
+
   public Optional<Alert> openFor(String type, UUID target) {
     return alertsFor(type, target).filter(a -> "OPEN".equals(a.status)).findFirst();
   }
@@ -126,9 +171,9 @@ public class ReviewService {
 
   private boolean repairJobUnavailable(String type, UUID target) {
     return "job".equals(type) && Boolean.TRUE.equals(jdbc.queryForObject("""
-        select exists (select 1 from job j left join alert a on a.id=j.target_id
-          where j.id=? and j.kind='REPAIR_ALERT' and
-            (a.id is null or a.dismissed_at is not null or a.status<>'OPEN' or a.merged_into is not null))
+        select not exists (select 1 from job j left join alert a on a.id=j.target_id
+          where j.id=? and (j.kind<>'REPAIR_ALERT' or
+            (a.id is not null and a.dismissed_at is null and a.status='OPEN' and a.merged_into is null)))
         """, Boolean.class, target));
   }
 
@@ -143,6 +188,7 @@ public class ReviewService {
   }
 
   public boolean protectedRecord(String type, UUID id) {
+    if ("document".equals(type)) return store.find(SourceDocument.class, id).map(d -> d.deleted).orElse(true);
     if ("invoice".equals(type)) {
       var invoice = store.get(Invoice.class, id);
       return invoice.manuallyConfirmed || invoice.deleted;

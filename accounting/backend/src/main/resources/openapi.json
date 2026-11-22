@@ -682,10 +682,76 @@
             "type": "string",
             "format": "date-time"
           },
+          "cleanupAvailable": {
+            "type": "boolean",
+            "description": "A extração sem itens em uso pode ser eliminada."
+          },
           "updatedAt": {
             "type": "string",
             "format": "date-time"
           }
+        }
+      },
+      "DeletionRecord": {
+        "type": "object",
+        "required": ["type", "id", "version", "label"],
+        "properties": {
+          "type": { "enum": ["INVOICE", "MOVEMENT", "DOCUMENT"] },
+          "id": { "type": "string", "format": "uuid" },
+          "version": { "type": "integer" },
+          "label": { "type": "string" }
+        }
+      },
+      "DeletionImpact": {
+        "type": "object",
+        "required": ["record", "links", "balances", "alerts", "historicalLinks", "upload", "impactToken"],
+        "properties": {
+          "record": { "$ref": "#/components/schemas/DeletionRecord" },
+          "links": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "record": { "$ref": "#/components/schemas/DeletionRecord" },
+                "relationship": { "enum": ["PAYMENT", "REVERSAL", "PAYMENT_REFERENCE", "ORIGINAL_INVOICE", "RELATED_INVOICE", "CREDIT_NOTE"] },
+                "allocationId": { "type": ["string", "null"], "format": "uuid" },
+                "amount": { "$ref": "#/components/schemas/Decimal" }
+              }
+            }
+          },
+          "balances": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "record": { "$ref": "#/components/schemas/DeletionRecord" },
+                "date": { "type": "string", "format": "date" },
+                "change": { "$ref": "#/components/schemas/Decimal" }
+              }
+            }
+          },
+          "alerts": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": { "type": "string", "format": "uuid" },
+                "version": { "type": "integer" },
+                "message": { "type": "string" }
+              }
+            }
+          },
+          "historicalLinks": { "type": "integer", "minimum": 0 },
+          "upload": {
+            "type": ["object", "null"],
+            "properties": {
+              "id": { "type": "string", "format": "uuid" },
+              "version": { "type": "integer" },
+              "filename": { "type": "string" },
+              "action": { "enum": ["KEEP", "REMOVE_ROW", "ERASE"] }
+            }
+          },
+          "impactToken": { "type": "string", "description": "Confirma esta lista de consequências." }
         }
       },
       "Document": {
@@ -1399,6 +1465,30 @@
             "format": "uuid",
             "description": "Tarefa da geração atual da classificação"
           },
+          "jobKind": {
+            "enum": [
+              "CLASSIFY_INVOICE",
+              "CLASSIFY_MOVEMENT",
+              "REVIEW_INVOICE_CATEGORIES",
+              null
+            ]
+          },
+          "jobError": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "review": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/InvoiceCategoryReview"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "jobState": {
             "enum": ["QUEUED", "RUNNING", "WAITING", "DONE", "FAILED", null]
           },
@@ -1434,6 +1524,106 @@
           "catalogRevision"
         ]
       },
+      "InvoiceCategoryReview": {
+        "type": "object",
+        "properties": {
+          "summary": {
+            "type": "string"
+          },
+          "assessments": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "categoryId": {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                "fit": {
+                  "enum": [
+                    "GOOD_FIT",
+                    "POOR_FIT",
+                    "INSUFFICIENT_EVIDENCE"
+                  ]
+                },
+                "reason": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "categoryId",
+                "fit",
+                "reason"
+              ]
+            }
+          },
+          "suggestions": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "categoryId": {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                "path": {
+                  "type": "string"
+                },
+                "reason": {
+                  "type": "string"
+                },
+                "evidence": {
+                  "type": "string"
+                },
+                "replacesCategoryIds": {
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "format": "uuid"
+                  }
+                }
+              },
+              "required": [
+                "categoryId",
+                "path",
+                "reason",
+                "evidence",
+                "replacesCategoryIds"
+              ]
+            }
+          }
+        },
+        "required": [
+          "summary",
+          "assessments",
+          "suggestions"
+        ]
+      },
+      "InvoiceCategoryReviewSelection": {
+        "type": "object",
+        "properties": {
+          "version": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "reviewJobId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "categoryIds": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        },
+        "required": [
+          "version",
+          "reviewJobId",
+          "categoryIds"
+        ]
+      },
       "CategoryAssignmentEdit": {
         "type": "object",
         "properties": {
@@ -1457,7 +1647,7 @@
           "version",
           "categoryIds"
         ],
-        "description": "Version pertence à classificação, independentemente da versão financeira. categoryIds substitui a seleção efetiva; remoções ficam rejeitadas até allowAi=true."
+        "description": "Version pertence à classificação, independentemente da versão financeira. categoryIds substitui a seleção efetiva. Nos movimentos, as remoções ficam rejeitadas até allowAi=true."
       },
       "CategoryRevision": {
         "type": "object",
@@ -2146,6 +2336,23 @@
         }
       }
     },
+    "/invoices/{id}/deletion-impact": {
+      "get": {
+        "summary": "Consultar as consequências da eliminação",
+        "parameters": [
+          { "name": "id", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } }
+        ],
+        "responses": {
+          "200": {
+            "description": "Consequências e confirmação exigida",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/DeletionImpact" } } }
+          },
+          "401": { "description": "Sessão necessária" },
+          "404": { "description": "Registo indisponível" },
+          "409": { "description": "Extração em uso ou identidade ambígua" }
+        }
+      }
+    },
     "/invoices/{id}": {
       "get": {
         "summary": "Consultar dados",
@@ -2227,46 +2434,19 @@
         "description": "Edita apenas este registo. documentVersion, quando fornecida, protege o original contra alterações concorrentes. A sincronização do rascunho preserva os restantes itens e validações."
       },
       "delete": {
-        "summary": "Eliminar logicamente e anular efeitos",
-        "responses": {
-          "200": {
-            "description": "Operação concluída"
-          },
-          "401": {
-            "description": "Sessão necessária"
-          },
-          "409": {
-            "description": "Versão desatualizada"
-          },
-          "422": {
-            "description": "Regra de negócio não satisfeita",
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Problem"
-                }
-              }
-            }
-          }
-        },
+        "summary": "Confirmar eliminação e atualizar os registos relacionados",
         "parameters": [
-          {
-            "name": "id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "name": "version",
-            "in": "query",
-            "required": true,
-            "schema": {
-              "type": "integer"
-            }
-          }
-        ]
+          { "name": "id", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } },
+          { "name": "version", "in": "query", "required": true, "schema": { "type": "integer" } },
+          { "name": "impactToken", "in": "query", "required": true, "schema": { "type": "string" } }
+        ],
+        "responses": {
+          "200": { "description": "Eliminação concluída. Quando aplicável, o ficheiro será removido em segundo plano." },
+          "400": { "description": "Versão ou confirmação em falta" },
+          "401": { "description": "Sessão necessária" },
+          "404": { "description": "Registo indisponível" },
+          "409": { "description": "Consequências alteradas. Consulta novamente e confirma." }
+        }
       }
     },
     "/movements": {
@@ -2443,6 +2623,23 @@
         }
       }
     },
+    "/movements/{id}/deletion-impact": {
+      "get": {
+        "summary": "Consultar as consequências da eliminação",
+        "parameters": [
+          { "name": "id", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } }
+        ],
+        "responses": {
+          "200": {
+            "description": "Consequências e confirmação exigida",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/DeletionImpact" } } }
+          },
+          "401": { "description": "Sessão necessária" },
+          "404": { "description": "Registo indisponível" },
+          "409": { "description": "Extração em uso ou identidade ambígua" }
+        }
+      }
+    },
     "/movements/{id}": {
       "get": {
         "summary": "Consultar dados",
@@ -2524,46 +2721,19 @@
         "description": "Edita apenas este registo. documentVersion, quando fornecida, protege o original contra alterações concorrentes. A sincronização do rascunho preserva os restantes itens e validações."
       },
       "delete": {
-        "summary": "Eliminar logicamente e anular efeitos",
-        "responses": {
-          "200": {
-            "description": "Operação concluída"
-          },
-          "401": {
-            "description": "Sessão necessária"
-          },
-          "409": {
-            "description": "Versão desatualizada"
-          },
-          "422": {
-            "description": "Regra de negócio não satisfeita",
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Problem"
-                }
-              }
-            }
-          }
-        },
+        "summary": "Confirmar eliminação e atualizar os registos relacionados",
         "parameters": [
-          {
-            "name": "id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "name": "version",
-            "in": "query",
-            "required": true,
-            "schema": {
-              "type": "integer"
-            }
-          }
-        ]
+          { "name": "id", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } },
+          { "name": "version", "in": "query", "required": true, "schema": { "type": "integer" } },
+          { "name": "impactToken", "in": "query", "required": true, "schema": { "type": "string" } }
+        ],
+        "responses": {
+          "200": { "description": "Eliminação concluída. Quando aplicável, o ficheiro será removido em segundo plano." },
+          "400": { "description": "Versão ou confirmação em falta" },
+          "401": { "description": "Sessão necessária" },
+          "404": { "description": "Registo indisponível" },
+          "409": { "description": "Consequências alteradas. Consulta novamente e confirma." }
+        }
       }
     },
     "/me": {
@@ -3149,6 +3319,23 @@
         }
       }
     },
+    "/documents/{id}/deletion-impact": {
+      "get": {
+        "summary": "Consultar as consequências da eliminação",
+        "parameters": [
+          { "name": "id", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } }
+        ],
+        "responses": {
+          "200": {
+            "description": "Consequências e confirmação exigida",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/DeletionImpact" } } }
+          },
+          "401": { "description": "Sessão necessária" },
+          "404": { "description": "Registo indisponível" },
+          "409": { "description": "Extração em uso ou identidade ambígua" }
+        }
+      }
+    },
     "/documents/{id}": {
       "get": {
         "summary": "Rascunho e dados documentais",
@@ -3190,6 +3377,21 @@
             }
           }
         ]
+      },
+      "delete": {
+        "summary": "Confirmar eliminação e atualizar os registos relacionados",
+        "parameters": [
+          { "name": "id", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } },
+          { "name": "version", "in": "query", "required": true, "schema": { "type": "integer" } },
+          { "name": "impactToken", "in": "query", "required": true, "schema": { "type": "string" } }
+        ],
+        "responses": {
+          "200": { "description": "Eliminação concluída. Quando aplicável, o ficheiro será removido em segundo plano." },
+          "400": { "description": "Versão ou confirmação em falta" },
+          "401": { "description": "Sessão necessária" },
+          "404": { "description": "Registo indisponível" },
+          "409": { "description": "Consequências alteradas. Consulta novamente e confirma." }
+        }
       }
     },
     "/documents/{id}/original": {
@@ -4562,7 +4764,7 @@
         }
       ],
       "post": {
-        "summary": "Agendar a classificação por IA de uma fatura sem categorias",
+        "summary": "Agendar a classificação por IA de uma fatura",
         "requestBody": {
           "required": true,
           "content": {
@@ -4603,7 +4805,7 @@
             "description": "Fatura não encontrada"
           },
           "409": {
-            "description": "Versão desatualizada ou fatura já categorizada"
+            "description": "Versão desatualizada ou tarefa de revisão em curso"
           }
         }
       }
@@ -4658,6 +4860,115 @@
                 "$ref": "#/components/schemas/CategoryAssignmentEdit"
               }
             }
+          }
+        }
+      }
+    },
+    "/invoices/{id}/categories/review": {
+      "parameters": [
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string",
+            "format": "uuid"
+          }
+        }
+      ],
+      "post": {
+        "summary": "Pedir revisão das categorias da fatura",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "version": {
+                    "type": "integer",
+                    "minimum": 0
+                  }
+                },
+                "required": [
+                  "version"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "Revisão agendada",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Classification"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Sessão necessária"
+          },
+          "404": {
+            "description": "Fatura não encontrada"
+          },
+          "409": {
+            "description": "Versão desatualizada ou tarefa de classificação em curso"
+          },
+          "422": {
+            "description": "Regra de negócio não satisfeita"
+          }
+        }
+      }
+    },
+    "/invoices/{id}/categories/review/apply": {
+      "parameters": [
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string",
+            "format": "uuid"
+          }
+        }
+      ],
+      "post": {
+        "summary": "Guardar as categorias selecionadas após revisão",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/InvoiceCategoryReviewSelection"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Seleção guardada",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Classification"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Sessão necessária"
+          },
+          "404": {
+            "description": "Fatura não encontrada"
+          },
+          "409": {
+            "description": "Versão ou revisão desatualizada"
+          },
+          "422": {
+            "description": "Regra de negócio não satisfeita"
           }
         }
       }

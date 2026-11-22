@@ -314,11 +314,6 @@ nav button.active {
   font-size: 12px;
   margin-bottom: 0;
 }
-.heading-actions {
-  display: flex;
-  gap: 9px;
-  flex-shrink: 0;
-}
 .mat-mdc-button-base {
   font-size: 11px !important;
   letter-spacing: 0 !important;
@@ -543,6 +538,14 @@ summary {
 }
 .section-heading h2 {
   margin: 0;
+}
+.record-list-heading {
+  flex-wrap: wrap;
+}
+.record-list-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 9px;
 }
 .count,
 h3 span {
@@ -1282,9 +1285,6 @@ source-pdf {
   .page-heading {
     align-items: start;
   }
-  .heading-actions {
-    flex-direction: column;
-  }
   .upload-panel {
     flex-wrap: wrap;
   }
@@ -1367,9 +1367,6 @@ source-pdf {
   }
   h1 {
     font-size: 26px;
-  }
-  .heading-actions {
-    flex-direction: row;
   }
   .filter-bar {
     padding: 13px;

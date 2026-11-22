@@ -94,8 +94,8 @@ public class JobQueue {
         job.token());
   }
 
-  /** Saves the aggregate once, in the same transaction as its accounting effects. */
-  public boolean saveAutomaticReview(Claim job, Map<String, Object> report) {
+  /** Saves a review once while the caller still owns the job lease. */
+  public boolean saveReviewResult(Claim job, Map<String, Object> report) {
     return jdbc.update(
             """
             update job set payload=jsonb_set(payload::jsonb, '{reviewResult}', cast(? as jsonb))::text
@@ -116,6 +116,26 @@ public class JobQueue {
             and a.status='OPEN' and a.dismissed_at is null and a.merged_into is null))
         """,
         id);
+  }
+
+  /** Targets are globally unique and purged with their execution payloads. */
+  public List<UUID> taskIds(UUID target) {
+    return jdbc.queryForList("select id from job where target_id=?", UUID.class, target);
+  }
+
+  public void purgeTarget(UUID target) {
+    jdbc.update("delete from ai_execution where target_id=? or job_id in (select id from job where target_id=?)",
+        target, target);
+    jdbc.update("delete from job where target_id=?", target);
+  }
+
+  public void invalidateDocumentWork(UUID document, long version) {
+    jdbc.update("""
+        update job set state='DONE', lease_token=null, leased_until=null, error=null, updated_at=now(),
+          payload=jsonb_set(coalesce(payload::jsonb,'{}'::jsonb), '{outcome}', '"STALE"'::jsonb)::text
+        where target_id=? and target_version<? and kind in ('EXTRACT','AI_EXTRACT_DOCUMENT','REVIEW_DOCUMENT')
+          and state in ('QUEUED','RUNNING','WAITING','FAILED')
+        """, document, version);
   }
 
   /** Ends pending repair work and revokes any worker lease in the caller's transaction. */

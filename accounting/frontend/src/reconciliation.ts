@@ -34,7 +34,7 @@ export class ReconciliationTable {
   readonly categories = output<{type:"invoice"|"movement";record:any}>();
   readonly categoryFilter = output<string>();
   readonly edit = output<{ kind: RecordKind; record: { id: string } }>();
-  readonly remove = output<{ kind: string; record: any }>();
+  readonly remove = output<{ kind: RecordKind; record: { id: string } }>();
   readonly original = output<string>();
   readonly assign = output<{ invoice: any; candidate?: any }>();
   readonly assignMovement = output<any>();

@@ -47,7 +47,7 @@ class AutomaticReviewResults {
     result.put("model", model);
     result.put("reviewedRevision", snapshot.target().version());
     result.put("reviewedSourcesAndRecords", snapshot.revisions());
-    if (!jobs.saveAutomaticReview(job, result)) return;
+    if (!jobs.saveReviewResult(job, result)) return;
     if (report.findings().isEmpty()) return;
 
     publishConcerns(snapshot, report, result);

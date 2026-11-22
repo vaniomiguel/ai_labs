@@ -108,13 +108,6 @@
             mês e ano a ano.':'Consulta, organiza e revê os teus registos.'}}
           </p>
         </div>
-        <div class="heading-actions">
-          <button mat-stroked-button (click)="newRecord('MOVEMENT')">
-            + Movimento</button
-          ><button mat-flat-button (click)="newRecord('INVOICE')">
-            + Nova fatura
-          </button>
-        </div>
       </div>
       @if(routeLoading()){<p role="status">A carregar…</p>}
       @if(routeMessage() || (processingAlert() && !editor())){
@@ -184,19 +177,22 @@
         (openExclusion)="openExclusion($event)" (closed)="closeRoute()"
         (reconcile)="reconcile()" (changed)="refresh()" (pageChange)="changeFinancialPage($event)"
         (edit)="editRecord($event.kind,$event.record)" (original)="openDocument($event)"
-        (remove)="requestRemoval($event.kind,$event.record)"
+        (remove)="requestRemoval($event.kind,$event.record.id)"
         (categories)="openCategories($event.type,$event.record.id)" (categoryFilter)="applyFilters({ category: $event })"
         (assign)="assign($event.invoice.id,$event.candidate?.movementId)" (assignMovement)="assign($event.id)"
         (undo)="undo($event)" (reverse)="reverse($event)" />
       } @if(view()==='invoices'){
       <section class="panel">
-        <div class="section-heading">
+        <div class="section-heading record-list-heading">
           <div>
             <h2>
               Todas as faturas <span class="count">{{recordsCurrent() ? state().invoiceTotal : '—'}}</span>
             </h2>
             <p>O valor por reconciliar é independente do saldo anual. Pendentes sem data aparecem em qualquer período e ficam fora dos cálculos.</p>
           </div>
+          <button mat-flat-button type="button" (click)="newRecord('INVOICE')">
+            + Nova fatura
+          </button>
         </div>
         <div class="table-scroll">
           <table>
@@ -259,11 +255,11 @@
                     >
                       Original</button
                     >}<button
-                      class="icon-button danger"
-                      aria-label="Apagar fatura"
-                      (click)="requestRemoval('INVOICE',i)"
+                      class="text-button danger"
+                      aria-label="Eliminar fatura"
+                      (click)="requestRemoval('INVOICE',i.id)"
                     >
-                      ×
+                      Eliminar
                     </button>
                   </div>
                 </td>
@@ -317,17 +313,23 @@
       </section>
       } @if(view()==='movements'){
       <section class="panel">
-        <div class="section-heading">
+        <div class="section-heading record-list-heading">
           <h2>
             Movimentos bancários
             <span class="count">{{recordsCurrent() ? state().movementTotal : '—'}}</span>
           </h2>
-          <button
-            mat-stroked-button
-            (click)="navigate('documents');uploadKind='STATEMENT'"
-          >
-            Importar extrato
-          </button>
+          <div class="record-list-actions">
+            <button
+              mat-stroked-button
+              type="button"
+              (click)="navigate('documents');uploadKind='STATEMENT'"
+            >
+              Importar extrato
+            </button>
+            <button mat-stroked-button type="button" (click)="newRecord('MOVEMENT')">
+              + Movimento
+            </button>
+          </div>
         </div>
         <div class="table-scroll">
           <table>
@@ -393,11 +395,11 @@
                     >
                       Extrato</button
                     >}<button
-                      class="icon-button danger"
-                      aria-label="Apagar movimento"
-                      (click)="requestRemoval('MOVEMENT',m)"
+                      class="text-button danger"
+                      aria-label="Eliminar movimento"
+                      (click)="requestRemoval('MOVEMENT',m.id)"
                     >
-                      ×
+                      Eliminar
                     </button>
                   </div>
                 </td>
@@ -513,9 +515,12 @@
                 </td>
                 <td>{{d.createdAt|date:'dd/MM/yyyy HH:mm'}}</td>
                 <td>
-                  <button class="text-button" (click)="openDocument(d.id)">
-                    Consultar e editar →
-                  </button>
+                  <div class="row-actions">
+                    <button class="text-button" (click)="openDocument(d.id)">Consultar e editar →</button>
+                    @if(d.cleanupAvailable){
+                      <button class="text-button danger" (click)="requestRemoval('DOCUMENT',d.id)">Eliminar extração</button>
+                    }
+                  </div>
                 </td>
               </tr>
               }@empty{
@@ -1170,6 +1175,9 @@
     </div>
     <footer class="dialog-footer">
       @if(error()){<span class="error">{{error()}}</span>}
+      @if(data.id){
+        <button class="text-button danger" [disabled]="working()" (click)="requestRemoval(recordKind,data.id)">Eliminar</button>
+      }
       @if(activeAlert()?.status==='OPEN'){
         <button class="text-button" [disabled]="working()" (click)="closeRoute()">Descartar alterações</button>
       }
@@ -1375,31 +1383,8 @@
     </footer>
   </section>
 </div>
-} @if(confirmDelete();as data){
-<div class="modal-backdrop">
-  <section
-    class="dialog compact"
-    role="dialog"
-    aria-modal="true"
-    aria-label="Eliminar registo"
-  >
-    <div class="dialog-body">
-      <h2>Eliminar este registo?</h2>
-      <p>
-        Os efeitos no saldo serão anulados. O original e o histórico ficam
-        preservados.
-      </p>
-      <strong>{{data.supplier||data.description}}</strong>
-    </div>
-    <footer class="dialog-footer">
-      <button mat-stroked-button (click)="confirmDelete.set(null)">
-        Cancelar</button
-      ><button mat-flat-button [disabled]="working()" (click)="removeRecord()">
-        Eliminar
-      </button>
-    </footer>
-  </section>
-</div>
+} @if(deletionTarget();as target){
+  <deletion-dialog [target]="target" (closed)="deletionTarget.set(null)" (deleted)="deletionCompleted($event)" />
 }
 
 @if(categoryTarget();as target){

@@ -93,6 +93,7 @@ public class BookkeepingService {
   private Map<String,Object> saveInvoice(UUID id,Map<String,Object> input,String origin,boolean human,Map<String,Object> decisions) {
     store.lockFinancialWrites();
     Invoice invoice = id == null ? store.add(new Invoice()) : store.get(Invoice.class, id);
+    if (invoice.deleted) throw DomainException.missing();
     requireValidatedRevision(human, invoice.manuallyConfirmed, input);
     Object before = id == null ? null : invoiceView(invoice);
     if (id != null && human) input = checkRecordEdit("invoice", invoice, input);
@@ -123,7 +124,8 @@ public class BookkeepingService {
     invoice.type = enumeration(input, "type", InvoiceType.class, InvoiceType.INVOICE);
     invoice.relatedInvoiceId = uuid(input, "relatedInvoiceId");
     if (input.containsKey("documentId")) invoice.documentId = uuid(input, "documentId");
-    if (invoice.documentId != null) store.get(SourceDocument.class, invoice.documentId);
+    if (invoice.documentId != null && store.get(SourceDocument.class, invoice.documentId).deleted)
+      throw DomainException.missing();
     invoice.origin = origin;
     invoice.author = human ? audit.actor() : origin;
     invoice.manuallyConfirmed |= human && flag(input, "validate");
@@ -198,6 +200,7 @@ public class BookkeepingService {
   private Map<String,Object> saveMovement(UUID id,Map<String,Object> input,String origin,boolean human,Map<String,Object> decisions) {
     store.lockFinancialWrites();
     var movement = id == null ? store.add(new BankMovement()) : store.get(BankMovement.class, id);
+    if (movement.deleted) throw DomainException.missing();
     requireValidatedRevision(human, movement.manuallyConfirmed, input);
     Object before = id == null ? null : movementView(movement);
     if (id != null && human) input = checkRecordEdit("movement", movement, input);
@@ -219,6 +222,9 @@ public class BookkeepingService {
     if (movement.accountId != null) store.get(BankAccount.class, movement.accountId);
     if (input.containsKey("documentId")) movement.documentId = uuid(input, "documentId");
     if (input.containsKey("statementId")) movement.statementId = uuid(input, "statementId");
+    if (movement.documentId != null && store.get(SourceDocument.class, movement.documentId).deleted
+        || movement.statementId != null && store.get(BankStatement.class, movement.statementId).deleted)
+      throw DomainException.missing();
     movement.bankReference = text(input, "bankReference");
     movement.bookedOn = date(input, "bookedOn");
     movement.valueOn = date(input, "valueOn");
@@ -658,11 +664,17 @@ public class BookkeepingService {
   /** Produces bounded, explainable candidate data for UI and AI review. */
   @Transactional(readOnly = true)
   public List<Map<String, Object>> candidates() {
+    return candidates(null, null);
+  }
+
+  /** Uses the same candidate rules while limiting the pairs inspected for a record. */
+  @Transactional(readOnly = true)
+  public List<Map<String, Object>> candidates(UUID invoiceId, UUID movementId) {
     var result = new ArrayList<Map<String, Object>>();
     var invoiceAvailable = new HashMap<UUID, BigDecimal>();
     var movementAvailable = new HashMap<UUID, BigDecimal>();
-    var invoices = store.all(Invoice.class);
-    var movements = store.all(BankMovement.class);
+    var invoices = invoiceId == null ? store.all(Invoice.class) : List.of(store.get(Invoice.class, invoiceId));
+    var movements = movementId == null ? store.all(BankMovement.class) : List.of(store.get(BankMovement.class, movementId));
     var allocations = store.all(Allocation.class);
     invoices.forEach(i -> invoiceAvailable.put(i.id, Money.orZero(i.total)));
     movements.forEach(m -> movementAvailable.put(m.id, Money.orZero(m.amount)));

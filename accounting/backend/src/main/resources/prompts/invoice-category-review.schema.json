@@ -1,0 +1,35 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["summary", "assessments", "suggestions"],
+  "properties": {
+    "summary": { "type": "string" },
+    "assessments": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["categoryId", "fit", "reason"],
+        "properties": {
+          "categoryId": { "type": "string" },
+          "fit": { "enum": ["GOOD_FIT", "POOR_FIT", "INSUFFICIENT_EVIDENCE"] },
+          "reason": { "type": "string" }
+        }
+      }
+    },
+    "suggestions": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["categoryId", "reason", "evidence", "replacesCategoryIds"],
+        "properties": {
+          "categoryId": { "type": "string" },
+          "reason": { "type": "string" },
+          "evidence": { "type": "string" },
+          "replacesCategoryIds": { "type": "array", "items": { "type": "string" } }
+        }
+      }
+    }
+  }
+}

@@ -16,7 +16,6 @@ public class ProcessingService {
   private final DocumentPublisher publisher;
   private final ExcelReader excel;
   private final Settings settings;
-  private final JobQueue jobs;
 
   public ProcessingService(
       Store store,
@@ -25,8 +24,7 @@ public class ProcessingService {
       PortugueseDocumentParser parser,
       DocumentPublisher publisher,
       ExcelReader excel,
-      Settings settings,
-      JobQueue jobs) {
+      Settings settings) {
     this.store = store;
     this.storage = storage;
     this.converter = converter;
@@ -34,7 +32,6 @@ public class ProcessingService {
     this.publisher = publisher;
     this.excel = excel;
     this.settings = settings;
-    this.jobs = jobs;
   }
 
   /** Parses one original, preserving all intermediate text, layout and editable draft fields. */
@@ -69,17 +66,6 @@ public class ProcessingService {
               Inputs.map("sheets", draft.get("sheets"), "engine", "APACHE_POI"),
               "APACHE_POI");
     }
-    if (publisher.extracted(doc.id, job.revision(), converted, draft)) {
-      var current = store.get(SourceDocument.class, doc.id);
-      if (Set.of("INVOICE", "STATEMENT", "HISTORY").contains(doc.kind)) {
-        jobs.enqueue(
-            current.status.equals("OPEN") && !doc.kind.equals("HISTORY")
-                ? "AI_EXTRACT_DOCUMENT"
-                : "REVIEW_DOCUMENT",
-            doc.id,
-            current.version,
-            "{}");
-      }
-    }
+    publisher.extracted(doc.id, job.revision(), converted, draft, true);
   }
 }

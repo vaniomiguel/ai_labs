@@ -1,0 +1,73 @@
+<div class="modal-backdrop" (keydown.escape)="$event.stopPropagation(); cancel()">
+  <section class="dialog compact" role="alertdialog" aria-modal="true" aria-labelledby="deletion-title"
+    aria-describedby="deletion-summary" cdkTrapFocus [cdkTrapFocusAutoCapture]="true">
+    <div class="dialog-body">
+      <h2 id="deletion-title">{{title()}}</h2>
+      <p id="deletion-summary">Esta ação é irreversível.</p>
+      @if (loading()) { <p role="status">A consultar as consequências…</p> }
+      @if (error()) { <p class="error" role="alert">{{error()}}</p> }
+      @if (impact(); as data) {
+        <strong>{{data.record.label}}</strong>
+        @if (links().length) {
+          <h3>Registos associados</h3>
+          <ul>
+            @for (link of links(); track $index) {
+              <li>
+                <a [routerLink]="detailRoute(link.record)" target="_blank" rel="noopener">{{link.record.label}} ↗</a>
+                <small>{{relationship[link.relationship]}} @if (link.amount) { · {{money(link.amount)}} }</small>
+              </li>
+            }
+          </ul>
+          <p>Os outros registos continuam disponíveis. A reconciliação será atualizada.</p>
+        }
+        @if (references().length) {
+          <h3>Referências de pagamento</h3>
+          <ul>
+            @for (link of references(); track link.record.id) {
+              <li>
+                <a [routerLink]="detailRoute(link.record)" target="_blank" rel="noopener">{{link.record.label}} ↗</a>
+                <small>{{relationship[link.relationship]}}</small>
+              </li>
+            }
+          </ul>
+        }
+        @if (data.record.type !== 'DOCUMENT' || data.balances.length) {
+          <h3>Saldos</h3>
+          @if (data.balances.length) {
+            <ul>
+              @for (balance of data.balances; track balance.record.id) {
+                <li>{{balance.record.label}} · {{balance.date | date:'dd/MM/yyyy'}} · {{money(balance.change)}}</li>
+              }
+            </ul>
+          } @else { <p>O registo não tem efeitos nos saldos.</p> }
+        }
+        @if (data.alerts.length) {
+          <h3>Alertas a eliminar</h3>
+          <ul>
+            @for (alert of data.alerts; track alert.id) { <li>{{alert.message}}</li> }
+          </ul>
+        }
+        @if (data.historicalLinks) {
+          <p>As ligações ao histórico Excel serão atualizadas ({{data.historicalLinks}}).</p>
+        }
+        @if (data.upload; as upload) {
+          <h3>Extração e ficheiro original</h3>
+          @switch (upload.action) {
+            @case ('ERASE') {
+              <p>A extração, o seu histórico e o ficheiro <strong>{{upload.filename}}</strong> serão eliminados permanentemente.</p>
+            }
+            @case ('REMOVE_ROW') {
+              <p>Este item será removido da extração. O ficheiro <strong>{{upload.filename}}</strong> e os restantes itens ficam disponíveis.</p>
+            }
+            @case ('KEEP') { <p>O ficheiro <strong>{{upload.filename}}</strong> continua disponível.</p> }
+          }
+        }
+      }
+    </div>
+    <footer class="dialog-footer">
+      <button mat-stroked-button cdkFocusInitial [disabled]="submitting()" (click)="cancel()">Cancelar</button>
+      <button mat-stroked-button class="danger" [disabled]="!impact() || loading() || submitting()"
+        [disabledInteractive]="true" (click)="confirm()">{{submitting() ? 'A eliminar…' : 'Eliminar'}}</button>
+    </footer>
+  </section>
+</div>

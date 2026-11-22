@@ -51,7 +51,7 @@ public class LocalDocumentStorage implements DocumentStorage {
     return root.resolve(UUID.fromString(key).toString());
   }
 
-  /** Deletes an unreferenced duplicate upload, leaving its canonical original intact. */
+  /** Deletes an unreferenced file, including a duplicate upload or an erased original. */
   @Override
   public void discard(String key) throws IOException {
     Files.deleteIfExists(path(key));

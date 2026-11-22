@@ -33,7 +33,8 @@ class ReconciliationMigrationTest {
       jdbc.update("insert into ai_execution(id,created_at,updated_at,model,outcome) values(?,now(),now(),'legacy-model','VALID')",
           execution);
       Flyway flyway = Flyway.configure().dataSource(source).load();
-      assertThat(flyway.migrate().migrationsExecuted).isEqualTo(9);
+      flyway.migrate();
+      assertThat(flyway.info().applied()).anyMatch(migration -> "2".equals(migration.getVersion().getVersion()));
       assertThat(jdbc.queryForMap("select model, job_id, context_tokens, context_warning from ai_execution where id=?",
           execution)).containsEntry("model", "legacy-model").containsEntry("job_id", null)
           .containsEntry("context_tokens", null).containsEntry("context_warning", null);

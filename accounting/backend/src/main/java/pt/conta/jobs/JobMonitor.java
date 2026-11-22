@@ -17,7 +17,7 @@ import pt.conta.shared.DomainException;
 public class JobMonitor {
   private static final Set<String> STATES = Set.of("QUEUED", "RUNNING", "WAITING", "DONE", "FAILED");
   private static final String INVOICE_CLASSIFICATION_JOBS =
-      "target_id=? and kind in ('CLASSIFY_INVOICE','NORMALIZE_CATEGORIES')";
+      "target_id=? and kind in ('CLASSIFY_INVOICE','NORMALIZE_CATEGORIES','REVIEW_INVOICE_CATEGORIES')";
   private static final String WARNING_JOIN = """
       left join lateral (
         select e.model as warning_model, e.created_at as warning_at, e.prompt_tokens,
@@ -51,7 +51,7 @@ public class JobMonitor {
         original.id as original_id, warning.*
       from (%s) j
       left join invoice i on i.id=j.target_id
-        and j.kind in ('REVIEW_INVOICE','NORMALIZE_CATEGORIES','CLASSIFY_INVOICE','SUGGEST_RECONCILIATION')
+        and j.kind in ('REVIEW_INVOICE','NORMALIZE_CATEGORIES','CLASSIFY_INVOICE','REVIEW_INVOICE_CATEGORIES','SUGGEST_RECONCILIATION')
       left join bank_movement m on m.id=j.target_id and j.kind in ('REVIEW_MOVEMENT','CLASSIFY_MOVEMENT')
       left join source_document d on d.id=j.target_id
         and j.kind in ('EXTRACT','IMPORT_ZIP','REVIEW_DOCUMENT','AI_EXTRACT_DOCUMENT')
@@ -150,7 +150,8 @@ public class JobMonitor {
   private Map<String, Object> view(ResultSet rs) throws SQLException {
     String kind = rs.getString("kind");
     String type = switch (kind) {
-      case "REVIEW_INVOICE", "NORMALIZE_CATEGORIES", "CLASSIFY_INVOICE", "SUGGEST_RECONCILIATION" -> "invoice";
+      case "REVIEW_INVOICE", "NORMALIZE_CATEGORIES", "CLASSIFY_INVOICE", "REVIEW_INVOICE_CATEGORIES",
+           "SUGGEST_RECONCILIATION" -> "invoice";
       case "REVIEW_MOVEMENT", "CLASSIFY_MOVEMENT" -> "movement";
       case "EXTRACT", "IMPORT_ZIP", "REVIEW_DOCUMENT", "AI_EXTRACT_DOCUMENT" -> "document";
       case "REVIEW_ALLOCATION" -> "allocation";

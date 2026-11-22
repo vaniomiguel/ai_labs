@@ -24,6 +24,8 @@ public class PromptCatalog {
   public static final String HUMAN_FIELD_AUTHORITY_INSTRUCTIONS = "human-field-authority-instructions";
   public static final String CATEGORY_VALIDATION_RETRY_INSTRUCTIONS = "category-validation-retry-instructions";
   public static final String EXPENSE_CLASSIFICATION_SYSTEM_INSTRUCTIONS = "categories";
+  public static final String INVOICE_CATEGORY_REVIEW_SYSTEM_INSTRUCTIONS = "invoice-category-review";
+  public static final String INVOICE_CATEGORY_REVIEW_RETRY_INSTRUCTIONS = "invoice-category-review-retry-instructions";
   public static final String CATEGORY_CATALOG_REVIEW_SYSTEM_INSTRUCTIONS = "category-catalog-review";
   public static final String CATEGORY_VARIANT_MISMATCH_INSTRUCTIONS = "category-variant-mismatch-instructions";
   public static final String CATEGORY_PROTECTED_VARIANT_INSTRUCTIONS = "category-protected-variant-instructions";

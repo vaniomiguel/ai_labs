@@ -22,13 +22,13 @@ public class SourceRecordSync {
     UUID document=input.containsKey("documentId")?uuid(input,"documentId"):invoice.documentId;
     var records=store.all(Invoice.class).stream().filter(i->!i.deleted&&Objects.equals(document,i.documentId)).toList();
     return prepare(document,input,invoice.id,invoiceFields(invoice),"INVOICE","invoices","invoice",
-        records.stream().map(this::invoiceFields).toList());
+        records.stream().map(SourceRecordSync::invoiceFields).toList());
   }
   public Edit prepare(BankMovement movement,Map<String,Object> input) {
     UUID document=input.containsKey("documentId")?uuid(input,"documentId"):movement.documentId;
     var records=store.all(BankMovement.class).stream().filter(m->!m.deleted&&Objects.equals(document,m.documentId)).toList();
     return prepare(document,input,movement.id,movementFields(movement),"STATEMENT","movements","movement",
-        records.stream().map(this::movementFields).toList());
+        records.stream().map(SourceRecordSync::movementFields).toList());
   }
   private Edit prepare(UUID id,Map<String,Object> input,UUID record,Map<String,Object> before,
       String kind,String collection,String type,List<Map<String,Object>> siblings) {
@@ -97,11 +97,11 @@ public class SourceRecordSync {
     edit.document.draft=Json.write(edit.draft);edit.document.status=complete?"DONE":"OPEN";
     store.flush();
   }
-  private Map<String,Object> invoiceFields(Invoice i){return map("id",i.id.toString(),"issuedOn",i.issuedOn,
+  static Map<String,Object> invoiceFields(Invoice i){return map("id",i.id.toString(),"issuedOn",i.issuedOn,
       "number",i.number,"supplier",i.supplier,"supplierTaxId",i.supplierTaxId,"description",i.description,"currency",i.currency,
       "total",Money.text(i.total),"net",Money.text(i.net),"tax",Money.text(i.tax),"discount",Money.text(i.discount),
       "type",i.type,"relatedInvoiceId",i.relatedInvoiceId);}
-  private Map<String,Object> movementFields(BankMovement m){return map("id",m.id.toString(),"accountId",m.accountId,
+  static Map<String,Object> movementFields(BankMovement m){return map("id",m.id.toString(),"accountId",m.accountId,
       "bookedOn",m.bookedOn,"valueOn",m.valueOn,"occurredAt",m.occurredAt,"description",m.description,
       "bankReference",m.bankReference,"amount",Money.text(m.amount),"currency",m.currency,"direction",m.direction,"kind",m.kind);}
 }

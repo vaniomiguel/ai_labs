@@ -18,6 +18,7 @@ public class DocumentService {
   private final JobQueue jobs;
   private final AuditService audit;
   private final DocumentRepository repository;
+  private final SourceDeletion deletion;
 
   public DocumentService(
       Store store,
@@ -25,16 +26,29 @@ public class DocumentService {
       AccountingProperties properties,
       JobQueue jobs,
       AuditService audit,
-      DocumentRepository repository) {
+      DocumentRepository repository, SourceDeletion deletion) {
     this.store = store;
     this.storage = storage;
     this.properties = properties;
     this.jobs = jobs;
     this.audit = audit;
     this.repository = repository;
+    this.deletion = deletion;
+  }
+
+  public SourceDocument active(UUID id) {
+    return store.find(SourceDocument.class, id).filter(doc -> !doc.deleted).orElseThrow(DomainException::missing);
+  }
+
+  public SourceDocument reprocessable(UUID id) {
+    var doc = active(id);
+    if (!deletion.canExtract(doc))
+      throw DomainException.invalid("Esta extração já não tem itens ativos para reprocessar.");
+    return doc;
   }
 
   public List<ExtractionAttempt> attempts(UUID documentId) {
+    active(documentId);
     return repository.attempts(documentId);
   }
 
@@ -134,6 +148,7 @@ public class DocumentService {
   /** Lists upload metadata while keeping large extraction payloads out of the database result. */
   @Transactional(readOnly = true)
   public List<Map<String, Object>> list() {
+    var orphanIds = deletion.orphanIds();
     return repository.metadata().stream()
         .map(
             d ->
@@ -165,7 +180,8 @@ public class DocumentService {
                     "createdAt",
                     d.getCreatedAt(),
                     "updatedAt",
-                    d.getUpdatedAt()))
+                    d.getUpdatedAt(),
+                    "cleanupAvailable", orphanIds.contains(d.getId())))
         .toList();
   }
 }

@@ -10,6 +10,7 @@ import io.zonky.test.db.postgres.embedded.EmbeddedPostgres;
 import java.io.*;
 import java.net.*;
 import java.net.http.*;
+import java.nio.file.Files;
 import java.time.*;
 import java.util.*;
 import java.util.concurrent.*;
@@ -28,6 +29,8 @@ import pt.conta.document.*;
 import pt.conta.invoice.Invoice;
 import pt.conta.jobs.*;
 import pt.conta.ledger.*;
+import pt.conta.ledger.FinancialRecordDeletion.Relationship;
+import pt.conta.ledger.FinancialRecordDeletion.Type;
 import pt.conta.reconciliation.Allocation;
 import pt.conta.reconciliation.ExclusionRequest;
 import pt.conta.reconciliation.ReconciliationService;
@@ -59,6 +62,9 @@ class FinancialIntegrationTest {
   @Autowired DocumentService documents;
   @Autowired ProcessingService processing;
   @Autowired DocumentStorage storage;
+  @Autowired FinancialRecordDeletion deletion;
+  @Autowired DocumentFileDeletion fileDeletion;
+  @Autowired pt.conta.review.ReviewService review;
   @Autowired JobQueue queue;
   @Autowired JobMonitor jobMonitor;
   @Autowired pt.conta.api.ProgressController progress;
@@ -233,6 +239,219 @@ class FinancialIntegrationTest {
     assertThat(store.all(LedgerEntry.class)).hasSize(4);
     assertThat(ledger.year(2026).getFirst().get("increases")).isEqualTo("0.00");
     assertThat((List<?>) ledger.year(2026).getFirst().get("entries")).isEmpty();
+  }
+
+  @Test
+  void movementDeletionRequiresFreshConsentAndDetachesPartialPaymentAndReversal() {
+    var invoice = invoice("100.00", "2026-03-01", "DELETE-PAID");
+    var debit = movement("60.00", "2026-03-02", "Pagamento parcial", "UNCLASSIFIED", "DEBIT");
+    UUID movementId = (UUID) debit.get("id");
+    var before = deletion.preview(Type.MOVEMENT, movementId);
+    var allocation = allocate(invoice, debit, "60.00");
+    var credit = movement("20.00", "2026-03-03", "Estorno parcial", "REFUND", "CREDIT");
+    UUID refund = (UUID) credit.get("id");
+    book.allocate(map("invoiceId", invoice.get("id"), "movementId", refund,
+        "amount", "20.00", "reversesId", allocation.get("id")));
+    var impact = deletion.preview(Type.MOVEMENT, movementId);
+    assertThat(impact.links()).extracting(FinancialRecordDeletion.Link::relationship)
+        .contains(Relationship.PAYMENT, Relationship.REVERSAL);
+    assertThat(impact.links()).anyMatch(link -> link.record().id().equals(refund));
+    assertThat(impact.impactToken()).isNotEqualTo(before.impactToken());
+    confirm(impact);
+    assertThat(store.all(Allocation.class)).noneMatch(a -> a.active);
+    assertThat(finance.invoice((UUID) invoice.get("id"))).containsEntry("remaining", "100.00");
+    assertThat(finance.movement(refund)).containsEntry("remaining", "20.00");
+    assertThat(closing(2026, 3)).isEqualTo("120.00");
+    assertThatThrownBy(() -> finance.movement(movementId)).isInstanceOf(DomainException.class);
+  }
+
+  @Test
+  void invoiceDeletionRejectsStaleConsentWithoutChangingTheNewLink() {
+    var invoice = invoice("100.00", "2026-04-01", "DELETE-CONCURRENT");
+    var before = deletion.preview(Type.INVOICE, (UUID) invoice.get("id"));
+    UUID id = before.record().id();
+    var debit = movement("30.00", "2026-04-02", "Pagamento novo", "UNCLASSIFIED", "DEBIT");
+    allocate(finance.invoice(id), debit, "30.00");
+    assertThatThrownBy(() -> confirm(before)).isInstanceOfSatisfying(DomainException.class,
+        error -> assertThat(error.status).isEqualTo(409));
+    assertThat(finance.invoice(id)).containsEntry("remaining", "70.00");
+    assertThat(deletion.preview(Type.INVOICE, id).links()).hasSize(1);
+  }
+
+  @Test
+  void deletionPreviewShowsUnconfirmedPaymentReferencesInBothDirections() {
+    var records = new ArrayList<Map<String, Object>>();
+    book.batch(() -> {
+      records.add(invoice("100.00", "2026-06-01", "DELETE-REF-8010"));
+      records.add(movement("30.00", "2026-06-02", "Pagamento DELETE-REF-8010", "UNCLASSIFIED", "DEBIT"));
+      records.add(movement("40.00", "2026-06-03", "Transferência DELETE-REF-8010", "UNCLASSIFIED", "DEBIT"));
+    });
+    UUID invoice = (UUID) records.getFirst().get("id");
+    UUID movement = (UUID) records.get(1).get("id");
+    var invoiceImpact = deletion.preview(Type.INVOICE, invoice);
+    assertThat(invoiceImpact.links()).extracting(FinancialRecordDeletion.Link::relationship)
+        .containsExactly(Relationship.PAYMENT_REFERENCE, Relationship.PAYMENT_REFERENCE);
+    assertThat(deletion.preview(Type.MOVEMENT, movement).links()).singleElement().satisfies(link -> {
+      assertThat(link.relationship()).isEqualTo(Relationship.PAYMENT_REFERENCE);
+      assertThat(link.record().id()).isEqualTo(invoice);
+      assertThat(link.allocationId()).isNull();
+    });
+  }
+
+  @Test
+  void invoiceDeletionClearsCreditNoteAndHistoricalReferences() {
+    var invoice = invoice("100.00", "2026-05-01", "DELETE-ORIGINAL");
+    UUID id = (UUID) invoice.get("id");
+    var credit = book.saveInvoice(null, map("issuedOn", "2026-05-02", "supplier", "Fornecedor Exemplo Lda",
+        "number", "DELETE-CREDIT", "total", "15.00", "type", "CREDIT_NOTE", "relatedInvoiceId", id, "validate", true));
+    UUID creditId = (UUID) credit.get("id");
+    var history = store.add(new pt.conta.history.LegacyRow());
+    history.documentId = UUID.randomUUID();
+    history.sheet = "2026";
+    history.invoiceId = id;
+    store.flush();
+    var impact = deletion.preview(Type.INVOICE, id);
+    assertThat(impact.links()).anyMatch(link -> link.relationship() == Relationship.CREDIT_NOTE && link.record().id().equals(creditId));
+    assertThat(impact.historicalLinks()).isEqualTo(1);
+    confirm(impact);
+    assertThat(finance.invoice(creditId)).containsEntry("relatedInvoiceId", null)
+        .containsEntry("reviewStatus", Types.ReviewStatus.OPEN);
+    assertThat(review.openFor("invoice", creditId)).isPresent();
+    assertThat(history.invoiceId).isNull();
+    assertThat(closing(2026, 5)).isEqualTo("0.00");
+  }
+
+  @Test
+  void sharedStatementDropsOneDraftRowAndReprocessingCannotRestoreIt() throws Exception {
+    var upload = documents.upload(new ByteArrayInputStream(pdf("Extrato com duas linhas")), "delete-shared.pdf",
+        "STATEMENT", account, null, null);
+    var source = store.get(SourceDocument.class, (UUID) upload.get("id"));
+    var first = map("bookedOn", "2026-01-02", "description", "Linha eliminada", "amount", "5.00", "direction", "DEBIT");
+    var second = map("bookedOn", "2026-01-03", "description", "Linha mantida", "amount", "10.00", "direction", "DEBIT", "validate", false);
+    var draft = map("movements", List.of(first, second), "validate", true);
+    var converted = new DocumentConverter.Converted("Extrato", 1, map("pages", List.of()), "TEST");
+    publisher.extracted(source.id, source.version, converted, draft);
+    var movements = store.all(BankMovement.class).stream().filter(m -> source.id.equals(m.documentId)).toList();
+    var deleted = movements.getFirst();
+    var survivor = movements.getLast();
+    var alert = review.open(source.id, "movement", deleted.id, "TEST_REMOVAL", "Alerta eliminado");
+    var survivorAlert = review.open(source.id, "movement", survivor.id, "TEST_SURVIVOR", "Alerta mantido");
+    var impact = deletion.preview(Type.MOVEMENT, deleted.id);
+    assertThat(impact.upload().action()).isEqualTo(SourceDeletion.Action.REMOVE_ROW);
+    assertThat(impact.alerts()).extracting(FinancialRecordDeletion.AlertChange::id).containsExactly(alert.id);
+    long previous = source.version;
+    confirm(impact);
+    assertThat(rows(Json.object(source.draft), "movements")).extracting(row -> row.get("id"))
+        .containsExactly(survivor.id.toString());
+    assertThat(Json.object(source.fieldProvenance)).doesNotContainKey(deleted.id.toString());
+    assertThat(review.openFor("movement", survivor.id)).get().extracting(a -> a.id).isEqualTo(survivorAlert.id);
+    assertThat(Files.exists(storage.path(source.storageKey))).isTrue();
+    assertThat(publisher.extracted(source.id, previous, converted, draft)).isFalse();
+    assertThat(publisher.extracted(source.id, source.version, converted, draft)).isTrue();
+    assertThat(store.all(BankMovement.class).stream().filter(m -> source.id.equals(m.documentId) && !m.deleted))
+        .extracting(m -> m.id).containsExactly(survivor.id);
+  }
+
+  @Test
+  void deletionDoesNotEraseAnUnidentifiedDraftRowInAStatement() throws Exception {
+    var upload = documents.upload(new ByteArrayInputStream(pdf("Extrato com rascunho divergente")), "delete-unidentified.pdf",
+        "STATEMENT", account, null, null);
+    var source = store.get(SourceDocument.class, (UUID) upload.get("id"));
+    var original = map("bookedOn", "2026-01-02", "description", "Linha original", "amount", "5.00", "direction", "DEBIT");
+    var replacement = map("bookedOn", "2026-01-03", "description", "Por confirmar", "amount", "10.00", "direction", "DEBIT");
+    var converted = new DocumentConverter.Converted("Extrato", 1, map("pages", List.of()), "TEST");
+    publisher.extracted(source.id, source.version, converted, map("movements", List.of(original), "validate", false));
+    var movement = store.all(BankMovement.class).stream().filter(m -> source.id.equals(m.documentId)).findFirst().orElseThrow();
+    publisher.edit(source.id, map("version", source.version, "draft", map("movements", List.of(replacement))), documents);
+    assertThatThrownBy(() -> deletion.preview(Type.MOVEMENT, movement.id))
+        .isInstanceOfSatisfying(DomainException.class, error -> assertThat(error.status).isEqualTo(409));
+    assertThat(movement.deleted).isFalse();
+    assertThat(source.draft).contains("Por confirmar");
+  }
+
+  @Test
+  void removingExclusiveUploadErasesAttemptsAndPermitsTheSameFileUnderTheCorrectType() throws Exception {
+    byte[] bytes = pdf("Upload da fatura incorreta");
+    var upload = documents.upload(new ByteArrayInputStream(bytes), "delete-exclusive.pdf", "INVOICE", null, null, null);
+    var source = store.get(SourceDocument.class, (UUID) upload.get("id"));
+    var converted = new DocumentConverter.Converted("Original", 1, map("pages", List.of()), "TEST");
+    var draft = map("description", "Registo por validar", "issues", List.of("Faltam dados"), "validate", false);
+    publisher.extracted(source.id, source.version, converted, draft);
+    var invoice = store.all(Invoice.class).stream().filter(i -> source.id.equals(i.documentId)).findFirst().orElseThrow();
+    var impact = deletion.preview(Type.INVOICE, invoice.id);
+    String key = source.storageKey;
+    long previous = source.version;
+    assertThat(impact.upload().action()).isEqualTo(SourceDeletion.Action.ERASE);
+    assertThat(impact.alerts()).isNotEmpty();
+    confirm(impact);
+    assertThat(source.deleted).isTrue();
+    assertThat(source.draft).isEqualTo("{}");
+    assertThat(jdbc.queryForObject("select count(*) from extraction_attempt where document_id=?", Integer.class, source.id)).isZero();
+    assertThat(queue.taskIds(source.id)).isEmpty();
+    assertThat(review.openFor("invoice", invoice.id)).isEmpty();
+    assertThat(jdbc.queryForObject("select count(*) from document_file_deletion where storage_key=?", Integer.class, key)).isOne();
+    assertThat(publisher.extracted(source.id, previous, converted, draft)).isFalse();
+    publisher.aiExtracted(source.id, previous, draft, "{}", List.of());
+    assertThat(jdbc.queryForObject("select count(*) from extraction_attempt where document_id=?", Integer.class, source.id)).isZero();
+    assertThat(documents.upload(new ByteArrayInputStream(bytes), "delete-exclusive.pdf", "STATEMENT", account, null, null))
+        .containsEntry("kind", "STATEMENT").doesNotContainEntry("id", source.id);
+    assertThat(documents.upload(new ByteArrayInputStream(bytes), "delete-exclusive.pdf", "INVOICE", null, null, null))
+        .doesNotContainEntry("id", source.id);
+  }
+
+  @Test
+  void removingTheOnlyExtractedInvoiceKeepsTheOriginalWhileAMovementUsesIt() throws Exception {
+    var upload = documents.upload(new ByteArrayInputStream(pdf("Original partilhado")), "delete-shared-root.pdf",
+        "INVOICE", null, null, null);
+    var source = store.get(SourceDocument.class, (UUID) upload.get("id"));
+    var converted = new DocumentConverter.Converted("Original", 1, map("pages", List.of()), "TEST");
+    var draft = map("description", "Fatura extraída", "validate", false);
+    publisher.extracted(source.id, source.version, converted, draft);
+    var invoice = store.all(Invoice.class).stream().filter(i -> source.id.equals(i.documentId)).findFirst().orElseThrow();
+    var movement = book.saveMovement(null, map("accountId", account, "documentId", source.id, "validate", false));
+    UUID movementId = (UUID) movement.get("id");
+    assertThat(deletion.preview(Type.INVOICE, invoice.id).upload().action()).isEqualTo(SourceDeletion.Action.REMOVE_ROW);
+    confirm(deletion.preview(Type.INVOICE, invoice.id));
+    assertThat(source.draft).isEqualTo("{}");
+    assertThat(documents.active(source.id)).isSameAs(source);
+    assertThat(finance.movement(movementId)).containsEntry("documentId", source.id);
+    assertThat(publisher.extracted(source.id, source.version, converted, draft)).isFalse();
+    confirm(deletion.preview(Type.MOVEMENT, movementId));
+    assertThat(source.deleted).isTrue();
+  }
+
+  @Test
+  void earlierDeletionCanBeCleanedUpAndFileRemovalRetries() throws Exception {
+    var upload = documents.upload(new ByteArrayInputStream(pdf("Original órfão")), "delete-orphan.pdf", "INVOICE", null, null, null);
+    var source = store.get(SourceDocument.class, (UUID) upload.get("id"));
+    publisher.extracted(source.id, source.version, new DocumentConverter.Converted("Original", 1, map("pages", List.of()), "TEST"),
+        map("description", "Extração órfã", "validate", false));
+    var invoice = store.all(Invoice.class).stream().filter(i -> source.id.equals(i.documentId)).findFirst().orElseThrow();
+    book.delete("invoice", invoice.id, invoice.version);
+    assertThat(documents.list()).anyMatch(row -> source.id.equals(row.get("id")) && Boolean.TRUE.equals(row.get("cleanupAvailable")));
+    String key = source.storageKey;
+    var path = storage.path(key);
+    Files.delete(path);
+    Files.createDirectory(path);
+    var obstruction = Files.createFile(path.resolve("child"));
+    try {
+      confirm(deletion.preview(Type.DOCUMENT, source.id));
+      fileDeletion.drain();
+      assertThat(jdbc.queryForObject("select attempts from document_file_deletion where storage_key=?", Integer.class, key)).isOne();
+      Files.delete(obstruction);
+      jdbc.update("update document_file_deletion set available_at=now() where storage_key=?", key);
+      fileDeletion.drain();
+      assertThat(Files.exists(path)).isFalse();
+      assertThat(documents.list()).noneMatch(row -> source.id.equals(row.get("id")));
+    } finally {
+      Files.deleteIfExists(obstruction);
+      Files.deleteIfExists(path);
+    }
+  }
+
+  private void confirm(FinancialRecordDeletion.Impact impact) {
+    var record = impact.record();
+    deletion.delete(record.type(), record.id(), record.version(), impact.impactToken());
   }
 
   @Test

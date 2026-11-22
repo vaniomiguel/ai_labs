@@ -1,0 +1,1 @@
+Correct the validation error. Assess every current category exactly once. Suggest only unique, active catalog categories that have literal evidence in the invoice. Use only current assignment IDs in replacesCategoryIds. If no alternative has sufficient evidence, leave suggestions empty and explain the result in Portuguese.

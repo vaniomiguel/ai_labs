@@ -21,6 +21,7 @@ import pt.conta.shared.Types.*;
 public class DocumentPublisher {
   private final Store store;
   private final FieldProtection protection;
+  private final SourceDeletion deletion;
   private final BookkeepingService book;
   private final ReviewService review;
   private final HistoryService history;
@@ -33,8 +34,9 @@ public class DocumentPublisher {
       ReviewService review,
       HistoryService history,
       AuditService audit,
-      pt.conta.jobs.JobQueue jobs, FieldProtection protection) {
+      pt.conta.jobs.JobQueue jobs, FieldProtection protection, SourceDeletion deletion) {
     this.protection=protection;
+    this.deletion = deletion;
     this.store = store;
     this.book = book;
     this.review = review;
@@ -47,11 +49,17 @@ public class DocumentPublisher {
   @Transactional
   public boolean extracted(
       UUID id, long version, DocumentConverter.Converted converted, Map<String, Object> draft) {
+    return extracted(id, version, converted, draft, false);
+  }
+
+  @Transactional
+  public boolean extracted(
+      UUID id, long version, DocumentConverter.Converted converted, Map<String, Object> draft, boolean followUp) {
     store.lockFinancialWrites();
     var doc = store.get(SourceDocument.class, id);
-    if (doc.version != version || doc.deleted) return false;
+    if (doc.version != version || !deletion.canExtract(doc)) return false;
     boolean reprocessing = !Json.object(doc.draft).isEmpty();
-    draft = DraftSanitizer.sanitize(doc.kind, draft);
+    draft = SourceDeletion.suppressRemoved(doc, DraftSanitizer.sanitize(doc.kind, draft));
     doc.text = converted.text();
     doc.pages = converted.pages();
     doc.layout = Json.write(converted.layout());
@@ -68,6 +76,10 @@ public class DocumentPublisher {
     publish(doc, draft, converted.engine(), false);
     store.flush();
     if (reprocessing) proposeDifferences(doc, Json.object(rawDraft), doc.layout);
+    if (followUp && Set.of("INVOICE", "STATEMENT", "HISTORY").contains(doc.kind)) {
+      String kind = doc.status.equals("OPEN") && !doc.kind.equals("HISTORY") ? "AI_EXTRACT_DOCUMENT" : "REVIEW_DOCUMENT";
+      jobs.enqueue(kind, id, doc.version, "{}");
+    }
     return true;
   }
 
@@ -75,11 +87,11 @@ public class DocumentPublisher {
   @Transactional
   public Map<String, Object> edit(UUID id, Map<String, Object> body, DocumentService documents) {
     store.lockFinancialWrites();
-    var doc = store.get(SourceDocument.class, id);
+    var doc = documents.reprocessable(id);
     store.checkVersion(doc, version(body));
     String before = doc.draft;
     Object raw = body.get("draft");
-    var draft = protection.initialize(doc.kind,Json.object(Json.write(raw)));
+    var draft = protection.initialize(doc.kind, SourceDeletion.suppressRemoved(doc, Json.object(Json.write(raw))));
     boolean resolve = flag(body, "resolve");
     if (!resolve && financial(doc)) draft = preserveConfirmedRows(doc, Json.object(before), draft);
     if(Set.of("INVOICE","STATEMENT").contains(doc.kind))
@@ -166,9 +178,9 @@ public class DocumentPublisher {
       List<ExtractionAttempt.Prompt> prompts) {
     store.lockFinancialWrites();
     var doc = store.get(SourceDocument.class, id);
-    if (doc.version != version || doc.deleted) return;
+    if (doc.version != version || !deletion.canExtract(doc)) return;
     boolean reprocessing = !Json.object(doc.draft).isEmpty();
-    draft = DraftSanitizer.sanitize(doc.kind, draft);
+    draft = SourceDeletion.suppressRemoved(doc, DraftSanitizer.sanitize(doc.kind, draft));
     String rawDraft=Json.write(draft);
     draft=automaticDraft(doc,draft);
     doc.draft = Json.write(draft);

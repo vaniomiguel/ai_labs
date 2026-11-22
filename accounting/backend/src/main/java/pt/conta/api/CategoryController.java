@@ -15,6 +15,8 @@ public class CategoryController {
   public record AssignmentEdit(@NotNull @PositiveOrZero Long version,
       @NotNull List<@NotNull UUID> categoryIds, boolean allowAi) {}
   public record Revision(@NotNull @PositiveOrZero Long version) {}
+  public record CategoryReviewSelection(@NotNull @PositiveOrZero Long version, @NotNull UUID reviewJobId,
+      @NotNull List<@NotNull UUID> categoryIds) {}
   private final CategoryService categories;
   public CategoryController(CategoryService categories) { this.categories = categories; }
 
@@ -26,6 +28,16 @@ public class CategoryController {
   @ResponseStatus(HttpStatus.ACCEPTED)
   public Map<String, Object> classifyInvoice(@PathVariable UUID id, @Valid @RequestBody Revision body) {
     return categories.requestInvoiceClassification(id, body.version());
+  }
+  @PostMapping("/invoices/{id}/categories/review")
+  @ResponseStatus(HttpStatus.ACCEPTED)
+  public Map<String, Object> reviewInvoiceCategories(@PathVariable UUID id, @Valid @RequestBody Revision body) {
+    return categories.requestInvoiceCategoryReview(id, body.version());
+  }
+  @PostMapping("/invoices/{id}/categories/review/apply")
+  public Map<String, Object> applyInvoiceCategoryReview(
+      @PathVariable UUID id, @Valid @RequestBody CategoryReviewSelection body) {
+    return categories.applyInvoiceCategoryReview(id, body.version(), body.reviewJobId(), body.categoryIds());
   }
   @PutMapping("/movements/{id}/categories")
   public Map<String, Object> movement(@PathVariable UUID id, @Valid @RequestBody AssignmentEdit body) {

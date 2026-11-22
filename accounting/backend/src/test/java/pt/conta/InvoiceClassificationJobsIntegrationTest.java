@@ -1,6 +1,7 @@
 package pt.conta;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 import static pt.conta.shared.Inputs.map;
@@ -31,6 +32,7 @@ import pt.conta.jobs.JobQueue;
 import pt.conta.ledger.BookkeepingService;
 import pt.conta.review.ReviewService;
 import pt.conta.shared.AccountingProperties;
+import pt.conta.shared.DomainException;
 import pt.conta.shared.Json;
 
 /** Drives the queue with committed fixtures, so failed attempts exercise real transaction rollback. */
@@ -39,6 +41,7 @@ import pt.conta.shared.Json;
 @Import(CategoryIntegrationTest.Providers.class)
 class InvoiceClassificationJobsIntegrationTest {
   private static final String SOFTWARE = "Software Tuxera NTFS for Mac";
+  private static final String TOP_UP = "Carregamento de telemóvel";
   private static final String DISCARDED_CATEGORY = "Utilitários de sistema";
   private static EmbeddedPostgres postgres;
 
@@ -66,23 +69,25 @@ class InvoiceClassificationJobsIntegrationTest {
 
   @BeforeEach void resetModel() { provider.calls = 0; }
 
-  @Test void retriesBlockedProposalThenAppliesOnlyTheEligibleCategory() {
+  @Test void retriesUnsupportedProposalAndRollsBackItsCatalogChange() {
     UUID books = reference("6232");
-    UUID invoiceId = invoiceWithRejectedBooks(books);
+    UUID invoiceId = invoiceWithRemovedBooks(books);
     UUID jobId = request(invoiceId);
     provider.program = modelRequest -> {
       var input = Json.read(modelRequest.input());
-      assertThat(input.path("blockedCategoryIds").toString()).contains(books.toString());
-      if (provider.calls == 1) return blockedProposal(books);
-      assertThat(input.path("validationFeedback").path("error").asText()).contains("categorias elegíveis");
-      return response(List.of(label(books), label("new:software")), List.of(create("new:software", "Licenças de software")));
+      assertThat(input.has("blockedCategoryIds")).isFalse();
+      if (provider.calls == 1) {
+        return response(List.of(map("id", books, "evidence", "Manual impresso")), List.of(create("new:discarded", DISCARDED_CATEGORY)));
+      }
+      assertThat(input.path("validationFeedback").path("error").asText()).contains("sem evidência");
+      return response(List.of(label("new:software")), List.of(create("new:software", "Licenças de software")));
     };
 
     run(jobId);
 
     assertThat(provider.calls).isEqualTo(2);
     assertThat(categories.view("invoice", invoiceId)).containsEntry("jobId", jobId)
-        .containsEntry("jobState", "DONE").containsEntry("rejectedCategoryIds", List.of(books));
+        .containsEntry("jobState", "DONE").containsEntry("rejectedCategoryIds", List.of());
     assertThat(resultAudit(invoiceId)).containsEntry("jobId", jobId.toString())
         .containsEntry("state", "CLASSIFIED").containsEntry("categoryNames", List.of("Licenças de software"));
     assertThat(categoryNames()).doesNotContain(DISCARDED_CATEGORY);
@@ -94,14 +99,9 @@ class InvoiceClassificationJobsIntegrationTest {
   }
 
   @Test void exhaustedRetriesLeaveAnUnclassifiedInvoiceForReviewWithoutCatalogChanges() {
-    UUID books = reference("6232");
-    UUID child = (UUID) categories.save(map("name", "Manuais de sistemas", "parentId", books)).get("id");
-    UUID invoiceId = invoiceWithRejectedBooks(books);
+    UUID invoiceId = invoiceWithRemovedBooks(reference("6232"));
     UUID jobId = request(invoiceId);
-    provider.program = modelRequest -> {
-      assertThat(Json.read(modelRequest.input()).path("blockedCategoryIds").toString()).contains(child.toString());
-      return blockedProposal(child);
-    };
+    provider.program = ignored -> response(List.of(), List.of(create("new:discarded", DISCARDED_CATEGORY)));
 
     run(jobId);
 
@@ -111,8 +111,76 @@ class InvoiceClassificationJobsIntegrationTest {
     assertThat(categoryNames()).doesNotContain(DISCARDED_CATEGORY);
   }
 
+  @Test void reviewAssessesSavedLabelsAndCanRestoreAPreviouslyRemovedCategoryOnApproval() {
+    UUID telecom = reference("6262"), insurance = reference("6263"), office = reference("6233");
+    UUID invoiceId = invoice(TOP_UP + " e Papel A4");
+    categories.manual("invoice", invoiceId, version(invoiceId), List.of(telecom), false);
+    categories.manual("invoice", invoiceId, version(invoiceId), List.of(insurance), false);
+    UUID automatic = request(invoiceId);
+    provider.program = ignored -> response(List.of(map("id", office, "evidence", "Papel A4")), List.of());
+    run(automatic);
+    var savedCategories = categories.details("invoice", invoiceId);
+    long catalogRevision = categories.revision();
+    UUID jobId = requestReview(invoiceId);
+    assertStaleReview(invoiceId, jobId, telecom);
+    provider.program = request -> reviewTelecomProposal(request.input(), insurance, office, telecom);
+    run(jobId);
+
+    var view = categories.view("invoice", invoiceId);
+    assertThat(provider.calls).isEqualTo(4);
+    assertThat(view).containsEntry("jobState", "DONE").containsEntry("categories", savedCategories)
+        .containsEntry("catalogRevision", catalogRevision).containsEntry("rejectedCategoryIds", List.of());
+    assertThat(view.get("review")).asString().contains("INSUFFICIENT_EVIDENCE", "GOOD_FIT", TOP_UP);
+    assertThat(monitor.detail(jobId)).containsEntry("kind", CategoryService.INVOICE_CATEGORY_REVIEW_JOB);
+    assertInvalidSelection(invoiceId, jobId, UUID.randomUUID());
+
+    var applied = categories.applyInvoiceCategoryReview(invoiceId, version(invoiceId), jobId, List.of(office, telecom));
+    assertThat(rows(applied, "categories")).extracting(tag -> tag.get("id")).containsExactlyInAnyOrder(office, telecom);
+    assertThat(rows(applied, "categories")).contains(savedCategories.stream()
+        .filter(category -> office.equals(category.get("id"))).findFirst().orElseThrow());
+    assertThat(rows(applied, "categories")).filteredOn(tag -> telecom.equals(tag.get("id"))).singleElement()
+        .satisfies(tag -> assertThat(rows(tag, "evidence")).singleElement().satisfies(evidence -> assertThat(evidence)
+            .containsEntry("origin", "MANUAL").containsEntry("reason", TOP_UP)
+            .hasEntrySatisfying("executionId", execution -> assertThat(execution).isNotNull())));
+    assertThat(audit(invoiceId, "APPLY_AI_CATEGORY_REVIEW")).containsEntry("jobId", jobId.toString());
+    assertStaleReview(invoiceId, jobId, telecom);
+  }
+
+  @Test void anAssessmentWithoutAlternativesCannotBeAppliedAfterTheCatalogOrInvoiceChanges() {
+    UUID insurance = reference("6263");
+    UUID invoiceId = invoice("Transferência");
+    categories.manual("invoice", invoiceId, version(invoiceId), List.of(insurance), false);
+    provider.program = ignored -> Json.write(map("summary", "Descrição insuficiente", "assessments",
+        List.of(assessment(insurance, "INSUFFICIENT_EVIDENCE")), "suggestions", List.of()));
+    UUID oldCatalogJob = requestReview(invoiceId);
+    run(oldCatalogJob);
+    assertThat(categories.view("invoice", invoiceId).get("review")).asString().contains("suggestions=[]");
+    categories.save(map("name", "Nova categoria", "aliases", List.of()));
+    assertStaleReview(invoiceId, oldCatalogJob, insurance);
+
+    UUID oldInvoiceJob = requestReview(invoiceId);
+    run(oldInvoiceJob);
+    jdbc.update("update invoice set description=? where id=?", "Seguro anual", invoiceId);
+    assertStaleReview(invoiceId, oldInvoiceJob, insurance);
+    assertThat(categories.details("invoice", invoiceId)).extracting(tag -> tag.get("id")).containsExactly(insurance);
+  }
+
+  @Test void anAutomaticJobCanAssignPreviouslyRemovedTelecom() {
+    UUID telecom = reference("6262");
+    UUID invoiceId = invoice(TOP_UP);
+    categories.manual("invoice", invoiceId, version(invoiceId), List.of(telecom), false);
+    categories.manual("invoice", invoiceId, version(invoiceId), List.of(), false);
+    jdbc.update("update invoice set description=? where id=?", TOP_UP + " pré-pago", invoiceId);
+    categories.recordChanged("invoice", invoiceId, Map.of(), true);
+    var queued = categories.view("invoice", invoiceId);
+    assertThat(queued).containsEntry("jobKind", "CLASSIFY_INVOICE").containsEntry("jobState", "QUEUED");
+    provider.program = ignored -> response(List.of(map("id", telecom, "evidence", TOP_UP)), List.of());
+    run((UUID) queued.get("jobId"));
+    assertThat(categories.details("invoice", invoiceId)).extracting(tag -> tag.get("id")).containsExactly(telecom);
+  }
+
   @Test void aValidReviewResponseCompletesWithoutRetries() {
-    UUID invoiceId = invoiceWithRejectedBooks(reference("6232"));
+    UUID invoiceId = invoiceWithRemovedBooks(reference("6232"));
     UUID jobId = request(invoiceId);
     String reason = "O catálogo não contém uma categoria elegível sustentada pela fatura.";
     provider.program = ignored -> Json.write(map("status", "REVIEW", "categories", List.of(), "operations", List.of(),
@@ -126,7 +194,7 @@ class InvoiceClassificationJobsIntegrationTest {
   }
 
   @Test void exhaustedEmptyResponsesKeepSavedCategoriesAndModelOutagesKeepTheJobWaiting() {
-    UUID invoiceId = invoiceWithRejectedBooks(reference("6232"));
+    UUID invoiceId = invoiceWithRemovedBooks(reference("6232"));
     categories.manual("invoice", invoiceId, version(invoiceId), List.of(reference("6233")), false);
     UUID jobId = request(invoiceId);
     provider.program = ignored -> response(List.of(), List.of());
@@ -145,12 +213,51 @@ class InvoiceClassificationJobsIntegrationTest {
     assertThat(resultAudit(invoiceId)).containsEntry("jobId", jobId.toString());
   }
 
-  private UUID invoiceWithRejectedBooks(UUID books) {
-    UUID invoiceId = (UUID) book.saveInvoice(null, map("issuedOn", "2026-01-01", "supplier", "Tuxera",
-        "number", UUID.randomUUID().toString(), "description", SOFTWARE, "total", "20.33", "validate", true)).get("id");
+  private UUID invoiceWithRemovedBooks(UUID books) {
+    UUID invoiceId = invoice(SOFTWARE);
     categories.manual("invoice", invoiceId, version(invoiceId), List.of(books), false);
     categories.manual("invoice", invoiceId, version(invoiceId), List.of(), false);
     return invoiceId;
+  }
+
+  private UUID invoice(String description) {
+    return (UUID) book.saveInvoice(null, map("issuedOn", "2026-01-01", "supplier", "Fornecedor",
+        "number", UUID.randomUUID().toString(), "description", description, "total", "20.33", "validate", true)).get("id");
+  }
+
+  private UUID requestReview(UUID id) {
+    long version = version(id);
+    var first = categories.requestInvoiceCategoryReview(id, version);
+    assertThat(first).containsEntry("jobState", "QUEUED").containsEntry("jobKind", CategoryService.INVOICE_CATEGORY_REVIEW_JOB);
+    assertThat(categories.requestInvoiceCategoryReview(id, version)).isEqualTo(first);
+    return (UUID) first.get("jobId");
+  }
+
+  private String reviewTelecomProposal(String input, UUID insurance, UUID office, UUID telecom) {
+    var request = Json.read(input);
+    assertThat(request.path("currentAssignments").toString()).contains(insurance.toString(), office.toString());
+    var feedback = request.path("validationFeedback");
+    var assessments = !feedback.isMissingNode()
+        ? List.of(assessment(insurance, "INSUFFICIENT_EVIDENCE"), assessment(office, "GOOD_FIT"))
+        : List.of(assessment(office, "GOOD_FIT"));
+    String quote = feedback.path("error").asText().contains("sem evidência") ? TOP_UP : "Assinatura mensal";
+    return Json.write(map("summary", "A fatura inclui um carregamento.", "assessments", assessments,
+        "suggestions", List.of(map("categoryId", telecom, "reason", "É um serviço de comunicação.",
+            "evidence", quote, "replacesCategoryIds", List.of(insurance)))));
+  }
+
+  private Map<String, Object> assessment(UUID id, String fit) {
+    return map("categoryId", id, "fit", fit, "reason", "Avaliação da descrição guardada.");
+  }
+
+  private void assertInvalidSelection(UUID id, UUID jobId, UUID category) {
+    assertThatThrownBy(() -> categories.applyInvoiceCategoryReview(id, version(id), jobId, List.of(category)))
+        .isInstanceOfSatisfying(DomainException.class, error -> assertThat(error.status).isEqualTo(422));
+  }
+
+  private void assertStaleReview(UUID id, UUID jobId, UUID category) {
+    assertThatThrownBy(() -> categories.applyInvoiceCategoryReview(id, version(id), jobId, List.of(category)))
+        .isInstanceOfSatisfying(DomainException.class, error -> assertThat(error.status).isEqualTo(409));
   }
 
   private UUID request(UUID invoiceId) {
@@ -185,10 +292,6 @@ class InvoiceClassificationJobsIntegrationTest {
     return Json.object(jdbc.queryForObject("""
         select after_value from audit_event where entity_id=? and action=? order by created_at desc,id desc limit 1
         """, String.class, invoiceId, action));
-  }
-
-  private String blockedProposal(UUID books) {
-    return response(List.of(label(books)), List.of(create("new:discarded", DISCARDED_CATEGORY)));
   }
 
   private Map<String, Object> label(Object id) { return map("id", id, "evidence", SOFTWARE); }

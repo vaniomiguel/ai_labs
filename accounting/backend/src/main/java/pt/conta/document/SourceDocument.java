@@ -13,6 +13,9 @@ public class SourceDocument extends BaseEntity {
   @Column(columnDefinition = "text")
   public String fieldProvenance = "{}";
 
+  @Column(columnDefinition = "text")
+  public String removedDraftRows = "[]";
+
   public String filename;
   public String mediaType;
   public String sha256;

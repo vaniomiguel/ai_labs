@@ -8,7 +8,7 @@ import { MatButtonModule } from "@angular/material/button";
 import { MatSnackBar, MatSnackBarModule } from "@angular/material/snack-bar";
 import { A11yModule } from "@angular/cdk/a11y";
 import { AiExecutionItem, AlertView, Api, Classification, contextUsagePercent, contextWarningLabels, DocumentAttempt, euros, errorMessage, labels, JobCounts, JobItem, JobPage, ReconciliationEntry, ReconciliationPage, RepairApplyRequest, RepairPreview, ReviewableRecord } from "./api";
-import type { AuditEvent, CategoryConfirmation } from "./api";
+import type { AuditEvent, CategoryConfirmation, DeletionImpact, DeletionTarget } from "./api";
 import { AppliedFilters } from "./applied-filters";
 import { FinancialFilterBar } from "./financial-filters";
 import { DEFAULT_CATALOG_FILTERS, defaultFinancialFilters, financialQuery, initialFinancialFilters, isFinancialFilterView } from "./workspace-filters";
@@ -21,6 +21,7 @@ import { CategoryEditor } from "./category-editor";
 import { InvoiceCategoryAction } from "./invoice-category-action";
 import { CategoryManager } from "./category-manager";
 import { RepairPanel } from "./repair-panel";
+import { DeletionDialog } from "./deletion-dialog";
 import { DEFAULT_WORKSPACE_URL, RecordKind, recordView, WORKSPACE_PATHS, WorkspaceRoute, WorkspaceRouteKind, WorkspaceView } from "./workspace-routes";
 
 interface WorkspaceOrigin { url: string; view: WorkspaceView }
@@ -39,17 +40,23 @@ const EMPTY_RECONCILIATION_PAGE: ReconciliationPage = { items: [], total: 0, pag
 
 function classificationHistory(event: AuditEvent) {
   const scheduled = event.action === "REQUEST_AI_CLASSIFICATION";
-  if (!scheduled && event.action !== "AI_CLASSIFICATION_RESULT") return null;
+  const reviewLabels: Record<string, string> = {
+    REQUEST_AI_CATEGORY_REVIEW: "Revisão de categorias agendada",
+    AI_CATEGORY_REVIEW_RESULT: "Resultado da revisão de categorias",
+    APPLY_AI_CATEGORY_REVIEW: "Categorias guardadas após revisão",
+  };
+  const reviewLabel = reviewLabels[event.action];
+  if (!scheduled && event.action !== "AI_CLASSIFICATION_RESULT" && !reviewLabel) return null;
   const snapshot = typeof event.after === "object" && event.after !== null ? event.after : {};
   const jobId = "jobId" in snapshot ? snapshot.jobId : null;
-  const reason = "reason" in snapshot ? snapshot.reason : null;
+  const reason = "summary" in snapshot ? snapshot.summary : "reason" in snapshot ? snapshot.reason : null;
   const names = "categoryNames" in snapshot ? snapshot.categoryNames : null;
   const needsReview = "state" in snapshot && snapshot.state === "REVIEW";
   return {
-    label: scheduled ? "Classificação agendada"
-      : needsReview ? "Categorias por rever" : "Resultado da classificação por IA",
+    label: reviewLabel ?? (scheduled ? "Classificação agendada"
+      : needsReview ? "Categorias por rever" : "Resultado da classificação por IA"),
     jobId: typeof jobId === "string" && UUID.test(jobId) ? jobId : null,
-    reason: !scheduled && typeof reason === "string" ? reason : null,
+    reason: !scheduled && event.action !== "REQUEST_AI_CATEGORY_REVIEW" && typeof reason === "string" ? reason : null,
     categoryNames: Array.isArray(names) ? names.filter(name => typeof name === "string").join(", ") : "",
   };
 }
@@ -65,6 +72,7 @@ function classificationHistory(event: AuditEvent) {
     MatButtonModule,
     MatSnackBarModule,
     A11yModule,
+    DeletionDialog,
     FieldsEditor,
     PdfViewer,
     ReconciliationTable, CategoryTags, CategoryEditor, InvoiceCategoryAction, CategoryManager, RepairPanel, AppliedFilters, FinancialFilterBar,
@@ -200,7 +208,7 @@ export class AppComponent implements OnDestroy {
   readonly assignment = signal<any>(null);
   readonly assignmentMovements = signal<any[]>([]);
   readonly allInvoices = signal<any[]>([]);
-  readonly confirmDelete = signal<any>(null);
+  readonly deletionTarget = signal<DeletionTarget | null>(null);
   username = "gestor";
   password = "";
   uploadKind = "INVOICE";
@@ -444,7 +452,7 @@ export class AppComponent implements OnDestroy {
     this.reviewEdits.set(0);
     this.assignment.set(null);
     this.categoryTarget.set(null);
-    this.confirmDelete.set(null);
+    this.deletionTarget.set(null);
     this.routedGroup.set(null);
     this.exclusionGroup.set(null);
     this.selectedJobId.set(null);
@@ -883,20 +891,17 @@ export class AppComponent implements OnDestroy {
       if(request===this.editorRequest)this.editor.set({ ...this.editor(), documentId: docs[0].id, documentVersion:docs[0].version });
     });
   }
-  requestRemoval(kind: string, row: any) {
-    this.confirmDelete.set({ ...row, kind });
+  requestRemoval(type: DeletionTarget["type"], id: string) {
+    this.deletionTarget.set({ type, id });
   }
-  async removeRecord() {
-    const row = this.confirmDelete();
-    if (!row) return;
-    await this.run(async () => {
-      await this.api.delete(
-        (row.kind === "INVOICE" ? "/invoices/" : "/movements/") + row.id,
-        { version: row.version },
-      );
-      this.confirmDelete.set(null);
-      await this.refresh();
-    });
+
+  async deletionCompleted(impact: DeletionImpact) {
+    this.deletionTarget.set(null);
+    const action = { INVOICE: "Fatura eliminada", MOVEMENT: "Movimento eliminado", DOCUMENT: "Extração eliminada" };
+    const context = impact.upload?.action === "ERASE" ? "A eliminação do ficheiro original foi agendada." : "";
+    this.showSaveSuccess(action[impact.record.type], context);
+    if (this.editor()?.id === impact.record.id || this.reviewDocument()?.id === impact.record.id) this.closeRoute();
+    else await this.refresh();
   }
   openDocument(id: string) { this.openRoute(["document", id, "review"]); }
 

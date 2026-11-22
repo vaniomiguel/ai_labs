@@ -40,7 +40,12 @@ import { InvoiceCategoryAction } from "./invoice-category-action";
           </details>
           @if(error()){<p class="error" role="alert">{{error()}}</p>}
         </div>
-        <footer class="dialog-footer"><button class="text-button" [disabled]="saving()" (click)="save(true)">Permitir IA nas removidas</button><button mat-flat-button [disabled]="saving()" (click)="save(false)">Guardar categorias</button></footer>
+        <footer class="dialog-footer">
+          @if (type() === "movement") {
+            <button class="text-button" [disabled]="saving()" (click)="save(true)">Permitir IA nas removidas</button>
+          }
+          <button mat-flat-button [disabled]="saving()" (click)="save(false)">Guardar categorias</button>
+        </footer>
       </section>
     </div>
   `,

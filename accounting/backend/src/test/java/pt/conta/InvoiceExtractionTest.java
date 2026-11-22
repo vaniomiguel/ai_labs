@@ -48,7 +48,7 @@ class InvoiceExtractionTest {
         new AiProvider.Model("qwen3.5:9b", "invoice-test-digest", true, true, true)));
     when(provider.complete(any())).thenAnswer(_ -> completion(response()));
     when(store.all(AiExecution.class)).thenReturn(executions);
-    doAnswer(call -> { executions.add(call.getArgument(0)); return null; }).when(results).record(any());
+    doAnswer(call -> { executions.add(call.getArgument(0)); return null; }).when(results).record(any(), any());
     doc = new SourceDocument();
     doc.kind = "INVOICE";
     doc.mediaType = "application/pdf";

@@ -94,13 +94,6 @@ public class FinanceController {
     return book.saveInvoice(id, body);
   }
 
-  /** Soft-deletes an invoice and reverses its effects. */
-  @DeleteMapping("/invoices/{id}")
-  @Transactional
-  public void deleteInvoice(@PathVariable UUID id, @RequestParam long version) {
-    book.delete("invoice", id, version);
-  }
-
   /** Lists bank movements without inferring payment status from debit/credit alone. */
   @GetMapping("/movements")
   public Map<String, Object> movements(@RequestParam Map<String, String> filters) {
@@ -156,13 +149,6 @@ public class FinanceController {
   public Map<String, Object> editMovement(
       @PathVariable UUID id, @RequestBody Map<String, Object> body) {
     return book.saveMovement(id, body);
-  }
-
-  /** Soft-deletes a movement and detaches affected payments. */
-  @DeleteMapping("/movements/{id}")
-  @Transactional
-  public void deleteMovement(@PathVariable UUID id, @RequestParam long version) {
-    book.delete("movement", id, version);
   }
 
   /** Returns active allocations, including partial payments and reversals. */

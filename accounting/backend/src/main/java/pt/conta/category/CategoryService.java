@@ -25,7 +25,9 @@ import pt.conta.shared.*;
 @Transactional
 public class CategoryService {
   public record Snapshot(String type, UUID target, String fingerprint, long catalogRevision,
-      Map<String, Object> input, Set<UUID> blockedCategoryIds) {}
+      Map<String, Object> input) {}
+
+  public static final String INVOICE_CATEGORY_REVIEW_JOB = "REVIEW_INVOICE_CATEGORIES";
 
   static final class NoEligibleInvoiceCategories extends DomainException {
     NoEligibleInvoiceCategories() {
@@ -176,7 +178,7 @@ public class CategoryService {
           "reason", a.evidence, "executionId", a.executionId));
     }
     for (var a : inherited) reasons.computeIfAbsent((UUID) a.get("id"), k -> new ArrayList<>()).add(a);
-    reasons.keySet().removeIf(c -> rejected.stream().anyMatch(r -> descendant(c, r)));
+    if (type.equals("movement")) reasons.keySet().removeIf(c -> isRejected(c, rejected));
     var allIds = new ArrayList<>(reasons.keySet());
     // Parents are available through paths and family filters, not redundant monetary tags.
     reasons.keySet().removeIf(c -> allIds.stream().anyMatch(other -> !other.equals(c) && descendant(other, c)));
@@ -198,15 +200,30 @@ public class CategoryService {
       return origins.contains("AI") && !origins.contains("MANUAL") && !origins.contains("LEGACY");
     });
     if (status.equals("CLASSIFIED") && provisional) status = "PROVISIONAL";
-    var job = status.equals("PENDING") || type.equals("invoice")
-        ? classificationJob(new JobTarget(classificationKind(type), id, s == null ? 0 : s.generation)) : null;
-    var outcome = classificationStatus(type, status, s == null ? null : s.reason, job);
+    long generation = s == null ? 0 : s.generation;
+    var classifyJob = status.equals("PENDING") || type.equals("invoice")
+        ? classificationJob(new JobTarget(classificationKind(type), id, generation)) : null;
+    var reviewJob = type.equals("invoice")
+        ? classificationJob(new JobTarget(INVOICE_CATEGORY_REVIEW_JOB, id, generation)) : null;
+    var job = reviewJob == null ? classifyJob : reviewJob;
+    var outcome = classificationStatus(type, status, s == null ? null : s.reason, classifyJob);
+    long catalogRevision = revision();
     String reason = outcome.reason();
     return map("version", s == null ? 0L : s.version, "state", outcome.state(),
         "reason", hasInherited ? "Categorias das faturas associadas" : provisional
             ? "Classificação provisória pela descrição bancária. " + Objects.requireNonNullElse(reason, "") : reason,
         "jobId", job == null ? null : job.id(), "jobState", job == null ? null : job.state(),
-        "categories", tags, "rejectedCategoryIds", rejectedCategoryIds(assignments(s)), "catalogRevision", revision());
+        "jobKind", job == null ? null : reviewJob == null ? classificationKind(type) : INVOICE_CATEGORY_REVIEW_JOB,
+        "jobError", reviewJob == null ? null : reviewJob.error(),
+        "review", visibleReview(reviewJob, catalogRevision),
+        "categories", tags, "rejectedCategoryIds", type.equals("invoice") ? List.of() : rejectedCategoryIds(assignments(s)),
+        "catalogRevision", catalogRevision);
+  }
+
+  private Object visibleReview(ClassificationJob job, long catalogRevision) {
+    if (job == null || !job.state().equals("DONE") || job.reviewResult() == null) return null;
+    var result = Json.object(job.reviewResult());
+    return ((Number) result.get("catalogRevision")).longValue() == catalogRevision ? result.get("report") : null;
   }
 
   private record ClassificationStatus(String state, String reason) {}
@@ -223,7 +240,7 @@ public class CategoryService {
   }
 
   private record JobTarget(String kind, UUID id, long generation) {}
-  private record ClassificationJob(UUID id, String state, String error) {}
+  private record ClassificationJob(UUID id, String state, String error, String reviewResult) {}
   private record QueueStates(Map<JobTarget, ClassificationJob> states) {}
 
   private ClassificationJob classificationJob(JobTarget target) {
@@ -231,23 +248,25 @@ public class CategoryService {
       return store.memo(QueueStates.class, this::queueStates).states().get(target);
     }
     return jdbc.query("""
-        select id,state,error from job where kind=? and target_id=? and target_version=?
+        select id,state,error,payload::jsonb->>'reviewResult' as review_result
+        from job where kind=? and target_id=? and target_version=?
         order by (state in ('QUEUED','RUNNING','WAITING')) desc,created_at desc,id desc limit 1
         """, (rs, n) -> new ClassificationJob(rs.getObject("id", UUID.class), rs.getString("state"),
-            rs.getString("error")), target.kind(), target.id(), target.generation()).stream().findFirst().orElse(null);
+            rs.getString("error"), rs.getString("review_result")),
+        target.kind(), target.id(), target.generation()).stream().findFirst().orElse(null);
   }
 
   private QueueStates queueStates() {
     var states = new HashMap<JobTarget, ClassificationJob>();
     jdbc.query("""
-        select kind,target_id,target_version,id,state,error from job
-        where kind in ('CLASSIFY_INVOICE','CLASSIFY_MOVEMENT')
+        select kind,target_id,target_version,id,state,error,payload::jsonb->>'reviewResult' as review_result from job
+        where kind in ('CLASSIFY_INVOICE','CLASSIFY_MOVEMENT','REVIEW_INVOICE_CATEGORIES')
         order by (state in ('QUEUED','RUNNING','WAITING')),created_at,id
         """, rs -> {
           var target = new JobTarget(rs.getString("kind"), rs.getObject("target_id", UUID.class),
               rs.getLong("target_version"));
           states.put(target, new ClassificationJob(rs.getObject("id", UUID.class), rs.getString("state"),
-              rs.getString("error")));
+              rs.getString("error"), rs.getString("review_result")));
         });
     return new QueueStates(states);
   }
@@ -326,22 +345,153 @@ public class CategoryService {
   }
 
   public Map<String, Object> requestInvoiceClassification(UUID id, long expectedVersion) {
+    return requestInvoiceCategoryJob(id, expectedVersion, "CLASSIFY_INVOICE");
+  }
+
+  public Map<String, Object> requestInvoiceCategoryReview(UUID id, long expectedVersion) {
+    return requestInvoiceCategoryJob(id, expectedVersion, INVOICE_CATEGORY_REVIEW_JOB);
+  }
+
+  private Map<String, Object> requestInvoiceCategoryJob(UUID id, long expectedVersion, String kind) {
     store.lockFinancialWrites();
-    var invoice = store.get(Invoice.class, id);
-    if (invoice.deleted) throw new DomainException(404, "Fatura não encontrada");
+    requireActiveInvoice(id);
     var s = state("invoice", id, true);
-    var currentJob = classificationJob(new JobTarget("CLASSIFY_INVOICE", id, s.generation));
-    if (currentJob != null && ACTIVE_CLASSIFICATION_JOBS.contains(currentJob.state())) return view("invoice", id);
+    boolean review = kind.equals(INVOICE_CATEGORY_REVIEW_JOB);
+    if (activeCategoryJob(kind, id, s.generation)) return view("invoice", id);
     store.checkVersion(s, expectedVersion);
+    if (activeCategoryJob(review ? "CLASSIFY_INVOICE" : INVOICE_CATEGORY_REVIEW_JOB, id, s.generation))
+      throw new DomainException(409, "Já existe uma tarefa de categorias em curso para esta fatura.");
     var before = view("invoice", id);
+    if (review && rows(before, "categories").isEmpty())
+      throw DomainException.invalid("Classifica a fatura antes de pedir uma revisão das categorias.");
     s.generation++;
-    s.status = "PENDING";
-    s.reason = "Classificação por IA agendada";
-    enqueue("invoice", id, s);
+    if (review) jobs.enqueue(kind, id, s.generation, null);
+    else {
+      s.status = "PENDING";
+      s.reason = "Classificação por IA agendada";
+      enqueue("invoice", id, s);
+    }
     store.flush();
     var after = view("invoice", id);
-    audit.record("REQUEST_AI_CLASSIFICATION", "invoice", id, before, after);
+    audit.record(review ? "REQUEST_AI_CATEGORY_REVIEW" : "REQUEST_AI_CLASSIFICATION", "invoice", id, before, after);
     return after;
+  }
+
+  private boolean activeCategoryJob(String kind, UUID id, long generation) {
+    var job = classificationJob(new JobTarget(kind, id, generation));
+    return job != null && ACTIVE_CLASSIFICATION_JOBS.contains(job.state());
+  }
+
+  private void requireActiveInvoice(UUID id) {
+    if (store.get(Invoice.class, id).deleted) throw new DomainException(404, "Fatura não encontrada");
+  }
+
+  @Transactional(readOnly = true)
+  public Snapshot invoiceReviewSnapshot(UUID id, long generation) {
+    var state = state("invoice", id, false);
+    if (state == null || state.generation != generation) return null;
+    var data = source("invoice", id);
+    if (flag(data, "deleted")) return null;
+    var current = details("invoice", id).stream()
+        .map(c -> map("id", c.get("id"), "path", c.get("path"), "archived", c.get("archived"))).toList();
+    if (current.isEmpty()) return null;
+    var catalog = store.all(Category.class).stream().filter(c -> !c.deleted && c.mergedIntoId == null)
+        .sorted(Comparator.comparing(c -> c.id))
+        .map(c -> map("id", c.id, "path", path(c), "aliases", aliases(c), "referenceCode", c.referenceCode,
+            "description", c.description == null ? null : c.description.substring(0, Math.min(300, c.description.length()))))
+        .toList();
+    long revision = revision();
+    var input = map("task", "REVIEW_INVOICE_CATEGORIES", "data", data, "currentAssignments", current,
+        "catalog", catalog, "catalogRevision", revision, "generation", generation);
+    return new Snapshot("invoice", id, Hashes.sha256(Json.write(input)), revision, input);
+  }
+
+  boolean saveInvoiceCategoryReview(JobQueue.Claim job, Snapshot reviewed, Map<String, Object> result, UUID execution) {
+    store.lockFinancialWrites();
+    var current = invoiceReviewSnapshot(job.target(), job.revision());
+    if (current == null) return false;
+    if (!current.fingerprint().equals(reviewed.fingerprint())) {
+      var state = state("invoice", job.target(), false);
+      state.generation++;
+      jobs.enqueue(INVOICE_CATEGORY_REVIEW_JOB, job.target(), state.generation, null);
+      return false;
+    }
+    var review = InvoiceCategoryReview.read(result, reviewAssignmentIds(current));
+    var suggestions = review.suggestions().stream().map(suggestion -> reviewSuggestion(current, suggestion)).toList();
+    var report = map("summary", review.summary(), "assessments", review.assessments(), "suggestions", suggestions);
+    var saved = map("report", report, "fingerprint", current.fingerprint(),
+        "catalogRevision", current.catalogRevision(), "executionId", execution);
+    if (!jobs.saveReviewResult(job, saved)) return false;
+    audit.record("AI_CATEGORY_REVIEW_RESULT", "invoice", job.target(), null,
+        map("jobId", job.id(), "executionId", execution, "summary", review.summary()));
+    return true;
+  }
+
+  private Set<UUID> reviewAssignmentIds(Snapshot snapshot) {
+    return rows(snapshot.input(), "currentAssignments").stream()
+        .map(row -> (UUID) row.get("id")).collect(Collectors.toSet());
+  }
+
+  private Map<String, Object> reviewSuggestion(Snapshot snapshot, InvoiceCategoryReview.Suggestion suggestion) {
+    var category = store.find(Category.class, suggestion.categoryId())
+        .filter(c -> c.mergedIntoId == null && !c.deleted)
+        .orElseThrow(() -> DomainException.invalid("A sugestão deve usar uma categoria ativa do catálogo."));
+    validateAssignmentEvidence(category, suggestion.evidence(), snapshot);
+    return map("categoryId", category.id, "path", path(category), "reason", suggestion.reason(),
+        "evidence", suggestion.evidence(), "replacesCategoryIds", suggestion.replacesCategoryIds());
+  }
+
+  public Map<String, Object> applyInvoiceCategoryReview(UUID id, long version, UUID jobId, List<UUID> categoryIds) {
+    store.lockFinancialWrites();
+    requireActiveInvoice(id);
+    var state = state("invoice", id, false);
+    if (state == null) throw reviewConflict();
+    store.checkVersion(state, version);
+    var job = classificationJob(new JobTarget(INVOICE_CATEGORY_REVIEW_JOB, id, state.generation));
+    if (job == null || !job.id().equals(jobId) || !job.state().equals("DONE") || job.reviewResult() == null)
+      throw reviewConflict();
+    var saved = Json.object(job.reviewResult());
+    var snapshot = invoiceReviewSnapshot(id, state.generation);
+    if (snapshot == null || !snapshot.fingerprint().equals(saved.get("fingerprint"))) throw reviewConflict();
+    return saveReviewedSelection(id, state, jobId, categoryIds, snapshot, saved);
+  }
+
+  @SuppressWarnings("unchecked")
+  private Map<String, Object> saveReviewedSelection(UUID id, Classification state, UUID jobId,
+      List<UUID> categoryIds, Snapshot snapshot, Map<String, Object> saved) {
+    var current = reviewAssignmentIds(snapshot);
+    var suggestions = rows((Map<String, Object>) saved.get("report"), "suggestions").stream()
+        .collect(Collectors.toMap(row -> uuid(row, "categoryId"), row -> (String) row.get("evidence")));
+    var selected = new LinkedHashSet<>(categoryIds);
+    validateReviewSelection(current, suggestions.keySet(), selected, categoryIds.size());
+    var before = view("invoice", id);
+    if (selected.equals(current)) return before;
+    removeUnselectedInvoiceAssignments(assignments(state), selected);
+    var execution = uuid(saved, "executionId");
+    selected.stream().filter(category -> !current.contains(category))
+        .forEach(category -> assign(state, category, "MANUAL", false, suggestions.get(category), execution));
+    state.generation++;
+    state.status = selected.isEmpty() ? "REVIEW" : "CLASSIFIED";
+    state.reason = "Categorias editadas após revisão por IA";
+    store.flush();
+    refreshInheritance();
+    store.flush();
+    var after = view("invoice", id);
+    var auditResult = new LinkedHashMap<>(after);
+    auditResult.put("jobId", jobId);
+    audit.record("APPLY_AI_CATEGORY_REVIEW", "invoice", id, before, auditResult);
+    return after;
+  }
+
+  private void validateReviewSelection(Set<UUID> current, Set<UUID> suggestions, Set<UUID> selected, int size) {
+    if (selected.size() != size || selected.stream().anyMatch(id -> !current.contains(id) && !suggestions.contains(id)))
+      throw DomainException.invalid("Seleciona apenas categorias atribuídas ou sugeridas nesta revisão.");
+    if (selected.stream().anyMatch(id -> selected.stream().anyMatch(other -> !id.equals(other) && descendant(id, other))))
+      throw DomainException.invalid("Seleciona a categoria mais específica de cada família.");
+  }
+
+  private DomainException reviewConflict() {
+    return new DomainException(409, "A revisão já não corresponde à fatura. Pede uma nova revisão das categorias.");
   }
 
   /** Inheritance is resolved from active allocations, so every undo/exclusion is reflected. */
@@ -425,16 +575,32 @@ public class CategoryService {
     var old = assignments(s);
     var oldIds = details(type, id).stream().map(c -> (UUID) c.get("id")).collect(Collectors.toSet());
     for (var c : selected) if (canonical(c).deleted && !oldIds.contains(c)) throw DomainException.invalid("Categoria arquivada");
-    for (var a : old) if (a.origin.equals("MANUAL") && (!a.rejected || allowAi || selected.stream().anyMatch(c -> descendant(c, a.categoryId)))) store.remove(a);
+    if (type.equals("invoice")) removeUnselectedInvoiceAssignments(old, selected);
+    else updateMovementRejections(s, old, oldIds, selected, allowAi);
     store.flush();
     for (var c : selected) assign(s, c, "MANUAL", false, "Escolha do utilizador", null);
-    if (!allowAi) for (var removed : oldIds) if (!selected.contains(removed)) assign(s, removed, "MANUAL", true, "Removida pelo utilizador", null);
     s.generation++; s.status = selected.isEmpty() ? "REVIEW" : "CLASSIFIED";
     s.reason = selected.isEmpty() ? "Sem categoria escolhida pelo utilizador" : "Categorias editadas pelo utilizador";
     if (allowAi) { s.status = "PENDING"; enqueue(type, id, s); }
     store.flush(); refreshInheritance(); store.flush();
     audit.record("CLASSIFY_MANUAL", type, id, before, view(type, id));
     return view(type, id);
+  }
+
+  private void removeUnselectedInvoiceAssignments(List<CategoryAssignment> old, Set<UUID> selected) {
+    old.stream().filter(a -> a.rejected || !selected.contains(canonical(a.categoryId).id)).forEach(store::remove);
+  }
+
+  private void updateMovementRejections(Classification state, List<CategoryAssignment> old,
+      Set<UUID> oldIds, Set<UUID> selected, boolean allowAi) {
+    old.stream().filter(a -> a.origin.equals("MANUAL"))
+        .filter(a -> !a.rejected || allowAi || selected.stream().anyMatch(c -> descendant(c, a.categoryId)))
+        .forEach(store::remove);
+    store.flush();
+    if (allowAi) return;
+    for (var removed : oldIds) {
+      if (!selected.contains(removed)) assign(state, removed, "MANUAL", true, "Removida pelo utilizador", null);
+    }
   }
 
   private void assign(Classification s, UUID category, String origin, boolean rejected, String evidence, UUID execution) {
@@ -584,7 +750,11 @@ public class CategoryService {
       c.deleted = !used; c.protectedCategory = true;
     }
     preserved.forEach((category, states) -> states.forEach(s -> {
-      assign(s, category, "MANUAL", true, "Decisão manual posterior preservada ao desfazer a evolução", null);
+      if (s.invoiceId != null) {
+        assignments(s).stream().filter(a -> descendant(a.categoryId, category)).forEach(store::remove);
+      } else {
+        assign(s, category, "MANUAL", true, "Decisão manual posterior preservada ao desfazer a evolução", null);
+      }
       s.generation++;
     }));
     checkTree(); change.undone = true; bump(); store.flush(); refreshInheritance();
@@ -616,20 +786,12 @@ public class CategoryService {
             .map(c -> map("categoryId", c.get("id"), "origins", c.get("origins"))).toList(),
         "catalogRevision", revision(), "generation", s == null ? 0L : s.generation,
         "manualDecisions", assignments(s).stream().filter(a -> !a.origin.equals("AI"))
+            .filter(a -> !type.equals("invoice") || !a.rejected)
             .map(a -> map("categoryId", a.categoryId, "rejected", a.rejected, "origin", a.origin)).toList(),
         "hints", s == null ? List.of() : Json.value(s.hints), "examples", examples);
-    var blocked = type.equals("invoice") ? blockedCategoryIds(s) : Set.<UUID>of();
-    if (type.equals("invoice")) input.put("blockedCategoryIds", blocked);
     String fingerprint = Hashes.sha256(Json.write(input));
     if (s != null && fingerprint.equals(s.appliedFingerprint)) return null;
-    return new Snapshot(type, id, fingerprint, revision(), input, blocked);
-  }
-
-  private Set<UUID> blockedCategoryIds(Classification state) {
-    var rejected = rejectedCategoryIds(assignments(state));
-    if (rejected.isEmpty()) return Set.of();
-    return store.all(Category.class).stream().map(c -> canonical(c.id).id).distinct()
-        .filter(id -> isRejected(id, rejected)).collect(Collectors.toCollection(LinkedHashSet::new));
+    return new Snapshot(type, id, fingerprint, revision(), input);
   }
 
   private List<UUID> rejectedCategoryIds(List<CategoryAssignment> assignments) {
@@ -823,7 +985,7 @@ public class CategoryService {
     var rejected = rejectedCategoryIds(existing);
     var proposed = rows(result, "categories");
     boolean invoice = snapshot.type().equals("invoice");
-    var desired = validatedAssignments(snapshot, proposed, keys, invoice ? rejected : List.of());
+    var desired = validatedAssignments(snapshot, proposed, keys);
     if (invoice && "CLASSIFIED".equals(result.get("status")) && desired.isEmpty()) {
       throw new NoEligibleInvoiceCategories();
     }
@@ -851,24 +1013,26 @@ public class CategoryService {
   }
 
   private Map<UUID, String> validatedAssignments(
-      Snapshot snapshot, List<Map<String, Object>> assignments, Map<String, UUID> keys, List<UUID> rejected) {
+      Snapshot snapshot, List<Map<String, Object>> assignments, Map<String, UUID> keys) {
     var desired = new LinkedHashMap<UUID, String>();
     for (var assignment : assignments) {
       UUID proposedId = resolve(text(assignment, "id"), keys);
       var category = canonical(proposedId);
-      var blocked = snapshot.blockedCategoryIds();
-      if (blocked.contains(proposedId) || blocked.contains(category.id) || isRejected(category.id, rejected)) continue;
       String evidence = (String) assignment.get("evidence");
-      if (!grounded(evidence, snapshot, false))
-        throw DomainException.invalid("Categoria sem evidência nos dados do registo");
-      if (category.deleted) throw DomainException.invalid("Categoria arquivada");
-      checkVariant(category, snapshot);
-      checkExplicitExpenseEvidence(category, evidence);
-      if ("626".equals(category.referenceCode) || "62".equals(category.referenceCode))
-        throw DomainException.invalid(prompts.prompt(PromptCatalog.CATEGORY_GENERIC_FAMILY_INSTRUCTIONS).stripTrailing());
+      validateAssignmentEvidence(category, evidence, snapshot);
       desired.put(category.id, evidence);
     }
     return desired;
+  }
+
+  private void validateAssignmentEvidence(Category category, String evidence, Snapshot snapshot) {
+    if (!grounded(evidence, snapshot, false))
+      throw DomainException.invalid("Categoria sem evidência nos dados do registo");
+    if (category.deleted) throw DomainException.invalid("Categoria arquivada");
+    checkVariant(category, snapshot);
+    checkExplicitExpenseEvidence(category, evidence);
+    if ("626".equals(category.referenceCode) || "62".equals(category.referenceCode))
+      throw DomainException.invalid(prompts.prompt(PromptCatalog.CATEGORY_GENERIC_FAMILY_INSTRUCTIONS).stripTrailing());
   }
 
   private String classificationReason(String status, Map<UUID, String> desired, Map<String, Object> result) {

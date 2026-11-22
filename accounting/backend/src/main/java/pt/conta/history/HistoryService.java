@@ -130,8 +130,25 @@ public class HistoryService {
   @Transactional
   public void refresh() {
     store.lockFinancialWrites();
+    refreshRows(store.all(LegacyRow.class));
+  }
+
+  @Transactional
+  public void refreshAfterDeletion(Set<UUID> deleted, Set<UUID> affectedInvoices) {
+    store.lockFinancialWrites();
+    var affected = store.all(LegacyRow.class).stream().filter(row -> row.invoiceId != null
+        && (deleted.contains(row.invoiceId) || affectedInvoices.contains(row.invoiceId))).toList();
+    for (var row : affected) {
+      if (!deleted.contains(row.invoiceId)) continue;
+      row.invoiceId = null;
+      review.resolveFor("legacy", row.id);
+    }
+    refreshRows(affected);
+  }
+
+  private void refreshRows(List<LegacyRow> rows) {
     var invoices = store.all(Invoice.class);
-    for (var row : store.all(LegacyRow.class)) {
+    for (var row : rows) {
       if (row.invoiceId == null) {
         var candidates =
             invoices.stream()
@@ -201,8 +218,9 @@ public class HistoryService {
    */
   @Transactional
   public void link(UUID rowId, UUID invoiceId) {
+    store.lockFinancialWrites();
     var row = store.get(LegacyRow.class, rowId);
-    store.get(Invoice.class, invoiceId);
+    if (store.get(Invoice.class, invoiceId).deleted) throw DomainException.missing();
     row.invoiceId = invoiceId;
     refresh();
   }

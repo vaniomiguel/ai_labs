@@ -1,16 +1,17 @@
 import { NgTemplateOutlet } from "@angular/common";
 import { Component, computed, DestroyRef, inject, input, linkedSignal, output, signal, TemplateRef } from "@angular/core";
 import { Api, Classification, errorMessage } from "./api";
+import { InvoiceCategoryReviewPanel } from "./invoice-category-review";
 
 @Component({
   selector: "invoice-category-action",
   standalone: true,
-  imports: [NgTemplateOutlet],
+  imports: [NgTemplateOutlet, InvoiceCategoryReviewPanel],
   template: `
     <ng-template #classifyButton>
       @if (!active()) {
-        <button type="button" class="text-button" [disabled]="submitting() || disabled()" (click)="classify()">
-          {{ review() && current()?.categories?.length ? "Rever categorias com IA" : "Classificar com IA" }}
+        <button type="button" class="text-button" [disabled]="submitting() || disabled()" (click)="request()">
+          {{ requestsReview() ? "Rever categorias com IA" : "Classificar com IA" }}
         </button>
       }
     </ng-template>
@@ -19,8 +20,16 @@ import { Api, Classification, errorMessage } from "./api";
     }
     <ng-content />
     <small aria-live="polite">
-      {{ status() }}@if (current()?.reason; as reason) { · {{ reason }} }
+      {{ status() }}@if (statusReason(); as reason) { · {{ reason }} }
     </small>
+    @if (review() && current()?.review; as report) {
+      @if (current(); as state) {
+        @if (state.jobId; as jobId) {
+          <invoice-category-review [report]="report" [jobId]="jobId" [categories]="state.categories"
+            [disabled]="submitting() || disabled()" (approved)="applyReview($event)" />
+        }
+      }
+    }
     @if (!headerTemplate()) {
       <ng-container [ngTemplateOutlet]="classifyButton" />
     }
@@ -39,12 +48,23 @@ export class InvoiceCategoryAction {
   protected readonly current = linkedSignal(() => this.classification());
   protected readonly submitting = signal(false);
   protected readonly error = signal("");
+  protected readonly requestsReview = computed(() => this.review() && !!this.current()?.categories.length);
+  private readonly isReviewJob = computed(() => this.current()?.jobKind === "REVIEW_INVOICE_CATEGORIES");
   protected readonly active = computed(() => {
     const job = this.current()?.jobState;
     return job === "WAITING" || job === "QUEUED" || job === "RUNNING";
   });
   protected readonly status = computed(() => {
     const state = this.current();
+    if (this.isReviewJob()) {
+      switch (state?.jobState) {
+        case "QUEUED": return "Revisão de categorias agendada";
+        case "RUNNING": return "A rever categorias";
+        case "WAITING": return "Revisão a aguardar IA";
+        case "FAILED": return "Revisão de categorias falhou";
+        case "DONE": return state.review ? "Revisão de categorias concluída" : "Pede uma nova revisão de categorias";
+      }
+    }
     switch (state?.jobState) {
       case "QUEUED": return "Classificação agendada";
       case "RUNNING": return "A classificar";
@@ -54,16 +74,31 @@ export class InvoiceCategoryAction {
     if (state?.state === "CLASSIFIED") return "Categorias classificadas";
     return state?.state === "REVIEW" ? "Categorias por rever" : "Sem categorias";
   });
+  protected readonly statusReason = computed(() => {
+    const state = this.current();
+    return this.isReviewJob() ? state?.jobError : state?.reason;
+  });
 
-  protected async classify() {
+  protected request() {
+    const action = this.requestsReview() ? "review" : "classify";
+    return this.submit(action, { version: this.current()?.version ?? 0 });
+  }
+
+  protected applyReview(categoryIds: string[]) {
+    const state = this.current();
+    if (!state?.jobId || !state.review) return;
+    return this.submit("review/apply", { version: state.version, reviewJobId: state.jobId, categoryIds });
+  }
+
+  private async submit(action: "review" | "classify" | "review/apply", payload: object) {
     if (this.active() || this.submitting() || this.disabled()) return;
     const previous = this.current();
     this.submitting.set(true);
     this.error.set("");
     try {
       const classification = await this.api.post<Classification>(
-        `/invoices/${this.invoiceId()}/categories/classify`,
-        { version: previous?.version ?? 0 },
+        `/invoices/${this.invoiceId()}/categories/${action}`,
+        payload,
       );
       if (this.destroyRef.destroyed) return;
       const latest = this.current();

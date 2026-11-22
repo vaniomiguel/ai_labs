@@ -52,7 +52,8 @@ public class AiOrchestrator {
   /** Executes one extraction, review or explicitly requested repair task. */
   public void process(JobQueue.Claim job) throws Exception {
     if (job.kind().equals("REPAIR_ALERT")) { repairWorker.process(job); return; }
-    if (Set.of("NORMALIZE_CATEGORIES", "CLASSIFY_INVOICE", "CLASSIFY_MOVEMENT", "REFINE_CATEGORIES").contains(job.kind())) {
+    if (Set.of("NORMALIZE_CATEGORIES", "CLASSIFY_INVOICE", "CLASSIFY_MOVEMENT", "REFINE_CATEGORIES",
+        pt.conta.category.CategoryService.INVOICE_CATEGORY_REVIEW_JOB).contains(job.kind())) {
       categoryWorker.process(job);
       return;
     }

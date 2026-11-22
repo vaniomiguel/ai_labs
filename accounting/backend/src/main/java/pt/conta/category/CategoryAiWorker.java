@@ -29,6 +29,10 @@ public class CategoryAiWorker {
   }
 
   public void process(JobQueue.Claim job) {
+    if (job.kind().equals(CategoryService.INVOICE_CATEGORY_REVIEW_JOB)) {
+      reviewInvoice(job);
+      return;
+    }
     String type = switch (job.kind()) {
       case "REFINE_CATEGORIES" -> "catalog";
       case "CLASSIFY_MOVEMENT" -> "movement";
@@ -48,6 +52,31 @@ public class CategoryAiWorker {
     var input = new LinkedHashMap<>(snapshot.input());
     input.put("responseSchema", schema);
     classify(job, snapshot, model, prompt, schema, input);
+  }
+
+  private void reviewInvoice(JobQueue.Claim job) {
+    if (Json.read(job.payload()).has("reviewResult")) return;
+    var snapshot = categories.invoiceReviewSnapshot(job.target(), job.revision());
+    if (snapshot == null) return;
+    var model = selectModel();
+    String prompt = prompts.prompt(PromptCatalog.INVOICE_CATEGORY_REVIEW_SYSTEM_INSTRUCTIONS);
+    var schema = prompts.schema(PromptCatalog.INVOICE_CATEGORY_REVIEW_SYSTEM_INSTRUCTIONS);
+    var input = new LinkedHashMap<>(snapshot.input());
+    input.put("responseSchema", schema);
+    for (int attempt = 1; attempt <= MAX_CLASSIFICATION_ATTEMPTS; attempt++) {
+      var response = execute(job, model, request(model.name(), prompt, schema, input));
+      try {
+        if (!categories.saveInvoiceCategoryReview(job, snapshot, response.output(), response.id())) {
+          results.categoryOutcome(response.id(), "STALE");
+        }
+        return;
+      } catch (DomainException e) {
+        results.categoryOutcome(response.id(), "INVALID_DOMAIN");
+        if (attempt == MAX_CLASSIFICATION_ATTEMPTS) throw e;
+        input.put("validationFeedback", feedback(input, e.getMessage(), response.output(),
+            PromptCatalog.INVOICE_CATEGORY_REVIEW_RETRY_INSTRUCTIONS));
+      }
+    }
   }
 
   private boolean obsolete(JobQueue.Claim job, CategoryService.Snapshot snapshot) {
@@ -73,7 +102,7 @@ public class CategoryAiWorker {
       var request = request(model.name(), prompt, schema, input);
       var response = execute(job, model, request);
       var reviewed = new CategoryService.Snapshot(snapshot.type(), snapshot.target(),
-          snapshot.fingerprint(), snapshot.catalogRevision(), input, snapshot.blockedCategoryIds());
+          snapshot.fingerprint(), snapshot.catalogRevision(), input);
       try {
         apply(job, reviewed, response);
         return;
@@ -84,7 +113,8 @@ public class CategoryAiWorker {
           finishWithoutEligibleCategories(job, reviewed, response.id());
           return;
         }
-        input.put("validationFeedback", feedback(input, e.getMessage(), response.output()));
+        input.put("validationFeedback", feedback(input, e.getMessage(), response.output(),
+            PromptCatalog.CATEGORY_VALIDATION_RETRY_INSTRUCTIONS));
       } catch (RuntimeException e) {
         results.categoryOutcome(response.id(), "INVALID_DOMAIN");
         throw e;
@@ -100,8 +130,8 @@ public class CategoryAiWorker {
       input.put("examples", List.of());
       // Regenerate feedback examples too so they do not reintroduce omitted quotations.
       if (input.get("validationFeedback") instanceof Map<?, ?> previous)
-        input.put("validationFeedback", feedback(input, previous.get("error").toString(),
-            previous.get("rejectedResponse")));
+        input.put("validationFeedback", feedbackWithEvidence(input, previous.get("error").toString(),
+            previous.get("rejectedResponse"), previous.get("instruction").toString()));
       serialized = Json.write(input);
     }
     if (overhead + serialized.length() > MAX_REQUEST_CHARACTERS) {
@@ -141,7 +171,11 @@ public class CategoryAiWorker {
     if (snapshot.type().equals("catalog")) categories.reviewWhenSettled(job.id());
   }
 
-  private Map<String, Object> feedback(Map<String, Object> input, String error, Object rejected) {
+  private Map<String, Object> feedback(Map<String, Object> input, String error, Object rejected, String instruction) {
+    return feedbackWithEvidence(input, error, rejected, prompts.prompt(instruction).stripTrailing());
+  }
+
+  private Map<String, Object> feedbackWithEvidence(Map<String, Object> input, String error, Object rejected, String instruction) {
     var evidence = new ArrayList<>(CategoryService.evidenceFields(input.get("data")));
     for (var example : Inputs.rows(input, "examples")) {
       evidence.addAll(CategoryService.evidenceFields(example.get("data")));
@@ -149,6 +183,6 @@ public class CategoryAiWorker {
     return Inputs.map("error", error, "rejectedResponse", rejected,
         "literalEvidenceExamples", evidence.stream().distinct().limit(10)
             .map(value -> value.substring(0, Math.min(value.length(), 300))).toList(),
-        "instruction", prompts.prompt(PromptCatalog.CATEGORY_VALIDATION_RETRY_INSTRUCTIONS).stripTrailing());
+        "instruction", instruction);
   }
 }

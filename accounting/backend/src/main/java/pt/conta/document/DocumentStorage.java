@@ -13,6 +13,6 @@ public interface DocumentStorage {
   /** Resolves an opaque key controlled by the application, never a caller-supplied path. */
   Path path(String key);
 
-  /** Removes only an unreferenced temporary duplicate created by an upload. */
+  /** Removes an unreferenced file by its application-generated key, allowing retries. */
   void discard(String key) throws IOException;
 }

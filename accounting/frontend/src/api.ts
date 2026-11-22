@@ -44,6 +44,26 @@ export interface DocumentAttempt {
   prompts?: { system: string; user: string }[];
 }
 
+export interface DeletionTarget { type: "INVOICE" | "MOVEMENT" | "DOCUMENT"; id: string }
+export interface DeletionRecord extends DeletionTarget { version: number; label: string }
+export interface DeletionLink {
+  record: DeletionRecord;
+  relationship: "PAYMENT" | "REVERSAL" | "PAYMENT_REFERENCE" | "ORIGINAL_INVOICE" | "RELATED_INVOICE" | "CREDIT_NOTE";
+  allocationId: string | null;
+  amount: string | null;
+}
+export interface DeletionImpact {
+  record: DeletionRecord;
+  links: DeletionLink[];
+  balances: { record: DeletionRecord; date: string; change: string }[];
+  alerts: { id: string; version: number; message: string }[];
+  historicalLinks: number;
+  upload: { id: string; filename: string; action: "KEEP" | "REMOVE_ROW" | "ERASE" } | null;
+  impactToken: string;
+}
+
+const deletionResources = { INVOICE: "invoices", MOVEMENT: "movements", DOCUMENT: "documents" } as const;
+
 export interface ExpenseCategory {
   id: string; version: number; name: string; path: string; aliases: string[];
   parentId: string | null; mergedIntoId: string | null; description: string | null;
@@ -55,10 +75,22 @@ export interface CategoryDetail {
   id: string; name: string; path: string; archived: boolean; origins: string[];
   evidence: { origin: string; reason: string | null; invoiceId?: string; documentId?: string | null; executionId?: string | null }[];
 }
+export interface InvoiceCategoryReview {
+  summary: string;
+  assessments: {
+    categoryId: string;
+    fit: "GOOD_FIT" | "POOR_FIT" | "INSUFFICIENT_EVIDENCE";
+    reason: string;
+  }[];
+  suggestions: { categoryId: string; path: string; reason: string; evidence: string; replacesCategoryIds: string[] }[];
+}
 export interface Classification {
   version: number; state: string; reason: string | null;
   jobId?: string | null;
   jobState?: "QUEUED" | "RUNNING" | "WAITING" | "FAILED" | "DONE" | null;
+  jobKind?: "CLASSIFY_INVOICE" | "CLASSIFY_MOVEMENT" | "REVIEW_INVOICE_CATEGORIES" | null;
+  jobError?: string | null;
+  review?: InvoiceCategoryReview | null;
   categories: CategoryDetail[]; rejectedCategoryIds: string[]; catalogRevision: number;
 }
 
@@ -232,6 +264,14 @@ export class Api {
   delete(path: string, params: Record<string, any> = {}): Promise<unknown> {
     return firstValueFrom(this.http.delete("/api/v1" + path, { params }));
   }
+
+  deletionImpact(target: DeletionTarget): Promise<DeletionImpact> {
+    return this.get<DeletionImpact>(`/${deletionResources[target.type]}/${target.id}/deletion-impact`);
+  }
+
+  confirmDeletion({ record, impactToken }: DeletionImpact): Promise<unknown> {
+    return this.delete(`/${deletionResources[record.type]}/${record.id}`, { version: record.version, impactToken });
+  }
   /** Login uses the encoding expected by Spring's session authentication filter. */
   async signIn(username: string, password: string) {
     await this.get("/csrf");
@@ -290,6 +330,7 @@ export const labels: Record<string, string> = {
   REPAIR_ALERT: "Proposta de correção",
   NORMALIZE_CATEGORIES: "Normalização de categorias",
   CLASSIFY_INVOICE: "Categorias da fatura",
+  REVIEW_INVOICE_CATEGORIES: "Revisão das categorias da fatura",
   CLASSIFY_MOVEMENT: "Categorias do movimento",
   REFINE_CATEGORIES: "Evolução do catálogo de categorias",
   SUGGEST_RECONCILIATION: "Sugestões de reconciliação",

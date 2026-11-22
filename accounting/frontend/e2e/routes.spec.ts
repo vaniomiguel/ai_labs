@@ -199,11 +199,13 @@ test("assistant history shows measured usage, failed requests and older executio
   await expect(rejected).not.toContainText("% usados");
 });
 
-test("every sidebar section has its own URL", async ({ page }) => {
+test("every sidebar section has its own URL and record creation stays on its list", async ({ page }) => {
   await signIn(page);
   await page.goto("/");
   await expect(page).toHaveURL("/reconciliation");
   const navigation = page.getByRole("navigation", { name: "Navegação principal" });
+  const addInvoice = page.getByRole("button", { name: "+ Nova fatura", exact: true });
+  const addMovement = page.getByRole("button", { name: "+ Movimento", exact: true });
   for (const [name, path] of [
     ["Faturas", "/invoice"], ["Movimentos", "/movement"], ["Extrações", "/document"],
     ["Processamento", "/processing"], ["Alertas", "/alert"], ["Saldos", "/balances"],
@@ -214,7 +216,57 @@ test("every sidebar section has its own URL", async ({ page }) => {
     await section.click();
     await expect(page).toHaveURL(path);
     await expect(section).toHaveAttribute("aria-current", "page");
+    await expect(addInvoice).toHaveCount(path === "/invoice" ? 1 : 0);
+    await expect(addMovement).toHaveCount(path === "/movement" ? 1 : 0);
   }
+});
+
+for (const [path, buttonName, field] of [
+  ["/invoice", "+ Nova fatura", "Fornecedor"],
+  ["/movement", "+ Movimento", "Data do movimento"],
+] as const) {
+  test(`${buttonName} opens its form from the list on a narrow screen`, async ({ page }) => {
+    await signIn(page);
+    await page.setViewportSize({ width: 320, height: 720 });
+    await page.goto(path);
+
+    const listHeader = page.locator(".record-list-heading");
+    const addRecord = listHeader.getByRole("button", { name: buttonName, exact: true });
+    await expect(addRecord).toBeVisible();
+    expect(await listHeader.evaluate(header => header.scrollWidth)).toBeLessThanOrEqual(
+      await listHeader.evaluate(header => header.clientWidth),
+    );
+    if (path === "/movement") {
+      await expect(listHeader.getByRole("button", { name: "Importar extrato", exact: true })).toBeVisible();
+    }
+
+    await addRecord.click();
+    await expect(page).toHaveURL(`${path}/new`);
+    const editor = page.getByRole("dialog", { name: "Editar registo", exact: true });
+    await expect(editor.getByLabel(field, { exact: true })).toBeVisible();
+    await editor.getByRole("button", { name: "Fechar editor", exact: true }).click();
+    await expect(page).toHaveURL(path);
+    await expect(editor).toHaveCount(0);
+  });
+}
+
+test("bank statement review can still add a draft movement", async ({ page }) => {
+  await signIn(page);
+  await page.route(`**/api/v1/documents/${documentId}`, route => route.fulfill({ json: {
+    id: documentId, filename: "Extrato de teste.txt", kind: "STATEMENT", status: "OPEN",
+    mediaType: "text/plain", draft: { movements: [] },
+  } }));
+  await page.route(`**/api/v1/documents/${documentId}/attempts`, route => route.fulfill({ json: [] }));
+  const reviewPath = `/document/${documentId}/review`;
+  await page.goto(reviewPath);
+
+  const review = page.getByRole("dialog", { name: "Rever extração", exact: true });
+  await expect(review).toBeVisible();
+  const draftRows = review.getByRole("button", { name: "Remover movimento", exact: true });
+  await expect(draftRows).toHaveCount(0);
+  await review.getByRole("button", { name: "+ Movimento", exact: true }).click();
+  await expect(draftRows).toHaveCount(1);
+  await expect(page).toHaveURL(reviewPath);
 });
 
 test("sign-in returns to an invoice bookmark and its editor survives reload", async ({ page }) => {
@@ -268,12 +320,13 @@ test("invoice category actions share a header and remain usable on a small scree
   await expect(page).toHaveURL(invoicePath);
 });
 
-test("invoice editor retries AI category review and refreshes labels without replacing the draft", async ({ page }) => {
+test("invoice editor retries AI category review and applies the chosen suggestion without replacing the draft", async ({ page }) => {
   await signIn(page);
   const original: CategoryDetail = { id: "initial", name: "Seguros", path: "Seguros", archived: false, origins: ["AI"], evidence: [] };
-  const revised: CategoryDetail = { ...original, id: "revised", name: "Material de escritório", path: "Material de escritório" };
+  const revised: CategoryDetail = { ...original, id: "revised", name: "Comunicação", path: "Comunicação", origins: ["MANUAL"] };
   let classification: Classification = { version: 4, state: "CLASSIFIED", reason: null, categories: [original], rejectedCategoryIds: [], catalogRevision: 0 };
   let posts = 0;
+  let approvals = 0;
   let revision = 0;
   await page.route("**/api/v1/events", route => route.fulfill({
     contentType: "text/event-stream",
@@ -282,20 +335,27 @@ test("invoice editor retries AI category review and refreshes labels without rep
   await mockRecord(page, "invoice", invoiceId, draft);
   await page.route(`**/api/v1/invoices/${invoiceId}`, route => {
     if (route.request().method() === "PUT") {
-      expect(route.request().postDataJSON()).toMatchObject({
-        version: 0, validate: true, supplier: "Fornecedor editado localmente",
-        categoryConfirmation: { version: classification.version, categoryIds: [revised.id] },
-      });
+      const payload = route.request().postDataJSON();
+      expect(payload).toMatchObject({ version: 0, validate: true, supplier: "Fornecedor editado localmente" });
+      expect(payload.categoryConfirmation).toBeUndefined();
       return route.fulfill({ json: { id: invoiceId } });
     }
     expect(route.request().method()).toBe("GET");
     return route.fulfill({ json: { ...draft, id: invoiceId, version: 0, classification, categoryDetails: classification.categories } });
   });
-  await page.route(`**/api/v1/invoices/${invoiceId}/categories/classify`, route => {
+  await page.route(`**/api/v1/invoices/${invoiceId}/categories/review`, route => {
     expect(route.request().postDataJSON()).toEqual({ version: classification.version });
     posts++;
-    classification = { ...classification, version: classification.version + 1, state: "PENDING", jobState: "QUEUED" };
+    classification = { ...classification, version: classification.version + 1, jobId,
+      jobKind: "REVIEW_INVOICE_CATEGORIES", jobState: "QUEUED", jobError: null };
     return route.fulfill({ status: 202, json: classification });
+  });
+  await page.route(`**/api/v1/invoices/${invoiceId}/categories/review/apply`, route => {
+    expect(route.request().postDataJSON()).toEqual({ version: classification.version, reviewJobId: jobId, categoryIds: [revised.id] });
+    approvals++;
+    classification = { ...classification, version: classification.version + 1,
+      categories: [revised], jobKind: null, jobId: null, jobState: null, review: null };
+    return route.fulfill({ json: classification });
   });
 
   await page.goto(invoicePath);
@@ -307,24 +367,47 @@ test("invoice editor retries AI category review and refreshes labels without rep
   await expect(categories).toContainText("A IA usa os dados guardados da fatura");
   await expect(categories.getByRole("button", { name: original.name, exact: true })).toBeVisible();
   await review.click();
-  await expect(categories).toContainText("Classificação agendada");
-  for (const [jobState, status] of [["RUNNING", "A classificar"], ["WAITING", "A aguardar IA"], ["FAILED", "Classificação falhou"]] as const) {
-    classification = { ...classification, jobState, reason: jobState === "FAILED" ? "A resposta do modelo é inválida." : null };
+  await expect(categories).toContainText("Revisão de categorias agendada");
+  for (const [jobState, status] of [["RUNNING", "A rever categorias"], ["WAITING", "Revisão a aguardar IA"], ["FAILED", "Revisão de categorias falhou"]] as const) {
+    classification = { ...classification, jobState, jobError: jobState === "FAILED" ? "A resposta do modelo é inválida." : null };
     revision++;
     await expect(categories).toContainText(status);
   }
   await expect(categories).toContainText("A resposta do modelo é inválida.");
   await review.click();
-  await expect(categories).toContainText("Classificação agendada");
-  classification = { ...classification, version: classification.version + 1, state: "CLASSIFIED", jobState: null,
-    reason: "Revisão baseada nos artigos da fatura.", categories: [revised] };
+  await expect(categories).toContainText("Revisão de categorias agendada");
+  classification = { ...classification, jobState: "DONE", review: {
+    summary: "A fatura documenta um serviço de comunicação.",
+    assessments: [{ categoryId: original.id, fit: "POOR_FIT", reason: "A descrição não menciona um seguro." }],
+    suggestions: [{ categoryId: revised.id, path: revised.path, evidence: "Carregamento de telemóvel",
+      reason: "É um serviço de telecomunicações.", replacesCategoryIds: [original.id] }],
+  } };
   revision++;
+  const report = categories.getByRole("region", { name: "Revisão das categorias por IA" });
+  const originalChoice = report.getByRole("checkbox", { name: original.name, exact: true });
+  const suggestion = report.getByRole("checkbox", { name: revised.name, exact: true });
+  const approve = report.getByRole("button", { name: "Guardar alterações", exact: true });
+  await expect(report).toContainText("Pouco adequada");
+  await expect(report).toContainText("Carregamento de telemóvel");
+  await expect(report).toContainText("Alternativa a Seguros");
+  await expect(originalChoice).toBeChecked();
+  await expect(suggestion).not.toBeChecked();
+  await expect(approve).toBeDisabled();
+  await expect(categories.getByRole("button", { name: original.name, exact: true })).toBeVisible();
+  await expect(categories.getByRole("button", { name: revised.name, exact: true })).toHaveCount(0);
+  await originalChoice.uncheck();
+  await suggestion.check();
+  revision++;
+  await expect(suggestion).toBeChecked();
+  await expect(originalChoice).not.toBeChecked();
+  await approve.click();
   await expect(categories.getByRole("button", { name: revised.name, exact: true })).toBeVisible();
   await expect(categories.getByRole("button", { name: original.name, exact: true })).toHaveCount(0);
-  await expect(categories).toContainText("Revisão baseada nos artigos da fatura.");
+  await expect(report).toHaveCount(0);
   await expect(supplier).toHaveValue("Fornecedor editado localmente");
   await expect(page).toHaveURL(invoicePath);
   expect(posts).toBe(2);
+  expect(approvals).toBe(1);
   await editor.getByRole("button", { name: "Validar e guardar", exact: true }).click();
   await expect(editor).not.toBeVisible();
 });
