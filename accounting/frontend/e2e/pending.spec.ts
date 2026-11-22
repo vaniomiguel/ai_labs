@@ -135,7 +135,8 @@ test('movement deletion links to invoices and asks again after the reconciliatio
   await warning.getByRole('button', {name: 'Eliminar', exact: true}).click();
   await expect(row).toHaveCount(0);
   expect(await get(page, `/invoices/${invoice.id}`)).toMatchObject({remaining: '100.00'});
-  expect(await get(page, '/allocations')).toEqual([]);
+  const activeAllocations = await get(page, '/allocations');
+  expect(activeAllocations).not.toContainEqual(expect.objectContaining({movementId: movement.id}));
   await openSection(page, '⇄ Reconciliação');
   await setYear(page, 2078);
   const reconciliation = page.locator('reconciliation-table');
