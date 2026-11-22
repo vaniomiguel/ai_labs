@@ -8,7 +8,7 @@ import { MatButtonModule } from "@angular/material/button";
 import { MatSnackBar, MatSnackBarModule } from "@angular/material/snack-bar";
 import { A11yModule } from "@angular/cdk/a11y";
 import { AiExecutionItem, AlertView, Api, Classification, contextUsagePercent, contextWarningLabels, DocumentAttempt, euros, errorMessage, labels, JobCounts, JobItem, JobPage, ReconciliationEntry, ReconciliationPage, RepairApplyRequest, RepairPreview, ReviewableRecord } from "./api";
-import type { CategoryConfirmation } from "./api";
+import type { AuditEvent, CategoryConfirmation } from "./api";
 import { AppliedFilters } from "./applied-filters";
 import { FinancialFilterBar } from "./financial-filters";
 import { DEFAULT_CATALOG_FILTERS, defaultFinancialFilters, financialQuery, initialFinancialFilters, isFinancialFilterView } from "./workspace-filters";
@@ -36,6 +36,23 @@ interface RecordAlertSource {
 }
 const UUID = /^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/i;
 const EMPTY_RECONCILIATION_PAGE: ReconciliationPage = { items: [], total: 0, page: 0, size: 100 };
+
+function classificationHistory(event: AuditEvent) {
+  const scheduled = event.action === "REQUEST_AI_CLASSIFICATION";
+  if (!scheduled && event.action !== "AI_CLASSIFICATION_RESULT") return null;
+  const snapshot = typeof event.after === "object" && event.after !== null ? event.after : {};
+  const jobId = "jobId" in snapshot ? snapshot.jobId : null;
+  const reason = "reason" in snapshot ? snapshot.reason : null;
+  const names = "categoryNames" in snapshot ? snapshot.categoryNames : null;
+  const needsReview = "state" in snapshot && snapshot.state === "REVIEW";
+  return {
+    label: scheduled ? "Classificação agendada"
+      : needsReview ? "Categorias por rever" : "Resultado da classificação por IA",
+    jobId: typeof jobId === "string" && UUID.test(jobId) ? jobId : null,
+    reason: !scheduled && typeof reason === "string" ? reason : null,
+    categoryNames: Array.isArray(names) ? names.filter(name => typeof name === "string").join(", ") : "",
+  };
+}
 
 /** Owner workspace joining reconciliation, document review and auditable financial records. */
 @Component({
@@ -132,10 +149,13 @@ export class AppComponent implements OnDestroy {
     { value: "all", label: "Todas" },
   ];
   readonly processingState = signal("active");
+  readonly classificationInvoiceId = signal<string | null>(null);
   readonly processingFilterChips = computed(() => {
     const state = this.processingState();
     const filter = this.processingFilters.find(filter => filter.value === state);
-    return filter && state !== "all" ? [{ key: "state", label: `Estado: ${filter.label}` }] : [];
+    const chips = filter && state !== "all" ? [{ key: "state", label: `Estado: ${filter.label}` }] : [];
+    if (this.classificationInvoiceId()) chips.push({ key: "invoice", label: "Classificação da fatura" });
+    return chips;
   });
   processingPage = 0;
   private processingRequest = 0;
@@ -174,7 +194,9 @@ export class AppComponent implements OnDestroy {
   readonly repairProgress = signal("");
   private documentRequest=0;
   readonly documentAttempts = signal<DocumentAttempt[]>([]);
-  readonly timeline = signal<any[]>([]);
+  private readonly timeline = signal<AuditEvent[]>([]);
+  private timelineRequest = 0;
+  readonly historyEntries = computed(() => this.timeline().map(event => ({ event, classification: classificationHistory(event) })));
   readonly assignment = signal<any>(null);
   readonly assignmentMovements = signal<any[]>([]);
   readonly allInvoices = signal<any[]>([]);
@@ -285,6 +307,7 @@ export class AppComponent implements OnDestroy {
       this.catalogFilters.set(DEFAULT_CATALOG_FILTERS);
       this.alertStatusFilter.set("OPEN");
       this.processingState.set("active");
+      this.classificationInvoiceId.set(null);
       this.processingPage = 0;
       this.processing.set(null);
       this.user.set("");
@@ -342,6 +365,11 @@ export class AppComponent implements OnDestroy {
   private routeParent(snapshot: ActivatedRouteSnapshot | null) {
     const route = snapshot?.data as WorkspaceRoute | undefined;
     if (route?.kind === "new" && snapshot?.queryParamMap.has("historyRowId")) return "/history";
+    if (route?.kind === "job" && this.classificationInvoiceId()) {
+      return this.router.serializeUrl(this.router.createUrlTree(["/processing"], {
+        queryParams: this.classificationJobQuery(),
+      }));
+    }
     return route ? "/" + WORKSPACE_PATHS[route.view] : DEFAULT_WORKSPACE_URL;
   }
 
@@ -350,7 +378,9 @@ export class AppComponent implements OnDestroy {
     if (!snapshot) return;
     const route = snapshot.data as WorkspaceRoute;
     const request = this.resetRoute(route.kind);
-    if (route.kind !== "categories" && this.suspendedEditor?.url !== this.router.url) this.suspendedEditor = undefined;
+    if (route.kind !== "categories" && route.view !== "processing" && this.suspendedEditor?.url !== this.router.url) {
+      this.suspendedEditor = undefined;
+    }
     if (!this.user()) {
       if (route.kind !== "login") {
         await this.router.navigate(["/login"], { queryParams: { returnTo: this.router.url }, replaceUrl: true });
@@ -362,6 +392,7 @@ export class AppComponent implements OnDestroy {
       return;
     }
     this.view.set(this.routeView(route, snapshot));
+    if (route.view === "processing") this.applyProcessingScope(snapshot);
     const id = snapshot.paramMap.get("id");
     if (route.kind === "job" && id && UUID.test(id)) this.selectedJobId.set(id);
     void this.refresh(false);
@@ -375,6 +406,18 @@ export class AppComponent implements OnDestroy {
     }
     if (route.kind === "new" && snapshot.queryParamMap.has("historyRowId")) return "history";
     return route.view;
+  }
+
+  private applyProcessingScope(snapshot: ActivatedRouteSnapshot) {
+    const requestedId = snapshot.queryParamMap.get("classificationInvoiceId");
+    const invoiceId = requestedId && UUID.test(requestedId) ? requestedId : null;
+    if (invoiceId === this.classificationInvoiceId()) return;
+    this.classificationInvoiceId.set(invoiceId);
+    this.processingPage = 0;
+    this.processing.set(null);
+    const requestedState = snapshot.queryParamMap.get("state");
+    const filter = this.processingFilters.find(item => item.value === requestedState);
+    this.processingState.set(filter?.value ?? (invoiceId ? "all" : "active"));
   }
 
   private resetRoute(kind: WorkspaceRouteKind) {
@@ -519,7 +562,9 @@ export class AppComponent implements OnDestroy {
     this.jobsLoading.set(true);
     try {
       const [page, detail] = await Promise.allSettled([
-        this.api.get<JobPage>("/jobs/page", { state: this.processingState(), page: this.processingPage, size: 50 }),
+        this.api.get<JobPage>("/jobs/page", {
+          state: this.processingState(), page: this.processingPage, size: 50, ...this.classificationJobQuery(),
+        }),
         selectedId ? this.api.get<JobItem>("/jobs/" + selectedId) : Promise.resolve(null),
       ]);
       if (request !== this.processingRequest || this.view() !== "processing") return;
@@ -534,8 +579,10 @@ export class AppComponent implements OnDestroy {
       }
       this.processing.set(page.value);
       this.setJobDetail(detail, selectedId);
-      const counts = page.value.counts;
-      this.counts.update((previous) => ({ ...previous, jobs: counts.active, jobStates: counts }));
+      if (!this.classificationInvoiceId()) {
+        const counts = page.value.counts;
+        this.counts.update((previous) => ({ ...previous, jobs: counts.active, jobStates: counts }));
+      }
     } catch (error) {
       if (request === this.processingRequest && this.view() === "processing") this.error.set(errorMessage(error));
     } finally {
@@ -563,11 +610,33 @@ export class AppComponent implements OnDestroy {
     this.processingPage = 0;
     void this.loadProcessing();
   }
+
+  clearJobFilters(key?: string) {
+    if (this.classificationInvoiceId() && key !== "state") {
+      const state = key === "invoice" ? this.processingState() : "all";
+      void this.router.navigate(["/processing"], { queryParams: { state } });
+    } else this.filterJobs("all");
+  }
+
   jobCount(state: string): number {
-    const counts = this.counts().jobStates ?? this.processing()?.counts;
+    const counts = this.classificationInvoiceId() ? this.processing()?.counts
+      : this.counts().jobStates ?? this.processing()?.counts;
     return counts?.[state === "all" ? "total" : state as keyof JobCounts] ?? 0;
   }
-  openJob(id: string) { this.openRoute(["processing", id]); }
+
+  private classificationJobQuery(invoiceId = this.classificationInvoiceId()): Record<string, string> {
+    return invoiceId ? { classificationInvoiceId: invoiceId } : {};
+  }
+
+  openJob(id: string) {
+    this.openRoute(["processing", id], this.view() === "processing" ? this.classificationJobQuery() : undefined);
+  }
+
+  openInvoiceClassificationJobs(invoiceId: string, jobId?: string) {
+    const draft = this.editor();
+    if (draft?.id === invoiceId) this.suspendedEditor = { url: this.router.url, draft };
+    this.openRoute(jobId ? ["processing", jobId] : ["processing"], this.classificationJobQuery(invoiceId));
+  }
 
   openJobTarget(job: JobItem) {
     const target = job.target;
@@ -683,18 +752,27 @@ export class AppComponent implements OnDestroy {
     this.editor.set(draft ? {
       ...draft, categories: record.categories, categoryDetails: record.categoryDetails, classification: record.classification,
     } : structuredClone(record));
-    const history = await this.api.get<any[]>(`/audit/${WORKSPACE_PATHS[recordView(kind)]}/${id}`);
-    if (request === this.routeRequest) this.timeline.set(history);
+    await this.loadRecordTimeline(kind, id);
   }
 
   private async refreshRecordClassification() {
     const id = this.editor()?.id;
     if (!id || !this.showsRecordCategories()) return;
+    if (this.recordKind === "INVOICE" && this.routeKind() === "edit") {
+      void this.loadRecordTimeline("INVOICE", id).catch(() => undefined);
+    }
     const editorRequest = this.editorRequest;
     const request = ++this.editorClassificationRequest;
     const record = await this.fetchRecord(this.recordKind, id).catch(() => null);
     if (!record || editorRequest !== this.editorRequest || request !== this.editorClassificationRequest) return;
     this.editorClassification.set(record.classification ?? null);
+  }
+
+  private async loadRecordTimeline(kind: RecordKind, id: string) {
+    const editorRequest = this.editorRequest;
+    const request = ++this.timelineRequest;
+    const history = await this.api.get<AuditEvent[]>(`/audit/${WORKSPACE_PATHS[recordView(kind)]}/${id}`);
+    if (editorRequest === this.editorRequest && request === this.timelineRequest) this.timeline.set(history);
   }
 
   private async loadEditorAccounts(request: number) {

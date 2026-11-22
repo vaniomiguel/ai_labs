@@ -57,8 +57,17 @@ export interface CategoryDetail {
 }
 export interface Classification {
   version: number; state: string; reason: string | null;
+  jobId?: string | null;
   jobState?: "QUEUED" | "RUNNING" | "WAITING" | "FAILED" | "DONE" | null;
   categories: CategoryDetail[]; rejectedCategoryIds: string[]; catalogRevision: number;
+}
+
+export interface AuditEvent {
+  id: string;
+  actor: string;
+  action: string;
+  createdAt: string;
+  after: unknown;
 }
 
 export interface CategoryConfirmation {

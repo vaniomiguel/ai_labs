@@ -96,6 +96,69 @@ test("processing keeps a model warning after the task leaves the active list", a
   await expect(detail).toContainText("Contexto do modelo em execução");
 });
 
+test("invoice history links classification results and filters old jobs without losing the draft", async ({ page }) => {
+  const createdAt = "2026-01-01T10:00:00Z";
+  const legacyJobId = "e245b1ab-5314-4ad8-a91f-c75510594006";
+  const category: CategoryDetail = { id: "software", name: "Licenças de software", path: "Licenças de software",
+    archived: false, origins: ["AI"], evidence: [] };
+  const classification: Classification = { version: 4, state: "PENDING", reason: null, jobId, jobState: "RUNNING",
+    categories: [], rejectedCategoryIds: [], catalogRevision: 0 };
+  const job = { id: jobId, kind: "CLASSIFY_INVOICE", state: "DONE", attempts: 0, createdAt, updatedAt: createdAt,
+    targetId: invoiceId, targetVersion: 4, target: { type: "invoice", id: invoiceId, label: "Fatura Tuxera", available: true } };
+  const legacyJob = { ...job, id: legacyJobId, kind: "NORMALIZE_CATEGORIES" };
+  const scheduled = { id: "old", actor: "gestor", action: "REQUEST_AI_CLASSIFICATION", createdAt,
+    after: { jobState: "QUEUED" } };
+  const result = { id: "result", actor: "SYSTEM", action: "AI_CLASSIFICATION_RESULT", createdAt,
+    after: { jobId, state: "CLASSIFIED", categoryNames: [category.name], reason: "O artigo identifica uma licença." } };
+  let finished = false;
+
+  await page.route("**/api/v1/**", route => route.fulfill({ json: [] }));
+  await mockContextSession(page);
+  await page.route("**/api/v1/invoices?*", route => route.fulfill({ json: { items: [], total: 0 } }));
+  await page.route("**/api/v1/events", route => route.fulfill({
+    contentType: "text/event-stream",
+    body: `retry: 300\nevent: progress\ndata: {"revision":"${finished}","jobs":${finished ? 0 : 1},"alerts":0}\n\n`,
+  }));
+  await page.route(`**/api/v1/invoices/${invoiceId}`, route => route.fulfill({ json: { ...draft, id: invoiceId, version: 0,
+    classification: finished ? { ...classification, version: 5, state: "CLASSIFIED", jobState: "DONE", categories: [category] }
+      : classification } }));
+  await page.route(`**/api/v1/audit/invoice/${invoiceId}`, route => route.fulfill({ json: finished ? [scheduled, result] : [scheduled] }));
+  await page.route(`**/api/v1/jobs/${jobId}`, route => route.fulfill({ json: job }));
+  await page.route(jobsPageUrl, route => {
+    const query = new URL(route.request().url()).searchParams;
+    expect(query.get("classificationInvoiceId")).toBe(invoiceId);
+    const items = query.get("state") === "active" ? [] : [job, legacyJob];
+    return route.fulfill({ json: { ...emptyJobsPage, items, total: items.length,
+      counts: { ...emptyJobsPage.counts, DONE: 2, total: 2 } } });
+  });
+
+  await page.goto(invoicePath);
+  const editor = page.getByRole("dialog", { name: "Editar registo" });
+  const supplier = editor.getByLabel("Fornecedor", { exact: true });
+  await supplier.fill("Alteração por guardar");
+  const history = editor.locator("details").filter({ has: page.getByText("Histórico de alterações", { exact: true }) });
+  await history.getByText("Histórico de alterações", { exact: true }).click();
+  await expect(history.getByText(/Classificação agendada/)).toBeVisible();
+  await expect(history.getByRole("button", { name: "Consultar tarefa", exact: true })).toHaveCount(0);
+  finished = true;
+  await expect(history.getByText("O artigo identifica uma licença.")).toBeVisible();
+  await expect(history.getByText(category.name, { exact: true })).toBeVisible();
+  await expect(supplier).toHaveValue("Alteração por guardar");
+  await history.getByRole("button", { name: "Consultar tarefa", exact: true }).click();
+  await expect(page).toHaveURL(`/processing/${jobId}?classificationInvoiceId=${invoiceId}`);
+  await expect(page.locator(".job-detail")).toContainText("Fatura Tuxera");
+  await page.getByRole("button", { name: "Fechar detalhe da tarefa" }).click();
+  await expect(supplier).toHaveValue("Alteração por guardar");
+
+  await history.getByText("Histórico de alterações", { exact: true }).click();
+  await history.getByRole("button", { name: "Ver tarefas de classificação" }).click();
+  await expect(page.getByRole("button", { name: "Remover Classificação da fatura" })).toBeVisible();
+  await page.getByRole("button", { name: "Pendentes 0" }).click();
+  await expect(page.getByText("Não existem tarefas neste estado.")).toBeVisible();
+  await page.getByRole("button", { name: "Concluídas 2" }).click();
+  await expect(page.getByRole("row").filter({ hasText: "Fatura Tuxera" })).toHaveCount(2);
+});
+
 test("assistant history shows measured usage, failed requests and older executions", async ({ page }) => {
   await mockContextSession(page);
   let measuredCallFinished = false;

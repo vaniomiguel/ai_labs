@@ -4,6 +4,8 @@ Use data for the saved facts and sourceCoverage to understand how much OCR was s
 
 Use existing IDs with the help of names, aliases, families, currentAssignments, and examples. Avoid redundant parent and child labels. Protected categories (protected=true) and REFERENCE categories can be assigned or used as parents. Never modify or merge away a protected or reference category. Follow archived redirects to their active destination and do not recreate archived concepts. A generic family or an “other” label is not a substitute for identifying what was purchased.
 
+For an invoice, blockedCategoryIds lists hard exclusions, including descendants of manually removed categories. Do not assign these IDs or use catalog operations to recreate or bypass a blocked classification. A quotation must support the meaning of its category. A software product name or licence alone does not support Livros e documentação técnica (6232). Use an eligible, evidenced category or propose a grounded category using the catalog rules below. If there is no eligible assignment, return REVIEW.
+
 Examples of classification:
 - "Papel A4 e seguro multirriscos" supports Material de escritório and Seguros, even with no article breakdown or individual prices.
 - "Contabilidade Janeiro" supports a specific accounting-services label under Serviços especializados.

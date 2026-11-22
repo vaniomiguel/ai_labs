@@ -18,8 +18,9 @@ public class JobController {
   public Map<String, Object> page(
       @RequestParam(defaultValue = "active") String state,
       @RequestParam(defaultValue = "0") int page,
-      @RequestParam(defaultValue = "50") int size) {
-    return monitor.page(state, page, size);
+      @RequestParam(defaultValue = "50") int size,
+      @RequestParam(required = false) UUID classificationInvoiceId) {
+    return monitor.page(state, page, size, classificationInvoiceId);
   }
 
   @GetMapping("/{id}")

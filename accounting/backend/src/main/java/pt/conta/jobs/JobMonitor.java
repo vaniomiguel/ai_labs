@@ -16,6 +16,8 @@ import pt.conta.shared.DomainException;
 @Service
 public class JobMonitor {
   private static final Set<String> STATES = Set.of("QUEUED", "RUNNING", "WAITING", "DONE", "FAILED");
+  private static final String INVOICE_CLASSIFICATION_JOBS =
+      "target_id=? and kind in ('CLASSIFY_INVOICE','NORMALIZE_CATEGORIES')";
   private static final String WARNING_JOIN = """
       left join lateral (
         select e.model as warning_model, e.created_at as warning_at, e.prompt_tokens,
@@ -31,7 +33,7 @@ public class JobMonitor {
       from (
         select job_id, max(created_at) as latest_warning
         from ai_execution
-        where job_id is not null and context_warning is not null
+        where job_id is not null and context_warning is not null %s
         group by job_id
         order by latest_warning desc, job_id desc
         limit 5
@@ -68,11 +70,17 @@ public class JobMonitor {
 
   /** Counts the entire queue, including zeroes for states not currently represented. */
   public Map<String, Long> counts() {
+    return counts(null);
+  }
+
+  private Map<String, Long> counts(UUID invoiceId) {
     var result = new LinkedHashMap<String, Long>();
     for (String state : List.of("QUEUED", "RUNNING", "WAITING", "DONE", "FAILED")) result.put(state, 0L);
-    jdbc.query("select state,count(*) from job group by state", (org.springframework.jdbc.core.RowCallbackHandler) rs -> {
+    String scope = invoiceId == null ? "" : " where " + INVOICE_CLASSIFICATION_JOBS;
+    Object[] arguments = invoiceId == null ? new Object[0] : new Object[] {invoiceId};
+    jdbc.query("select state,count(*) from job" + scope + " group by state", rs -> {
       if (STATES.contains(rs.getString(1))) result.put(rs.getString(1), rs.getLong(2));
-    });
+    }, arguments);
     long total = result.values().stream().mapToLong(Long::longValue).sum();
     result.put("active", result.get("QUEUED") + result.get("RUNNING") + result.get("WAITING"));
     result.put("total", total);
@@ -82,25 +90,33 @@ public class JobMonitor {
   /** Pages before joining related records, so history cannot hide pending tasks behind a limit. */
   @Transactional(readOnly = true, isolation = org.springframework.transaction.annotation.Isolation.REPEATABLE_READ)
   public Map<String, Object> page(String state, int page, int size) {
+    return page(state, page, size, null);
+  }
+
+  @Transactional(readOnly = true, isolation = org.springframework.transaction.annotation.Isolation.REPEATABLE_READ)
+  public Map<String, Object> page(String state, int page, int size, UUID invoiceId) {
     if (page < 0 || size < 1 || size > 100) throw DomainException.invalid("Paginação inválida");
-    String where;
-    Object[] arguments;
+    var filters = new ArrayList<String>();
+    var arguments = new ArrayList<Object>();
+    if (invoiceId != null) {
+      filters.add(INVOICE_CLASSIFICATION_JOBS);
+      arguments.add(invoiceId);
+    }
     if (state.equals("active")) {
-      where = "where state in ('QUEUED','RUNNING','WAITING')";
-      arguments = new Object[] {size, (long) page * size};
-    } else if (state.equals("all")) {
-      where = "";
-      arguments = new Object[] {size, (long) page * size};
+      filters.add("state in ('QUEUED','RUNNING','WAITING')");
     } else if (STATES.contains(state)) {
-      where = "where state=?";
-      arguments = new Object[] {state, size, (long) page * size};
-    } else throw DomainException.invalid("Estado de tarefa inválido");
-    var counts = counts();
+      filters.add("state=?");
+      arguments.add(state);
+    } else if (!state.equals("all")) throw DomainException.invalid("Estado de tarefa inválido");
+    arguments.add(size);
+    arguments.add((long) page * size);
+    var counts = counts(invoiceId);
+    String where = filters.isEmpty() ? "" : " where " + String.join(" and ", filters);
     var items = jdbc.query(
-        PROJECTION.formatted("select * from job " + where + " order by created_at desc,id desc limit ? offset ?"),
-        (rs, n) -> view(rs), arguments);
+        PROJECTION.formatted("select * from job" + where + " order by created_at desc,id desc limit ? offset ?"),
+        (rs, n) -> view(rs), arguments.toArray());
     return map("items", items, "total", counts.get(state.equals("all") ? "total" : state),
-        "page", page, "size", size, "counts", counts, "recentContextWarnings", recentWarnings());
+        "page", page, "size", size, "counts", counts, "recentContextWarnings", recentWarnings(invoiceId));
   }
 
   /** Retains job metadata even when its associated business record no longer exists. */
@@ -114,9 +130,11 @@ public class JobMonitor {
 
   private record RecentWarning(UUID jobId, String kind, WarningSummary warning) {}
 
-  private List<RecentWarning> recentWarnings() {
-    return jdbc.query(RECENT_WARNINGS, (rs, n) ->
-        new RecentWarning(rs.getObject("id", UUID.class), rs.getString("kind"), warning(rs)));
+  private List<RecentWarning> recentWarnings(UUID invoiceId) {
+    String scope = invoiceId == null ? "" : "and job_id in (select id from job where " + INVOICE_CLASSIFICATION_JOBS + ")";
+    Object[] arguments = invoiceId == null ? new Object[0] : new Object[] {invoiceId};
+    return jdbc.query(RECENT_WARNINGS.formatted(scope), (rs, n) ->
+        new RecentWarning(rs.getObject("id", UUID.class), rs.getString("kind"), warning(rs)), arguments);
   }
 
   private WarningSummary warning(ResultSet rs) throws SQLException {

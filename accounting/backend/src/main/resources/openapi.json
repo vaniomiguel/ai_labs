@@ -1394,6 +1394,11 @@
               "PROVISIONAL"
             ]
           },
+          "jobId": {
+            "type": ["string", "null"],
+            "format": "uuid",
+            "description": "Tarefa da geração atual da classificação"
+          },
           "jobState": {
             "enum": ["QUEUED", "RUNNING", "WAITING", "DONE", "FAILED", null]
           },
@@ -4144,6 +4149,12 @@
               ]
             },
             "description": "active inclui QUEUED, RUNNING e WAITING."
+          },
+          {
+            "name": "classificationInvoiceId",
+            "in": "query",
+            "schema": { "type": "string", "format": "uuid" },
+            "description": "Restringe as tarefas e contagens à classificação desta fatura, incluindo tarefas anteriores de normalização."
           },
           {
             "name": "page",

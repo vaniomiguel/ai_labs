@@ -10,6 +10,7 @@ import pt.conta.shared.*;
 @Service
 public class CategoryAiWorker {
   private static final int MAX_REQUEST_CHARACTERS = 90_000;
+  private static final int MAX_CLASSIFICATION_ATTEMPTS = 3;
   private final CategoryService categories;
   private final AiProvider provider;
   private final PromptCatalog prompts;
@@ -68,17 +69,21 @@ public class CategoryAiWorker {
 
   private void classify(JobQueue.Claim job, CategoryService.Snapshot snapshot, AiProvider.Model model,
       String prompt, Map<String, Object> schema, Map<String, Object> input) {
-    for (int attempt = 1; attempt <= 3; attempt++) {
+    for (int attempt = 1; attempt <= MAX_CLASSIFICATION_ATTEMPTS; attempt++) {
       var request = request(model.name(), prompt, schema, input);
       var response = execute(job, model, request);
       var reviewed = new CategoryService.Snapshot(snapshot.type(), snapshot.target(),
-          snapshot.fingerprint(), snapshot.catalogRevision(), input);
+          snapshot.fingerprint(), snapshot.catalogRevision(), input, snapshot.blockedCategoryIds());
       try {
         apply(job, reviewed, response);
         return;
       } catch (DomainException e) {
         results.categoryOutcome(response.id(), "INVALID_DOMAIN");
-        if (attempt == 3) throw e;
+        if (attempt == MAX_CLASSIFICATION_ATTEMPTS) {
+          if (!(e instanceof CategoryService.NoEligibleInvoiceCategories)) throw e;
+          finishWithoutEligibleCategories(job, reviewed, response.id());
+          return;
+        }
         input.put("validationFeedback", feedback(input, e.getMessage(), response.output()));
       } catch (RuntimeException e) {
         results.categoryOutcome(response.id(), "INVALID_DOMAIN");
@@ -114,14 +119,26 @@ public class CategoryAiWorker {
   }
 
   private void apply(JobQueue.Claim job, CategoryService.Snapshot snapshot, Response response) {
-    if (!categories.apply(snapshot, response.output(), response.id())) {
-      results.categoryOutcome(response.id(), "STALE");
-      categories.retryStale(snapshot.type(), job.target(), generation(snapshot));
-      if (snapshot.type().equals("catalog")) categories.reviewWhenSettled(job.id());
+    if (!categories.apply(snapshot, response.output(), response.id(), job.id())) {
+      retryStale(job, snapshot, response.id());
       return;
     }
     if (categories.genericMovement(snapshot)) results.categoryOutcome(response.id(), "GUARDED_REVIEW");
     if (!snapshot.type().equals("catalog")) categories.reviewWhenSettled(job.id());
+  }
+
+  private void finishWithoutEligibleCategories(JobQueue.Claim job, CategoryService.Snapshot snapshot, UUID execution) {
+    if (categories.finishWithoutEligibleCategories(snapshot, job.id(), execution)) {
+      categories.reviewWhenSettled(job.id());
+    } else {
+      retryStale(job, snapshot, execution);
+    }
+  }
+
+  private void retryStale(JobQueue.Claim job, CategoryService.Snapshot snapshot, UUID execution) {
+    results.categoryOutcome(execution, "STALE");
+    categories.retryStale(snapshot.type(), job.target(), generation(snapshot));
+    if (snapshot.type().equals("catalog")) categories.reviewWhenSettled(job.id());
   }
 
   private Map<String, Object> feedback(Map<String, Object> input, String error, Object rejected) {

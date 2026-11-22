@@ -545,8 +545,9 @@
           </button>
           }
         </div>
-        <applied-filters class="panel-filters" [items]="processingFilterChips()" [canClear]="processingState() !== 'all'"
-          (removed)="filterJobs('all')" (cleared)="filterJobs('all')" />
+        <applied-filters class="panel-filters" [items]="processingFilterChips()"
+          [canClear]="processingState() !== 'all' || !!classificationInvoiceId()"
+          (removed)="clearJobFilters($event)" (cleared)="clearJobFilters()" />
       </section>
       <div aria-live="polite">
         @if(processing()?.recentContextWarnings?.length){
@@ -1122,6 +1123,9 @@
                 [disabled]="working()" [headerTemplate]="categoryHeader" (queued)="refresh()">
                 @if(categories.length){<category-tags [categories]="categories" [showStatus]="false" />}
               </invoice-category-action>
+              @if(editorClassification()?.jobId; as jobId){
+                <button type="button" class="text-button" (click)="openInvoiceClassificationJobs(data.id, jobId)">Consultar tarefa atual</button>
+              }
               <p class="hint">A IA usa os dados guardados da fatura. Guarda as alterações para as incluir na classificação.</p>
             }@else{
               <ng-container [ngTemplateOutlet]="categoryHeader" />
@@ -1140,12 +1144,20 @@
         /></label>}
         <details class="details-panel">
           <summary>Histórico de alterações</summary>
-          @for(event of timeline();track event.id){
-          <p>
-            {{event.actor}} · {{event.action}} ·
-            {{event.createdAt|date:'dd/MM/yyyy HH:mm'}}
-          </p>
-          <pre>{{event.after|json}}</pre>
+          @if(recordKind==='INVOICE' && data.id){
+            <button type="button" class="text-button" (click)="openInvoiceClassificationJobs(data.id)">Ver tarefas de classificação</button>
+          }
+          @for(entry of historyEntries();track entry.event.id){
+            <p>{{entry.event.actor}} · {{entry.classification?.label ?? entry.event.action}} · {{entry.event.createdAt|date:'dd/MM/yyyy HH:mm'}}</p>
+            @if(entry.classification; as classification){
+              @if(classification.categoryNames){<p>{{classification.categoryNames}}</p>}
+              @if(classification.reason){<p>{{classification.reason}}</p>}
+              @if(classification.jobId; as jobId){
+                <button type="button" class="text-button" (click)="openInvoiceClassificationJobs(data.id, jobId)">Consultar tarefa</button>
+              }
+            }@else{
+              <pre>{{entry.event.after|json}}</pre>
+            }
           }
         </details>
       </div>
