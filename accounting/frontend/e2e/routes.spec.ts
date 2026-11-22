@@ -230,14 +230,14 @@ for (const [path, buttonName, field] of [
     await page.setViewportSize({ width: 320, height: 720 });
     await page.goto(path);
 
-    const listHeader = page.locator(".record-list-heading");
-    const addRecord = listHeader.getByRole("button", { name: buttonName, exact: true });
+    const actionHeader = page.locator(path === "/invoice" ? ".page-heading" : ".record-list-heading");
+    const addRecord = actionHeader.getByRole("button", { name: buttonName, exact: true });
     await expect(addRecord).toBeVisible();
-    expect(await listHeader.evaluate(header => header.scrollWidth)).toBeLessThanOrEqual(
-      await listHeader.evaluate(header => header.clientWidth),
+    expect(await actionHeader.evaluate(header => header.scrollWidth)).toBeLessThanOrEqual(
+      await actionHeader.evaluate(header => header.clientWidth),
     );
     if (path === "/movement") {
-      await expect(listHeader.getByRole("button", { name: "Importar extrato", exact: true })).toBeVisible();
+      await expect(actionHeader.getByRole("button", { name: "Importar extrato", exact: true })).toBeVisible();
     }
 
     await addRecord.click();

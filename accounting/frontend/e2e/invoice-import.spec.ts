@@ -5,6 +5,8 @@ const archivedNotice = "Documentos arquivados. O processamento continua em segun
 
 type UploadFile = { name: string; mimeType: string; buffer: Buffer };
 
+const invoiceActions = (page: Page) => page.locator(".page-heading").getByRole("group", { name: "Ações de faturas" });
+
 test.beforeEach(async ({ page }) => {
   const csrf = await (await page.request.get("/api/v1/csrf")).json();
   const response = await page.request.post("/api/v1/session", {
@@ -15,14 +17,28 @@ test.beforeEach(async ({ page }) => {
 });
 
 async function chooseFiles(page: Page, format: "PDF" | "ZIP", files: UploadFile[]) {
-  const button = page.getByRole("button", { name: `Importar ${format}`, exact: true });
+  const actions = invoiceActions(page);
+  const button = actions.getByRole("button", { name: `Importar ${format}`, exact: true });
   await button.focus();
   const [chooser] = await Promise.all([page.waitForEvent("filechooser"), button.press("Enter")]);
   const extension = `.${format.toLowerCase()}`;
   expect(await chooser.element().getAttribute("accept")).toBe(extension);
   expect(chooser.isMultiple()).toBeTruthy();
   await chooser.setFiles(files);
-  return page.locator(`input[type="file"][accept="${extension}"]`);
+  return actions.locator(`input[type="file"][accept="${extension}"]`);
+}
+
+async function expectInvoiceHeaderActions(page: Page) {
+  const actions = invoiceActions(page);
+  for (const name of ["Importar PDF", "Importar ZIP", "+ Nova fatura"]) {
+    await expect(actions.getByRole("button", { name, exact: true })).toBeVisible();
+    await expect(page.getByRole("button", { name, exact: true })).toHaveCount(1);
+  }
+  for (const extension of [".pdf", ".zip"]) {
+    const input = actions.locator(`input[type="file"][accept="${extension}"]`);
+    await expect(input).toHaveCount(1);
+    await expect(input).toBeHidden();
+  }
 }
 
 function isDocumentUpload(request: Request) {
@@ -62,11 +78,10 @@ test("PDF import is keyboard accessible on a narrow invoice list and preserves f
   await page.getByRole("combobox", { name: "Mês", exact: true }).selectOption("2");
   await expect(page.getByText("Ainda não há faturas neste período")).toBeVisible();
 
-  const pdf = page.getByRole("button", { name: "Importar PDF", exact: true });
-  const zip = page.getByRole("button", { name: "Importar ZIP", exact: true });
-  await expect(pdf).toBeVisible();
-  await expect(zip).toBeVisible();
-  await expect(page.getByRole("button", { name: "+ Nova fatura", exact: true })).toBeVisible();
+  await expectInvoiceHeaderActions(page);
+  const actions = invoiceActions(page);
+  const pdf = actions.getByRole("button", { name: "Importar PDF", exact: true });
+  const zip = actions.getByRole("button", { name: "Importar ZIP", exact: true });
   expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(320);
 
   const files = [1, 2].map(index => ({
@@ -91,6 +106,7 @@ test("PDF import is keyboard accessible on a narrow invoice list and preserves f
 });
 
 test("ZIP import can retry the same file and shows its archived original", async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 800 });
   const supplier = await createInvoice(page);
   const file = {
     name: "arquivo-importacao-faturas.zip", mimeType: "application/zip",
@@ -109,6 +125,15 @@ test("ZIP import can retry the same file and shows its archived original", async
   await year.fill("2067");
   await year.press("Tab");
   await expect(page.getByRole("row").filter({ hasText: supplier })).toBeVisible();
+  await expectInvoiceHeaderActions(page);
+  const heading = await page.locator(".page-heading").boundingBox();
+  const actions = await invoiceActions(page).boundingBox();
+  expect(heading).not.toBeNull();
+  expect(actions).not.toBeNull();
+  if (heading && actions) {
+    expect(actions.x).toBeGreaterThan(heading.x);
+    expect(actions.x + actions.width).toBeCloseTo(heading.x + heading.width, 0);
+  }
 
   const requested = page.waitForRequest(isDocumentUpload);
   const input = await chooseFiles(page, "ZIP", [file]);

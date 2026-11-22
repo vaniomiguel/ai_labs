@@ -108,7 +108,25 @@
             mês e ano a ano.':'Consulta, organiza e revê os teus registos.'}}
           </p>
         </div>
+        @if(view()==='invoices'){
+        <div class="record-list-actions invoice-page-actions" role="group" aria-label="Ações de faturas">
+          <input #invoicePdfs type="file" multiple accept=".pdf" hidden
+            [disabled]="uploading()" (change)="upload(invoicePdfs, 'INVOICE', null)" />
+          <input #invoiceZips type="file" multiple accept=".zip" hidden
+            [disabled]="uploading()" (change)="upload(invoiceZips, 'INVOICE_ARCHIVE', null)" />
+          <button mat-stroked-button type="button" [disabled]="uploading()" (click)="invoicePdfs.click()">
+            Importar PDF
+          </button>
+          <button mat-stroked-button type="button" [disabled]="uploading()" (click)="invoiceZips.click()">
+            Importar ZIP
+          </button>
+          <button mat-flat-button type="button" (click)="newRecord('INVOICE')">
+            + Nova fatura
+          </button>
+        </div>
+        }
       </div>
+      @if(view()==='invoices' && uploading()){<p role="status">A enviar…</p>}
       @if(routeLoading()){<p role="status">A carregar…</p>}
       @if(routeMessage() || (processingAlert() && !editor())){
       <div class="notice banner" role="status">
@@ -183,29 +201,13 @@
         (undo)="undo($event)" (reverse)="reverse($event)" />
       } @if(view()==='invoices'){
       <section class="panel">
-        <div class="section-heading record-list-heading">
+        <div class="section-heading">
           <div>
             <h2>
               Todas as faturas <span class="count">{{recordsCurrent() ? state().invoiceTotal : '—'}}</span>
             </h2>
             <p>O valor por reconciliar é independente do saldo anual. Pendentes sem data aparecem em qualquer período e ficam fora dos cálculos.</p>
           </div>
-          <div class="record-list-actions">
-            <input #invoicePdfs type="file" multiple accept=".pdf" hidden
-              [disabled]="uploading()" (change)="upload(invoicePdfs, 'INVOICE', null)" />
-            <input #invoiceZips type="file" multiple accept=".zip" hidden
-              [disabled]="uploading()" (change)="upload(invoiceZips, 'INVOICE_ARCHIVE', null)" />
-            <button mat-stroked-button type="button" [disabled]="uploading()" (click)="invoicePdfs.click()">
-              Importar PDF
-            </button>
-            <button mat-stroked-button type="button" [disabled]="uploading()" (click)="invoiceZips.click()">
-              Importar ZIP
-            </button>
-            <button mat-flat-button type="button" (click)="newRecord('INVOICE')">
-              + Nova fatura
-            </button>
-          </div>
-          @if(uploading()){<p role="status">A enviar…</p>}
         </div>
         <div class="table-scroll">
           <table>
@@ -1106,15 +1108,18 @@
               <ul>@for(concern of alert.concerns;track $index){<li>{{concern.message}}</li>}</ul>
             }@else{<p>{{alert.message}}</p>}
           </section>
-          @if(alert.status==='OPEN' && recordAlertDocument();as source){
-            <repair-panel [alert]="alert" [document]="source" [progress]="repairProgress()" [edits]="reviewEdits()"
-              [stageOnly]="true" (updated)="updateRecordAlert($event)" (apply)="stageRecordRepair($event)"
-              (newAnalysis)="startNewRecordAnalysis()" (inspect)="inspectRepair($event)" />
-          }
         }@else if(data.reviewStatus==='OPEN'){<div class="notice" role="status"><strong>Este registo fica fora dos cálculos até ser validado.</strong>
           @if(data.reviewIssues?.length){<ul>@for(issue of data.reviewIssues;track $index){<li>{{issue}}</li>}</ul>}@else{<p>Confirma os dados e escolhe Validar e guardar.</p>}
           @if(data.documentId){<small>{{sourceName(data.documentId)}} · A validação aplica-se apenas a este item.</small>}
         </div>}
+        @if(recordRepairAlert();as alert){
+          @if(alert.status==='OPEN' && !alert.dismissedAt && recordAlertDocument();as source){
+            <repair-panel [alert]="alert" [document]="source" [progress]="repairProgress()" [edits]="reviewEdits()"
+              [stageOnly]="true" (updated)="updateRecordAlert($event)" (apply)="stageRecordRepair($event)"
+              (newAnalysis)="startNewRecordAnalysis()" (inspect)="inspectRepair($event)" />
+          }
+        }
+        @if(invoiceEditRepairError();as message){<p class="hint" role="status">{{message}}</p>}
         <record-fields
           [kind]="recordKind"
           [data]="data"
@@ -1159,6 +1164,7 @@
           >Documento de suporte · opcional<input
             type="file"
             accept=".pdf,.xls,.xlsx"
+            [disabled]="working()"
             (change)="attach($event)"
         /></label>}
         <details class="details-panel">

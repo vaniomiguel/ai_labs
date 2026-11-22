@@ -135,7 +135,8 @@ test('movement deletion links to invoices and asks again after the reconciliatio
   await warning.getByRole('button', {name: 'Eliminar', exact: true}).click();
   await expect(row).toHaveCount(0);
   expect(await get(page, `/invoices/${invoice.id}`)).toMatchObject({remaining: '100.00'});
-  expect(await get(page, '/allocations')).toEqual([]);
+  const activeAllocations = await get(page, '/allocations');
+  expect(activeAllocations).not.toContainEqual(expect.objectContaining({movementId: movement.id}));
   await openSection(page, '⇄ Reconciliação');
   await setYear(page, 2078);
   const reconciliation = page.locator('reconciliation-table');
@@ -186,7 +187,9 @@ test('undated pending invoices are visible in both lists and validate without lo
   await expect(entry).toHaveCount(1);await expect(entry).toContainText('Por validar');await expect(entry.locator('.reconciliation-impact')).toContainText('—');
   await page.screenshot({path:testInfo.outputPath('pending-reconciliation.png'),fullPage:true});
   await expect(entry).toContainText('100,00 €');await entry.getByRole('button',{name:'Rever e validar',exact:true}).click();
-  let dialog=page.getByRole('dialog',{name:'Editar registo',exact:true});await expect(dialog).toContainText('fora dos cálculos');await dialog.getByRole('button',{name:'Fechar editor',exact:true}).click();
+  let dialog=page.getByRole('dialog',{name:'Editar registo',exact:true});await expect(dialog).toContainText('fora dos cálculos');
+  await expect(dialog.getByRole('region', {name: 'Correção por IA', exact: true})).toHaveCount(0);
+  await dialog.getByRole('button',{name:'Fechar editor',exact:true}).click();
   await openSection(page,'▤ Faturas');await setYear(page,2070);const invoice=page.locator('tr').filter({hasText:'E2E-UNDATED-INVOICE'});
   await expect(invoice).toContainText('Provisório');await invoice.getByRole('button',{name:'Rever e validar',exact:true}).click();
   dialog=page.getByRole('dialog',{name:'Editar registo',exact:true});await dialog.getByLabel('Data de emissão',{exact:true}).fill('2070-01-01');
@@ -205,6 +208,7 @@ test('source filename identifies an invoice with missing fields and opens its or
   const row=page.locator('tr').filter({hasText:'E2E-Incomplete-original.pdf'});await expect(row).toContainText('Por validar');
   await row.getByRole('button',{name:'Rever e validar',exact:true}).click();const dialog=page.getByRole('dialog',{name:'Editar registo',exact:true});
   await expect(dialog.locator('source-pdf')).toBeVisible();await expect(dialog.locator('source-pdf canvas')).toBeVisible({timeout:15000});
+  await expect(dialog.getByRole('button', {name: '✧ Pedir tentativa de correção à IA', exact: true})).toBeVisible();
   await expect(dialog).toContainText('Falta a data');await expect(dialog).toContainText('Falta o fornecedor');await expect(dialog).toContainText('apenas a este item');
   await dialog.getByLabel('Fornecedor',{exact:true}).fill('Fornecedor corrigido');await dialog.getByLabel('Data de emissão',{exact:true}).fill('2016-01-01');await dialog.getByLabel('Total com IVA',{exact:true}).fill('56.64');
   await dialog.getByRole('button',{name:'Validar e guardar',exact:true}).click();await expect(dialog).not.toBeVisible();

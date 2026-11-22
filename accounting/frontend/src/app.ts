@@ -25,7 +25,8 @@ import { DeletionDialog } from "./deletion-dialog";
 import { DEFAULT_WORKSPACE_URL, RecordKind, recordView, WORKSPACE_PATHS, WorkspaceRoute, WorkspaceRouteKind, WorkspaceView } from "./workspace-routes";
 
 interface WorkspaceOrigin { url: string; view: WorkspaceView }
-interface SuspendedEditor { url: string; draft: ReviewableRecord }
+interface StagedRecordRepair { alert: AlertView; selections: RepairApplyRequest[] }
+interface SuspendedEditor { url: string; draft: ReviewableRecord; repair?: StagedRecordRepair }
 type AlertStatusFilter = "OPEN" | "RESOLVED" | "dismissed" | "all";
 type AlertAction = "dismiss" | "delete";
 type DocumentUploadKind = "INVOICE" | "STATEMENT" | "HISTORY" | "ARCHIVE" | "INVOICE_ARCHIVE";
@@ -180,6 +181,9 @@ export class AppComponent implements OnDestroy {
   readonly categoryTarget = signal<{type:"invoice"|"movement";record:any}|null>(null);
   readonly reviewDocument = signal<any>(null);
   readonly activeAlert = signal<AlertView | null>(null);
+  private readonly invoiceEditRepairAlert = signal<AlertView | null>(null);
+  readonly recordRepairAlert = computed(() => this.activeAlert() ?? this.invoiceEditRepairAlert());
+  readonly invoiceEditRepairError = signal("");
   readonly showsRecordCategories = computed(() => Boolean(this.editor()?.id)
     && (this.recordKind === "INVOICE" || this.activeAlert()?.status !== "OPEN"));
   readonly categoryConfirmation = computed<CategoryConfirmation | undefined>(() => {
@@ -191,7 +195,7 @@ export class AppComponent implements OnDestroy {
     if (categoryIds.length) return { version: classification.version, categoryIds };
   });
   readonly alertSource = signal<RecordAlertSource | null>(null);
-  private stagedRepairs: RepairApplyRequest[] = [];
+  private stagedRecordRepair?: StagedRecordRepair;
   readonly recordAlertDocument = computed(() => {
     const source = this.alertSource();
     const record = this.editor();
@@ -450,11 +454,13 @@ export class AppComponent implements OnDestroy {
     this.editorClassification.set(null);
     this.reviewDocument.set(null);
     this.activeAlert.set(null);
+    this.invoiceEditRepairAlert.set(null);
+    this.invoiceEditRepairError.set("");
     this.dismissedAlertDetail.set(null);
     this.alertRemoval.set(null);
     this.alertRemovalError.set("");
     this.alertSource.set(null);
-    this.stagedRepairs = [];
+    this.stagedRecordRepair = undefined;
     this.reviewEdits.set(0);
     this.assignment.set(null);
     this.categoryTarget.set(null);
@@ -647,8 +653,7 @@ export class AppComponent implements OnDestroy {
   }
 
   openInvoiceClassificationJobs(invoiceId: string, jobId?: string) {
-    const draft = this.editor();
-    if (draft?.id === invoiceId) this.suspendedEditor = { url: this.router.url, draft };
+    this.suspendRecordEditor(invoiceId);
     this.openRoute(jobId ? ["processing", jobId] : ["processing"], this.classificationJobQuery(invoiceId));
   }
 
@@ -762,13 +767,43 @@ export class AppComponent implements OnDestroy {
     if (kind === "MOVEMENT") await this.loadEditorAccounts(request);
     if (request !== this.routeRequest) return;
     this.recordKind = kind;
-    const draft = this.suspendedEditor?.url === this.router.url ? this.suspendedEditor.draft : undefined;
+    const suspended = this.suspendedEditor?.url === this.router.url ? this.suspendedEditor : undefined;
     this.suspendedEditor = undefined;
+    this.stagedRecordRepair = suspended?.repair;
     this.editorClassification.set(record.classification ?? null);
-    this.editor.set(draft ? {
-      ...draft, categories: record.categories, categoryDetails: record.categoryDetails, classification: record.classification,
+    this.editor.set(suspended ? {
+      ...suspended.draft, categories: record.categories, categoryDetails: record.categoryDetails,
+      classification: record.classification,
     } : structuredClone(record));
-    await this.loadRecordTimeline(kind, id);
+    const timeline = this.loadRecordTimeline(kind, id);
+    if (kind === "INVOICE" && this.routeKind() === "edit") {
+      await Promise.all([timeline, this.loadInvoiceEditRepair(record, request)]);
+    } else await timeline;
+  }
+
+  private async loadInvoiceEditRepair(record: ReviewableRecord, request: number) {
+    const documentId = record.documentId;
+    if (!documentId || record.manuallyConfirmed || !this.isCurrentInvoiceEditor(record, request)) return;
+    try {
+      const alerts = await this.api.get<AlertView[]>("/alerts");
+      const alert = alerts.find(candidate => candidate.entityType === "invoice" && candidate.entityId === record.id
+        && candidate.documentId === documentId && isVisibleOpenAlert(candidate));
+      if (!alert || !this.isCurrentInvoiceEditor(record, request)) return;
+
+      const source = await this.api.get<RecordAlertSource>("/documents/" + documentId);
+      if (source.kind !== "INVOICE" || !this.isCurrentInvoiceEditor(record, request)) return;
+      this.alertSource.set(source);
+      this.invoiceEditRepairAlert.set(alert);
+    } catch {
+      if (this.isCurrentInvoiceEditor(record, request)) {
+        this.invoiceEditRepairError.set("Não foi possível carregar a correção por IA.");
+      }
+    }
+  }
+
+  private isCurrentInvoiceEditor(record: ReviewableRecord, request: number) {
+    const draft = this.editor();
+    return request === this.routeRequest && draft?.id === record.id && draft.documentId === record.documentId;
   }
 
   private async refreshRecordClassification() {
@@ -800,9 +835,15 @@ export class AppComponent implements OnDestroy {
   }
 
   openCategories(type: "invoice" | "movement", id: string) {
-    const draft = this.editor();
-    if (draft?.id === id) this.suspendedEditor = { url: this.router.url, draft };
+    this.suspendRecordEditor(id);
     this.openRoute([type, id, "categories"]);
+  }
+
+  private suspendRecordEditor(id?: string) {
+    const draft: ReviewableRecord | null = this.editor();
+    if (draft?.id && (!id || draft.id === id)) {
+      this.suspendedEditor = { url: this.router.url, draft, repair: this.stagedRecordRepair };
+    }
   }
 
   private async loadCategories(kind: RecordKind, id: string, request: number) {
@@ -824,6 +865,8 @@ export class AppComponent implements OnDestroy {
     if (this.working() || !this.editor()) return;
     const alert = this.activeAlert();
     if (alert?.status === "OPEN") return this.saveRecordAlert(alert, validate);
+    const stagedAlert = this.stagedRecordRepair?.alert;
+    if (stagedAlert) return this.saveRecordAlert(stagedAlert, validate);
     const request = this.editorRequest;
     const confirmation = validate ? this.categoryConfirmation() : undefined;
     await this.run(async () => {
@@ -843,20 +886,25 @@ export class AppComponent implements OnDestroy {
 
   private async saveRecordAlert(alert: AlertView, resolve: boolean) {
     const request = this.editorRequest;
+    const alertEditor = alert.id === this.activeAlert()?.id;
+    const selectedAlert = this.recordRepairAlert();
+    const revision = selectedAlert?.id === alert.id ? selectedAlert.version : alert.version;
     const confirmation = resolve ? this.categoryConfirmation() : undefined;
     await this.run(async () => {
       const record: ReviewableRecord = this.editor();
       await this.putRecordEdit(`/alerts/${alert.id}/draft`, {
-        alertVersion: alert.version,
+        alertVersion: revision,
         recordVersion: record.version,
         documentVersion: record.documentVersion,
         draft: record,
         resolve,
-        repairs: this.stagedRepairs,
+        repairs: this.stagedRecordRepair?.selections ?? [],
       }, confirmation);
       if (request !== this.editorRequest) { await this.refresh(); return; }
       this.closeRoute();
-      this.showSaveSuccess(resolve ? "Validar e resolver" : "Guardar sem resolver");
+      if (alertEditor) this.showSaveSuccess(resolve ? "Validar e resolver" : "Guardar sem resolver");
+      else this.showSaveSuccess(resolve ? "Validar e guardar" : "Guardar rascunho",
+        this.recordSaveContext(resolve, record.issuedOn));
     });
   }
 
@@ -889,14 +937,19 @@ export class AppComponent implements OnDestroy {
   }
   async attach(event: Event) {
     const input = event.target as HTMLInputElement;
-    if (!input.files?.length) return;
+    if (this.working() || !input.files?.length) return;
     const request=this.editorRequest;
     await this.run(async () => {
       const form = new FormData();
       form.append("files", input.files![0]);
       form.append("kind", "SUPPORT");
       const docs = await this.api.post("/documents", form);
-      if(request===this.editorRequest)this.editor.set({ ...this.editor(), documentId: docs[0].id, documentVersion:docs[0].version });
+      if (request !== this.editorRequest) return;
+      this.invoiceEditRepairAlert.set(null);
+      this.invoiceEditRepairError.set("");
+      this.alertSource.set(null);
+      this.stagedRecordRepair = undefined;
+      this.editor.set({ ...this.editor(), documentId: docs[0].id, documentVersion: docs[0].version });
     });
   }
   requestRemoval(type: DeletionTarget["type"], id: string) {
@@ -1059,23 +1112,28 @@ export class AppComponent implements OnDestroy {
 
   updateRecordAlert(alert: AlertView) {
     if (alert.id === this.activeAlert()?.id) this.activeAlert.set(alert);
+    else if (alert.id === this.invoiceEditRepairAlert()?.id) this.invoiceEditRepairAlert.set(alert);
   }
 
   startNewRecordAnalysis() {
     // Values already applied to the form stay editable after their proposal is superseded.
-    this.stagedRepairs = [];
+    this.stagedRecordRepair = undefined;
   }
 
   async stageRecordRepair(selection: RepairApplyRequest) {
-    const alert = this.activeAlert();
+    const alert = this.recordRepairAlert();
     const request = this.editorRequest;
+    const edits = this.reviewEdits();
     if (!alert || this.working()) return;
     await this.run(async () => {
       const preview = await this.api.post<RepairPreview>("/alerts/" + alert.id + "/preview", selection);
-      if (request !== this.editorRequest || !preview.canApplyDraft) return;
+      if (request !== this.editorRequest || !preview.canApplyDraft || !preview.accepted.length) return;
+      const current = this.recordRepairAlert();
+      if (current?.id !== alert.id || selection.proposalId !== (current.proposal?.jobId || current.id)) return;
+      if (edits !== this.reviewEdits()) throw new Error("O rascunho foi alterado. Revê e aplica a proposta novamente.");
       const draft = { ...this.editor() };
       for (const change of preview.accepted) draft[change.field] = structuredClone(change.proposed);
-      this.stagedRepairs.push(selection);
+      this.stagedRecordRepair = { alert, selections: [...(this.stagedRecordRepair?.selections ?? []), selection] };
       this.editor.set(draft);
       this.draftEdited();
     });
@@ -1125,7 +1183,10 @@ export class AppComponent implements OnDestroy {
       await this.refresh();
     });
   }
-  inspectRepair(id: string) { this.openJob(id); }
+  inspectRepair(id: string) {
+    this.suspendRecordEditor();
+    this.openJob(id);
+  }
   async retry(job: any) {
     await this.run(async () => {
       await this.api.post("/jobs/" + job.id + "/retry");

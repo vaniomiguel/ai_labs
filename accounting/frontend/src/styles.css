@@ -547,6 +547,13 @@ summary {
   flex-wrap: wrap;
   gap: 9px;
 }
+.invoice-page-actions {
+  justify-content: flex-end;
+  margin-inline-start: auto;
+}
+.invoice-page-actions input[hidden] {
+  display: none;
+}
 .count,
 h3 span {
   font-size: 9px;
@@ -1364,6 +1371,9 @@ source-pdf {
   .page-heading {
     flex-wrap: wrap;
     margin-bottom: 20px;
+  }
+  .invoice-page-actions {
+    flex-basis: 100%;
   }
   h1 {
     font-size: 26px;
