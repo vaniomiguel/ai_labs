@@ -244,11 +244,26 @@ for (const [path, buttonName, field] of [
     await expect(page).toHaveURL(`${path}/new`);
     const editor = page.getByRole("dialog", { name: "Editar registo", exact: true });
     await expect(editor.getByLabel(field, { exact: true })).toBeVisible();
+    if (path === "/movement") {
+      await expect(editor.getByText("Data valor", { exact: true })).toHaveCount(0);
+    }
     await editor.getByRole("button", { name: "Fechar editor", exact: true }).click();
     await expect(page).toHaveURL(path);
     await expect(editor).toHaveCount(0);
   });
 }
+
+test("movement editor shows only the booking date for a saved movement", async ({ page }) => {
+  await signIn(page);
+  await mockRecord(page, "movement", movementId, {
+    bookedOn: "2026-02-01", valueOn: "2026-02-03", description: "Pagamento",
+  });
+  await page.goto(`/movement/${movementId}/edit`);
+
+  const editor = page.getByRole("dialog", { name: "Editar registo" });
+  await expect(editor.getByLabel("Data do movimento", { exact: true })).toHaveValue("2026-02-01");
+  await expect(editor.getByText("Data valor", { exact: true })).toHaveCount(0);
+});
 
 test("bank statement review can still add a draft movement", async ({ page }) => {
   await signIn(page);

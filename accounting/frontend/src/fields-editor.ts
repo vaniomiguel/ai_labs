@@ -63,7 +63,6 @@ export class FieldsEditor {
     this.changed.emit();
     this.movements.push({
       bookedOn: null,
-      valueOn: null,
       description: null,
       amount: null,
       direction: null,

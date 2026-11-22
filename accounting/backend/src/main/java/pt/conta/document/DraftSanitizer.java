@@ -9,25 +9,63 @@ import pt.conta.shared.*;
  * Preserves valid extracted fields when a different field cannot be converted to its domain type.
  */
 public final class DraftSanitizer {
+  private static final Set<String> VALUE_DATE_FIELDS = Set.of("valueOn", "value_on");
+  private static final Set<String> VALUE_DATE_ISSUES = Set.of(
+      "data ilegível em valueOn", "data ilegível em value_on",
+      "Falta evidência para confirmar valueOn.", "Falta evidência para confirmar value_on.",
+      "A IA sugeriu rever valueOn.", "A IA sugeriu rever value_on.");
+
   private DraftSanitizer() {}
 
-  /** Discards retired fields from invoice writes without changing other draft values. */
-  public static Map<String, Object> withoutInvoiceDueDates(Map<String, Object> input) {
+  /** Copies incoming drafts and drops retired fields at the extraction and manual-write boundaries. */
+  static Map<String, Object> copyWithoutRetiredFields(String kind, Map<String, Object> input) {
     var draft = Json.object(Json.write(input));
-    draft.remove("dueOn");
-    draft.remove("due_on");
-    for (var invoice : Inputs.rows(draft, "invoices")) {
-      invoice.remove("dueOn");
-      invoice.remove("due_on");
+    if (kind.equals("INVOICE")) {
+      removeInvoiceDueDates(draft);
+      Inputs.rows(draft, "invoices").forEach(DraftSanitizer::removeInvoiceDueDates);
+    } else if (kind.equals("STATEMENT")) {
+      removeMovementValueDates(draft);
+      Inputs.rows(draft, "movements").forEach(DraftSanitizer::removeMovementValueDates);
     }
     return draft;
+  }
+
+  private static void removeInvoiceDueDates(Map<String, Object> row) {
+    row.remove("dueOn");
+    row.remove("due_on");
+  }
+
+  private static void removeMovementValueDates(Map<String, Object> row) {
+    row.keySet().removeAll(VALUE_DATE_FIELDS);
+    removeStatementValueDateFindings(row);
+  }
+
+  public static void removeStatementValueDateFindings(Map<String, Object> draft) {
+    if (draft.get("issues") instanceof List<?> issues) {
+      draft.put("issues", issues.stream()
+          .filter(issue -> !(issue instanceof String message && VALUE_DATE_ISSUES.contains(message)))
+          .toList());
+    }
+    if (draft.containsKey("evidence")) {
+      draft.put("evidence", withoutStatementValueDateEvidence(draft.get("evidence")));
+    }
+  }
+
+  public static Object withoutStatementValueDateEvidence(Object evidence) {
+    if (!(evidence instanceof List<?> entries)) return evidence;
+    return entries.stream().filter(entry -> !(entry instanceof Map<?, ?> item
+        && (valueDatePath(item.get("field")) || valueDatePath(item.get("path"))))).toList();
+  }
+
+  private static boolean valueDatePath(Object value) {
+    return value instanceof String path && VALUE_DATE_FIELDS.contains(path.substring(path.lastIndexOf('.') + 1));
   }
 
   /**
    * Copies an automatic extraction, blanks only malformed typed fields and records review reasons.
    */
   public static Map<String, Object> sanitize(String kind, Map<String, Object> input) {
-    var draft = kind.equals("INVOICE") ? withoutInvoiceDueDates(input) : Json.object(Json.write(input));
+    var draft = copyWithoutRetiredFields(kind, input);
     var issues = issues(draft);
     if (kind.equals("INVOICE")) {
       if (!Inputs.rows(draft, "invoices").isEmpty())
@@ -63,7 +101,7 @@ public final class DraftSanitizer {
         draft.remove(ignored);
       for (var movement : Inputs.rows(draft, "movements")) {
         var rowIssues = issues(movement);
-        dates(movement, List.of("bookedOn", "valueOn"), rowIssues, "");
+        dates(movement, List.of("bookedOn"), rowIssues, "");
         money(movement, List.of("amount"), rowIssues, "");
         if (Inputs.text(movement, "direction") != null
             && !Set.of("DEBIT", "CREDIT").contains(movement.get("direction"))) {

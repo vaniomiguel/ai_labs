@@ -102,6 +102,6 @@ public class SourceRecordSync {
       "total",Money.text(i.total),"net",Money.text(i.net),"tax",Money.text(i.tax),"discount",Money.text(i.discount),
       "type",i.type,"relatedInvoiceId",i.relatedInvoiceId);}
   static Map<String,Object> movementFields(BankMovement m){return map("id",m.id.toString(),"accountId",m.accountId,
-      "bookedOn",m.bookedOn,"valueOn",m.valueOn,"occurredAt",m.occurredAt,"description",m.description,
+      "bookedOn",m.bookedOn,"occurredAt",m.occurredAt,"description",m.description,
       "bankReference",m.bankReference,"amount",Money.text(m.amount),"currency",m.currency,"direction",m.direction,"kind",m.kind);}
 }

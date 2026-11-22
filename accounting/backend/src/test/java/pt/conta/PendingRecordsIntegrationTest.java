@@ -106,6 +106,46 @@ class PendingRecordsIntegrationTest {
     assertThat(first).containsKey("dueOn");
   }
 
+  @Test
+  void legacyMovementWritesIgnoreValueDatesInApiAndProvenance() {
+    var pending = finance.createMovement(map("accountId", account, "description", "Legacy caller",
+        "amount", "100.00", "direction", "DEBIT", "valueOn", "not a date",
+        "value_on", "2026-02-02", "validate", false));
+    UUID id = (UUID) pending.get("id");
+    assertThat(pending).containsEntry("bookedOn", null).doesNotContainKeys("valueOn", "value_on");
+    assertThat(finance.movement(id)).doesNotContainKeys("valueOn", "value_on");
+    assertThat(rows(finance.movements(Map.of()), "items"))
+        .allSatisfy(row -> assertThat(row).doesNotContainKeys("valueOn", "value_on"));
+
+    var update = new LinkedHashMap<>(pending);
+    update.put("bookedOn", "2026-02-01");
+    update.put("valueOn", "2026-02-02");
+    update.put("value_on", "not a date");
+    var edited = finance.editMovement(id, update);
+    assertThat(edited).containsEntry("bookedOn", java.time.LocalDate.of(2026, 2, 1))
+        .doesNotContainKeys("valueOn", "value_on");
+    assertThat(Json.object(store.get(BankMovement.class, id).fieldProvenance))
+        .containsKey("bookedOn").doesNotContainKeys("valueOn", "value_on");
+  }
+
+  @Test
+  void statementDraftWritesDiscardLegacyValueDatesAndKeepOtherFindings() {
+    var doc = source("STATEMENT", "Legacy value dates.pdf");
+    store.flush();
+    var row = map("bookedOn", null, "description", "Old import", "valueOn", "not a date",
+        "value_on", "2026-02-02", "issues", List.of("data ilegível em valueOn", "Rever descrição"));
+    publisher.edit(doc.id, map("version", doc.version, "draft",
+        map("valueOn", "2026-02-03", "movements", List.of(row))), documents);
+
+    var draft = Json.object(doc.draft);
+    assertThat(draft).doesNotContainKeys("valueOn", "value_on");
+    assertThat(rows(draft, "movements")).singleElement().satisfies(saved -> assertThat(saved)
+        .containsEntry("bookedOn", null).containsEntry("description", "Old import")
+        .containsEntry("issues", List.of("Rever descrição")).doesNotContainKeys("valueOn", "value_on"));
+    assertThat(doc.fieldProvenance).doesNotContain("valueOn", "value_on");
+    assertThat(row).containsKey("valueOn");
+  }
+
   @Test void undatedPendingRecordsSurviveEveryPeriodFilterAndSortBeforeDatedRecords() {
     var pending=invoice(null,"UNDATED-I","100.00",false);var bank=movement(null,"UNDATED-M","60.00",false);
     invoice("2026-01-02","DATED-I","25.00",true);movement("2026-01-02","DATED-M","25.00",true);

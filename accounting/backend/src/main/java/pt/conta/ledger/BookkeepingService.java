@@ -227,7 +227,6 @@ public class BookkeepingService {
       throw DomainException.missing();
     movement.bankReference = text(input, "bankReference");
     movement.bookedOn = date(input, "bookedOn");
-    movement.valueOn = date(input, "valueOn");
     movement.occurredAt =
         text(input, "occurredAt") == null ? null : LocalTime.parse(text(input, "occurredAt"));
     movement.description = text(input, "description");
@@ -872,8 +871,6 @@ public class BookkeepingService {
         m.bankReference,
         "bookedOn",
         m.bookedOn,
-        "valueOn",
-        m.valueOn,
         "occurredAt",
         m.occurredAt,
         "description",

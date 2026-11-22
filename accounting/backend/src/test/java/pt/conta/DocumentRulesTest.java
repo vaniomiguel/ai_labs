@@ -9,6 +9,7 @@ import java.util.*;
 import org.apache.poi.xssf.usermodel.XSSFWorkbook;
 import org.junit.jupiter.api.Test;
 import pt.conta.ai.*;
+import pt.conta.document.DraftSanitizer;
 import pt.conta.document.PortugueseDocumentParser;
 import pt.conta.history.*;
 import pt.conta.reconciliation.MatchingRules;
@@ -51,12 +52,28 @@ class DocumentRulesTest {
 
   @Test
   void bankRowsKeepAmountsWhenDateOrDirectionCannotBeRead() {
-    var parsed = new PortugueseDocumentParser().statement("32/01/2026 Compra de teste 12,00\n");
+    var parsed = new PortugueseDocumentParser().statement("32/01/2026 02/02/2026 Compra de teste 12,00\n");
     var rows = Inputs.rows(parsed, "movements");
     assertThat(rows).hasSize(1);
     assertThat(rows.getFirst().get("bookedOn")).isNull();
     assertThat(rows.getFirst().get("direction")).isNull();
     assertThat(rows.getFirst().get("amount")).isEqualTo("12.00");
+  }
+
+  @Test
+  void twoDateBankRowsUseBookingDatesAndSkipValueDates() {
+    var parsed = new PortugueseDocumentParser().statement(
+        "02/01/2026 03/01/2026 Compra de teste -12,00\n"
+            + "04/01/2026 31/02/2026 Reembolso 3,00 C\n");
+    var draft = DraftSanitizer.sanitize("STATEMENT", parsed);
+    assertThat(draft).containsEntry("validate", true);
+    assertThat(Inputs.rows(draft, "movements")).satisfiesExactly(
+        debit -> assertThat(debit).containsEntry("bookedOn", "2026-01-02")
+            .containsEntry("description", "Compra de teste").containsEntry("amount", "12.00")
+            .containsEntry("direction", "DEBIT").containsEntry("issues", List.of()).doesNotContainKey("valueOn"),
+        credit -> assertThat(credit).containsEntry("bookedOn", "2026-01-04")
+            .containsEntry("description", "Reembolso").containsEntry("amount", "3.00")
+            .containsEntry("direction", "CREDIT").containsEntry("issues", List.of()).doesNotContainKey("valueOn"));
   }
 
   @Test

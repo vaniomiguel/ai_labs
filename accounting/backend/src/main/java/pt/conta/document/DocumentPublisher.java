@@ -220,7 +220,9 @@ public class DocumentPublisher {
       var current = Json.object(doc.draft);
       var aligned = protection.align(doc.kind, current, incoming);
       var changes = protection.changes(doc.kind, current, aligned, Json.object(doc.fieldProvenance));
-      offerDifferences(doc, current, aligned, changes, Json.value(evidence));
+      Object proof = Json.value(evidence);
+      if (doc.kind.equals("STATEMENT")) proof = DraftSanitizer.withoutStatementValueDateEvidence(proof);
+      offerDifferences(doc, current, aligned, changes, proof);
     } catch (DomainException e) {
       review.open(doc.id, "document", doc.id, "AI_STRUCTURE_REVIEW", e.getMessage());
     }

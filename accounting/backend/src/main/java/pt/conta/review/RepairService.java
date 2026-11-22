@@ -189,10 +189,11 @@ public class RepairService {
   private Map<String, Object> repairProposal(JobQueue.Claim claim, Snapshot snapshot,
       SourceDocument doc, Map<String, Object> response) {
     var proposal = new LinkedHashMap<>(response);
+    if (doc.kind.equals("STATEMENT")) DraftSanitizer.removeStatementValueDateFindings(proposal);
     if (response.get("draft") instanceof Map<?, ?> raw) {
       var draft = DraftSanitizer.sanitize(doc.kind, Json.object(Json.write(raw)));
       Set<Object> issues = new LinkedHashSet<>();
-      if (response.get("issues") instanceof List<?> list) issues.addAll(list);
+      if (proposal.get("issues") instanceof List<?> list) issues.addAll(list);
       if (draft.get("issues") instanceof List<?> list) issues.addAll(list);
       draft.put("issues", new ArrayList<>(issues));
       proposal.put("draft", draft);

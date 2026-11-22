@@ -283,12 +283,6 @@
               "null"
             ]
           },
-          "valueOn": {
-            "type": [
-              "string",
-              "null"
-            ]
-          },
           "occurredAt": {
             "type": [
               "string",

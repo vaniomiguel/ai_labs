@@ -122,26 +122,25 @@ public class PortugueseDocumentParser {
     var issues = new ArrayList<String>();
     var pattern =
         Pattern.compile(
-            "(?m)^\\s*(\\d{2}[/-]\\d{2}[/-]\\d{4})\\s+(?:(\\d{2}[/-]\\d{2}[/-]\\d{4})\\s+)?(.+?)\\s+([+-]?"
+            "(?m)^\\s*(?<booked>\\d{2}[/-]\\d{2}[/-]\\d{4})\\s+"
+                + "(?:\\d{2}[/-]\\d{2}[/-]\\d{4}\\s+)?(?<description>.+?)\\s+(?<amount>[+-]?"
                 + AMOUNT
-                + ")\\s*(D|C|DB|CR|DEBITO|CREDITO)?\\s*$",
+                + ")\\s*(?<flag>D|C|DB|CR|DEBITO|CREDITO)?\\s*$",
             Pattern.CASE_INSENSITIVE);
     var matcher = pattern.matcher(text);
     while (matcher.find()) {
       try {
-        String raw = matcher.group(4);
-        String flag = Objects.toString(matcher.group(5), "").toUpperCase();
+        String raw = matcher.group("amount");
+        String flag = Objects.toString(matcher.group("flag"), "").toUpperCase();
         boolean known = raw.startsWith("-") || raw.startsWith("+") || !flag.isBlank();
         var rowIssues = new ArrayList<String>();
         if (!known) rowIssues.add("O movimento não indica débito ou crédito");
         rows.add(
             Inputs.map(
                 "bookedOn",
-                safeBankDate(matcher.group(1), rowIssues),
-                "valueOn",
-                matcher.group(2) == null ? null : safeBankDate(matcher.group(2), rowIssues),
+                safeBankDate(matcher.group("booked"), rowIssues),
                 "description",
-                matcher.group(3).trim(),
+                matcher.group("description").trim(),
                 "amount",
                 amount(raw.replaceFirst("^[+-]", "")),
                 "direction",

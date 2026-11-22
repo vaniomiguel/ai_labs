@@ -19,7 +19,6 @@ public class BankMovement extends BaseEntity {
   public UUID accountId;
   public String bankReference;
   public LocalDate bookedOn;
-  public LocalDate valueOn;
   public LocalTime occurredAt;
 
   @Column(columnDefinition = "text")
