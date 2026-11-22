@@ -3,71 +3,80 @@
   @for(invoice of data.invoices;track $index){<details [open]="true"><summary>Comprovativo {{$index+1}} · {{invoice.supplier || 'Por identificar'}}</summary><record-fields kind="INVOICE" [data]="invoice" [accounts]="accounts" (changed)="changed.emit()" /></details>}
 } @else {
 @if(kind==='INVOICE'){
+<ng-template #fieldHint let-path>
+  @if(fieldHints(path); as hints){
+    <div class="invoice-field-error" [id]="hintId(path)">
+      @for(hint of hints; track hint){<span>{{hint}}</span>}
+    </div>
+  }
+</ng-template>
 <div class="form-grid">
-  <label
-    >Fornecedor<input
-      matInput
-      [(ngModel)]="data.supplier"
-      placeholder="Nome do fornecedor"
-  /></label>
-  <label
-    >NIF do fornecedor<input matInput [(ngModel)]="data.supplierTaxId"
-  /></label>
-  <label>Número da fatura<input matInput [(ngModel)]="data.number" /></label>
-  <label
-    >Tipo<select [(ngModel)]="data.type">
+  <div class="invoice-field">
+    <label>Fornecedor<input matInput [(ngModel)]="data.supplier" placeholder="Nome do fornecedor"
+      [attr.aria-invalid]="hintId('supplier') ? 'true' : null" [attr.aria-describedby]="hintId('supplier')" /></label>
+    <ng-container *ngTemplateOutlet="fieldHint; context: { $implicit: 'supplier' }" />
+  </div>
+  <div class="invoice-field">
+    <label>NIF do fornecedor<input matInput [(ngModel)]="data.supplierTaxId"
+      [attr.aria-invalid]="hintId('supplierTaxId') ? 'true' : null" [attr.aria-describedby]="hintId('supplierTaxId')" /></label>
+    <ng-container *ngTemplateOutlet="fieldHint; context: { $implicit: 'supplierTaxId' }" />
+  </div>
+  <div class="invoice-field">
+    <label>Número da fatura<input matInput [(ngModel)]="data.number"
+      [attr.aria-invalid]="hintId('number') ? 'true' : null" [attr.aria-describedby]="hintId('number')" /></label>
+    <ng-container *ngTemplateOutlet="fieldHint; context: { $implicit: 'number' }" />
+  </div>
+  <div class="invoice-field">
+    <label>Tipo<select [(ngModel)]="data.type" [attr.aria-invalid]="hintId('type') ? 'true' : null"
+        [attr.aria-describedby]="hintId('type')">
       <option value="INVOICE">Fatura</option>
       <option value="CREDIT_NOTE">Nota de crédito</option>
-    </select></label
-  >
-  <label
-    >Data de emissão<input type="date" [(ngModel)]="data.issuedOn"
-  /></label>
-  <label
-    >Total com IVA<input
-      inputmode="decimal"
-      [(ngModel)]="data.total"
-      placeholder="0.00"
-  /></label>
-  <label
-    >Base sem IVA<input
-      inputmode="decimal"
-      [(ngModel)]="data.net"
-      placeholder="Desconhecida"
-  /></label>
-  <label
-    >IVA<input
-      inputmode="decimal"
-      [(ngModel)]="data.tax"
-      placeholder="Desconhecido"
-  /></label>
-  <label
-    >Desconto<input inputmode="decimal" [(ngModel)]="data.discount"
-  /></label>
-  <label>Moeda<input [(ngModel)]="data.currency" placeholder="EUR" /></label>
+    </select></label>
+    <ng-container *ngTemplateOutlet="fieldHint; context: { $implicit: 'type' }" />
+  </div>
+  <div class="invoice-field">
+    <label>Data de emissão<input type="date" [(ngModel)]="data.issuedOn"
+      [attr.aria-invalid]="hintId('issuedOn') ? 'true' : null" [attr.aria-describedby]="hintId('issuedOn')" /></label>
+    <ng-container *ngTemplateOutlet="fieldHint; context: { $implicit: 'issuedOn' }" />
+  </div>
+  @for(field of invoiceAmounts; track field.key){
+    <div class="invoice-field">
+      @let hint = hintId(field.key);
+      <label>{{field.label}}<input inputmode="decimal" [(ngModel)]="data[field.key]" [placeholder]="field.placeholder"
+        [attr.aria-invalid]="hint ? 'true' : null" [attr.aria-describedby]="hint" /></label>
+      <ng-container *ngTemplateOutlet="fieldHint; context: { $implicit: field.key }" />
+    </div>
+  }
+  <div class="invoice-field">
+    <label>Moeda<input [(ngModel)]="data.currency" placeholder="EUR"
+      [attr.aria-invalid]="hintId('currency') ? 'true' : null" [attr.aria-describedby]="hintId('currency')" /></label>
+    <ng-container *ngTemplateOutlet="fieldHint; context: { $implicit: 'currency' }" />
+  </div>
   @if(!data.id){<label
     >Categorias · separar por ;<input
       [(ngModel)]="categories"
       placeholder="Combustível; Deslocações"
   /></label>}
 </div>
-@if(data.type==='CREDIT_NOTE'){
+@if(data.type==='CREDIT_NOTE' || hintId('relatedInvoiceId')){
 <label
   >Procurar fatura original<input
     #invoiceSearch
     (input)="searchInvoices(invoiceSearch.value)"
     placeholder="Fornecedor ou número"
 /></label>
-<label
-  >Fatura original<select [(ngModel)]="data.relatedInvoiceId">
+<div class="invoice-field">
+<label>Fatura original<select [(ngModel)]="data.relatedInvoiceId"
+    [attr.aria-invalid]="hintId('relatedInvoiceId') ? 'true' : null" [attr.aria-describedby]="hintId('relatedInvoiceId')">
     <option [ngValue]="null">Selecionar</option>
     @for(i of invoiceOptions();track i.id){
     <option [value]="i.id">
       {{i.number||i.supplier}} · {{money(i.total)}}
     </option>
     }
-  </select></label
->
+  </select></label>
+<ng-container *ngTemplateOutlet="fieldHint; context: { $implicit: 'relatedInvoiceId' }" />
+</div>
 }
 <label
   >Descrição<textarea [(ngModel)]="data.description" rows="3"></textarea>
@@ -77,35 +86,33 @@
   <button mat-stroked-button type="button" (click)="addLine()">+ Artigo</button>
 </div>
 <div class="table-scroll">
-  <table class="editable">
+  <table class="editable invoice-articles">
     <thead>
       <tr>
         <th>Descrição</th>
-        <th>Quantidade</th>
-        <th>Preço unitário</th>
-        <th>Base</th>
-        <th>IVA</th>
-        <th>Desconto</th>
-        <th>Total</th>
+        @for(field of articleAmounts; track field.key){<th>{{field.label}}</th>}
         <th></th>
       </tr>
     </thead>
     <tbody>
-      @for(line of lines;track $index){
+      @for(line of lines;track $index; let rowIndex = $index){
       <tr>
         <td><input [(ngModel)]="line.description" /></td>
-        <td><input [(ngModel)]="line.quantity" inputmode="decimal" /></td>
-        <td><input [(ngModel)]="line.unitPrice" inputmode="decimal" /></td>
-        <td><input [(ngModel)]="line.net" inputmode="decimal" /></td>
-        <td><input [(ngModel)]="line.tax" inputmode="decimal" /></td>
-        <td><input [(ngModel)]="line.discount" inputmode="decimal" /></td>
-        <td><input [(ngModel)]="line.total" inputmode="decimal" /></td>
+        @for(field of articleAmounts; track field.key){
+          @let path = 'lines.' + rowIndex + '.' + field.key;
+          @let hint = hintId(path);
+          <td>
+            <input [(ngModel)]="line[field.key]" inputmode="decimal" [attr.aria-label]="field.label + ' · artigo ' + (rowIndex + 1)"
+              [attr.aria-invalid]="hint ? 'true' : null" [attr.aria-describedby]="hint" />
+            <ng-container *ngTemplateOutlet="fieldHint; context: { $implicit: path }" />
+          </td>
+        }
         <td>
           <button
             type="button"
             class="icon-button"
             aria-label="Remover artigo"
-            (click)="lines.splice($index,1);changed.emit()"
+            (click)="removeLine(rowIndex)"
           >
             ×
           </button>

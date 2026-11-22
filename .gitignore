@@ -3,6 +3,11 @@ target/
 *.iml
 .env
 
+# Accounting runtime data and backups
+/data/
+database.backup
+documents.tar
+
 # Compiled and packaged files
 *.class
 *.jar

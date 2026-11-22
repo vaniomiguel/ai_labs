@@ -6,6 +6,7 @@
   --pale: #edf3ed;
   --bg: #f6f8f4;
   --orange: #a06e25;
+  --error-ink: #a24f40;
   --mat-sys-primary: #236b52;
   --mat-sys-on-primary: #fff;
   font-family:
@@ -975,7 +976,7 @@ pre {
 }
 .error {
   background: #fff0ec;
-  color: #a24f40;
+  color: var(--error-ink);
   padding: 12px;
   border-radius: 5px;
   font-size: 12px;
@@ -1119,6 +1120,36 @@ pre {
 }
 .editable td:first-child input {
   min-width: 140px;
+}
+.invoice-field {
+  margin-bottom: 14px;
+}
+.invoice-field label {
+  margin-bottom: 0;
+}
+record-fields [aria-invalid="true"] {
+  border-color: var(--error-ink);
+}
+record-fields [aria-invalid="true"]:focus-visible {
+  outline: 2px solid var(--error-ink);
+  box-shadow: none;
+}
+.invoice-field-error {
+  margin-top: 4px;
+  color: var(--error-ink);
+  font-size: 11px;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+.invoice-field-error span {
+  display: block;
+}
+.invoice-articles td {
+  vertical-align: top;
+}
+.invoice-articles .invoice-field-error {
+  inline-size: 0;
+  min-inline-size: 100%;
 }
 .editable-fields .section-heading {
   padding: 20px 0 12px;

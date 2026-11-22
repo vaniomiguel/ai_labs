@@ -17,6 +17,7 @@ import pt.conta.jobs.JobQueue;
 import pt.conta.reconciliation.*;
 import pt.conta.review.ReviewService;
 import pt.conta.shared.*;
+import pt.conta.shared.FieldValidationException.Issue;
 import pt.conta.shared.Types.*;
 
 /** Coordinates transactional edits, monetary allocations and append-only financial effects. */
@@ -26,6 +27,7 @@ public class BookkeepingService {
   private final ThreadLocal<Boolean> batching = ThreadLocal.withInitial(() -> false);
   private final pt.conta.category.CategoryService categories;
   private final Store store;
+  private final InvoiceValidation invoiceValidation;
   private final FieldProtection protection;
   private final SourceRecordSync sourceSync;
   private final LedgerService ledger;
@@ -38,6 +40,7 @@ public class BookkeepingService {
 
   public BookkeepingService(
       Store store,
+      InvoiceValidation invoiceValidation,
       LedgerService ledger,
       AuditService audit,
       ReviewService review,
@@ -50,6 +53,7 @@ public class BookkeepingService {
     this.sourceSync = sourceSync;
     this.categories = categories;
     this.store = store;
+    this.invoiceValidation = invoiceValidation;
     this.ledger = ledger;
     this.audit = audit;
     this.review = review;
@@ -111,46 +115,19 @@ public class BookkeepingService {
     invoice.fieldProvenance=Json.write(ownership);
     var sourceEdit = human && !batching.get() ? sourceSync.prepare(invoice, input) : null;
     var previous = invoice.reviewStatus;
-    invoice.issuedOn = date(input, "issuedOn");
-    invoice.number = text(input, "number");
-    invoice.supplier = text(input, "supplier");
-    invoice.supplierTaxId = text(input, "supplierTaxId");
-    invoice.description = text(input, "description");
-    invoice.currency = Objects.requireNonNullElse(text(input, "currency"), "EUR");
-    invoice.total = Money.optional(input.get("total"));
-    invoice.net = Money.optional(input.get("net"));
-    invoice.tax = Money.optional(input.get("tax"));
-    invoice.discount = Money.optional(input.get("discount"));
-    invoice.type = enumeration(input, "type", InvoiceType.class, InvoiceType.INVOICE);
-    invoice.relatedInvoiceId = uuid(input, "relatedInvoiceId");
+    var draft = new InvoiceDraft(invoice, input);
+    var issues = invoiceValidation.issues(invoice, draft.lines(), draft.issues());
+    draft.requireReadable(issues);
     if (input.containsKey("documentId")) invoice.documentId = uuid(input, "documentId");
     if (invoice.documentId != null && store.get(SourceDocument.class, invoice.documentId).deleted)
       throw DomainException.missing();
     invoice.origin = origin;
     invoice.author = human ? audit.actor() : origin;
     invoice.manuallyConfirmed |= human && flag(input, "validate");
-    store.all(InvoiceLine.class).stream()
-        .filter(l -> l.invoiceId.equals(invoice.id))
-        .toList()
-        .forEach(store::remove);
-    int index = 0;
-    for (var item : rows(input, "lines")) {
-      var line = new InvoiceLine();
-      line.invoiceId = invoice.id;
-      line.position = index++;
-      line.description = text(item, "description");
-      line.quantity = precise(item.get("quantity"));
-      line.unitPrice = precise(item.get("unitPrice"));
-      line.net = Money.optional(item.get("net"));
-      line.tax = Money.optional(item.get("tax"));
-      line.discount = Money.optional(item.get("discount"));
-      line.total = Money.optional(item.get("total"));
-      store.add(line);
-    }
-    var errors = invoiceErrors(invoice);
     boolean requested = validationRequested(input, human, previous, "invoice", invoice.id);
-    if (human && requested && !errors.isEmpty())
-      throw DomainException.invalid(String.join("; ", errors));
+    requireInvoiceValidation(issues, human && requested);
+    replaceInvoiceLines(invoice.id, draft.lines());
+    var errors = FieldValidationException.messages(issues);
     invoice.reviewStatus =
         requested && errors.isEmpty()
             ? human
@@ -178,6 +155,33 @@ public class BookkeepingService {
     audit.record(
         id == null ? "CREATE" : "UPDATE", "invoice", invoice.id, before, invoiceView(invoice));
     return invoiceView(invoice);
+  }
+
+  private void requireInvoiceValidation(List<Issue> issues, boolean validate) {
+    var missingOriginal = issues.stream().filter(issue -> issue.code().equals(InvoiceValidation.ORIGINAL_NOT_FOUND))
+        .findFirst().orElse(null);
+    if (missingOriginal != null) throw new FieldValidationException(404, missingOriginal.message(), issues);
+    if (validate && !issues.isEmpty()) throw FieldValidationException.invalid(issues);
+  }
+
+  private void replaceInvoiceLines(UUID id, List<InvoiceLine> lines) {
+    store.all(InvoiceLine.class).stream()
+        .filter(line -> line.invoiceId.equals(id))
+        .toList()
+        .forEach(store::remove);
+    lines.forEach(store::add);
+  }
+
+  /** Checks the supplied editor values without storing them or changing the record's review state. */
+  @Transactional(readOnly = true)
+  public List<Issue> invoiceDraftIssues(UUID id, Map<String, Object> input) {
+    var invoice = new Invoice();
+    if (id != null) {
+      if (store.get(Invoice.class, id).deleted) throw DomainException.missing();
+      invoice.id = id;
+    }
+    var draft = new InvoiceDraft(invoice, input);
+    return invoiceValidation.issues(invoice, draft.lines(), draft.issues());
   }
 
   /**
@@ -310,62 +314,7 @@ public class BookkeepingService {
 
   /** Uses the same financial checks for an unpersisted proposal and for publication. */
   public List<String> invoiceErrors(Invoice invoice, List<InvoiceLine> lines) {
-    var errors = new ArrayList<String>();
-    if (invoice.issuedOn == null) errors.add("Falta a data da fatura");
-    if (invoice.supplier == null) errors.add("Falta o fornecedor");
-    if (invoice.total == null || invoice.total.signum() < 0) errors.add("Falta um total válido");
-    if (!"EUR".equals(invoice.currency))
-      errors.add("A moeda precisa de revisão: apenas EUR é suportado");
-    if (invoice.net != null
-        && invoice.tax != null
-        && invoice.total != null
-        && invoice.net.add(invoice.tax).compareTo(invoice.total) != 0)
-      errors.add("Base e IVA não coincidem com o total");
-    if (lines.stream().anyMatch(l -> l.total == null)) errors.add("Existem artigos sem total");
-    if (lines.stream()
-        .anyMatch(
-            l ->
-                l.net != null
-                    && l.tax != null
-                    && l.total != null
-                    && l.net.add(l.tax).compareTo(l.total) != 0))
-      errors.add("A base e o IVA de um artigo não coincidem com o seu total");
-    if (!lines.isEmpty()
-        && lines.stream().allMatch(l -> l.total != null)
-        && invoice.total != null) {
-      var sum = lines.stream().map(l -> l.total).reduce(Money.ZERO, BigDecimal::add);
-      if (sum.compareTo(invoice.total) != 0
-          && sum.subtract(Money.orZero(invoice.discount)).compareTo(invoice.total) != 0)
-        errors.add("Os artigos não explicam o total da fatura");
-    }
-    if (invoice.type == InvoiceType.CREDIT_NOTE && invoice.relatedInvoiceId == null)
-      errors.add("A nota de crédito precisa da fatura original");
-    if (invoice.relatedInvoiceId != null && invoice.relatedInvoiceId.equals(invoice.id))
-      errors.add("Uma fatura não pode referir-se a si própria");
-    else if (invoice.relatedInvoiceId != null) {
-      var original = store.get(Invoice.class, invoice.relatedInvoiceId);
-      if (original.deleted
-          || original.type != InvoiceType.INVOICE
-          || !original.currency.equals(invoice.currency))
-        errors.add("A fatura original é incompatível com a nota de crédito");
-    }
-    var duplicate =
-        store.all(Invoice.class).stream()
-            .anyMatch(
-                i ->
-                    !i.deleted
-                        && !i.id.equals(invoice.id)
-                        && invoice.number != null
-                        && invoice.number.equals(i.number)
-                        && Objects.equals(
-                            invoice.supplierTaxId != null
-                                ? invoice.supplierTaxId
-                                : MatchingRules.normalize(invoice.supplier),
-                            i.supplierTaxId != null
-                                ? i.supplierTaxId
-                                : MatchingRules.normalize(i.supplier)));
-    if (duplicate) errors.add("Existe outra fatura com o mesmo fornecedor e número");
-    return errors;
+    return FieldValidationException.messages(invoiceValidation.issues(invoice, lines, List.of()));
   }
 
   /** Reports this movement's required data and classification-direction conflicts. */
@@ -1222,12 +1171,5 @@ public class BookkeepingService {
   private int window() {
     return Integer.parseInt(
         settings.get("crossYearMonths", Integer.toString(properties.crossYearMonths())));
-  }
-
-  /** Retains six decimal places for quantities and unit prices without silently rounding. */
-  private BigDecimal precise(Object value) {
-    return value == null || value.toString().isBlank()
-        ? null
-        : new BigDecimal(value.toString()).setScale(6, RoundingMode.UNNECESSARY);
   }
 }

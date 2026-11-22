@@ -11,7 +11,10 @@ public class ApiErrors {
   /** Preserves the status and explanation of a business rule failure. */
   @ExceptionHandler(DomainException.class)
   ResponseEntity<ProblemDetail> domain(DomainException e) {
-    return problem(e.status, e.getMessage());
+    var response = problem(e.status, e.getMessage());
+    if (e instanceof FieldValidationException validation)
+      response.getBody().setProperty("issues", validation.issues);
+    return response;
   }
 
   /** Makes concurrent edits explicit rather than silently overwriting them. */

@@ -163,6 +163,34 @@ class FinancialIntegrationTest {
         .isEqualByComparingTo("40.00");
   }
 
+  @ParameterizedTest
+  @CsvSource({"1064.00, 97.00, 24.00, 1137.00", "1040.00, 97.00, 24.00, 1137.00", "1064.00, 97.00, , 1161.00"})
+  void invoiceTotalsAcceptSeparateAndAlreadyAppliedDiscounts(String net, String tax, String discount, String total) {
+    var input = map("issuedOn", "2026-01-30", "supplier", "Fornecedor exemplo", "validate", true,
+        "net", net, "tax", tax, "discount", discount, "total", total);
+    assertThat(book.invoiceDraftIssues(null, input)).isEmpty();
+    assertThat(book.saveInvoice(null, input)).containsEntry("total", total).containsEntry("manuallyConfirmed", true);
+  }
+
+  @Test
+  void invoiceRecheckKeepsArticleErrorsIndependentAndLeavesTheStoredDraftIntact() {
+    var input = map("issuedOn", "2026-01-30", "supplier", "Fornecedor exemplo", "number", "DISCOUNT-DRAFT",
+        "net", "1064.00", "tax", "97.00", "discount", "24.00", "total", "1140.00",
+        "lines", List.of(map("total", "1064.00"), map("total", "97.00"), map("discount", "-24.00")));
+    var stored = book.saveInvoice(null, input);
+    var id = (UUID) stored.get("id");
+    assertThat(book.invoiceDraftIssues(id, input)).containsExactly(
+        new FieldValidationException.Issue("INVOICE_TOTAL_MISMATCH", "Base e IVA não coincidem com o total",
+            "net", "tax", "discount", "total"),
+        new FieldValidationException.Issue("MISSING_LINE_TOTAL", "Existem artigos sem total", "lines.2.total"));
+
+    input.put("total", "1137.00");
+    assertThat(book.invoiceDraftIssues(id, input)).extracting(FieldValidationException.Issue::code)
+        .containsExactly("MISSING_LINE_TOTAL");
+    assertThat(book.invoiceView(store.get(Invoice.class, id))).containsEntry("total", "1140.00")
+        .containsEntry("manuallyConfirmed", false);
+  }
+
   @Test
   void legacyThreeFourTwoProducesThreeFourSix() {
     invoice("3.00", "2026-05-01", "LEG-1");

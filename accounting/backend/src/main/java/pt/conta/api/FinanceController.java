@@ -14,6 +14,7 @@ import pt.conta.invoice.*;
 import pt.conta.ledger.*;
 import pt.conta.reconciliation.*;
 import pt.conta.shared.*;
+import pt.conta.shared.FieldValidationException.Issue;
 import pt.conta.shared.Types.*;
 
 /** Versioned finance API; monetary output remains decimal strings rather than JSON numbers. */
@@ -77,6 +78,18 @@ public class FinanceController {
     var invoice = store.get(Invoice.class, id);
     if (invoice.deleted) throw DomainException.missing();
     return book.invoiceView(invoice);
+  }
+
+  /** Validates a new invoice's current editor values without saving a draft. */
+  @PostMapping("/invoices/validation")
+  public Map<String, List<Issue>> validateNewInvoice(@RequestBody Map<String, Object> body) {
+    return Map.of("issues", book.invoiceDraftIssues(null, body));
+  }
+
+  /** Validates an existing invoice's unsaved values without changing its review state. */
+  @PostMapping("/invoices/{id}/validation")
+  public Map<String, List<Issue>> validateInvoice(@PathVariable UUID id, @RequestBody Map<String, Object> body) {
+    return Map.of("issues", book.invoiceDraftIssues(id, body));
   }
 
   /** Creates an invoice, optionally already validated by the owner. */

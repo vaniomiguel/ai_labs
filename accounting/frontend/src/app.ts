@@ -1,4 +1,4 @@
-import { Component, signal, inject, computed, OnDestroy } from "@angular/core";
+import { Component, signal, inject, computed, OnDestroy, Injector, afterNextRender, viewChild } from "@angular/core";
 import { CommonModule, Location } from "@angular/common";
 import { HttpErrorResponse } from "@angular/common/http";
 import { ActivatedRouteSnapshot, NavigationEnd, Router, RouterOutlet } from "@angular/router";
@@ -13,7 +13,8 @@ import { AppliedFilters } from "./applied-filters";
 import { FinancialFilterBar } from "./financial-filters";
 import { DEFAULT_CATALOG_FILTERS, defaultFinancialFilters, financialQuery, initialFinancialFilters, isFinancialFilterView } from "./workspace-filters";
 import type { FinancialFilters } from "./workspace-filters";
-import { FieldsEditor } from "./fields-editor";
+import { FieldsEditor, type RecordFieldEdit } from "./fields-editor";
+import { InvoiceEditorValidation, invoiceSaveIssues, isInvoiceValidationConcern } from "./invoice-validation";
 import { PdfViewer } from "./pdf-viewer";
 import { ReconciliationTable } from "./reconciliation";
 import { CategoryTags } from "./category-tags";
@@ -87,6 +88,7 @@ export class AppComponent implements OnDestroy {
   private readonly router = inject(Router);
   private readonly location = inject(Location);
   private readonly snackBar = inject(MatSnackBar);
+  private readonly injector = inject(Injector);
   private readonly activeOperations = signal(0);
   readonly working = computed(() => this.activeOperations() > 0);
   readonly money = euros;
@@ -176,6 +178,8 @@ export class AppComponent implements OnDestroy {
   private processingRequest = 0;
   readonly editor = signal<any>(null);
   private editorRequest=0;
+  private readonly recordFields = viewChild<FieldsEditor>("recordFields");
+  readonly invoiceValidation = new InvoiceEditorValidation(this.api);
   readonly editorClassification = signal<Classification | null>(null);
   private editorClassificationRequest = 0;
   readonly categoryTarget = signal<{type:"invoice"|"movement";record:any}|null>(null);
@@ -451,6 +455,7 @@ export class AppComponent implements OnDestroy {
     this.routeLoading.set(false);
     this.error.set("");
     this.editor.set(null);
+    this.invoiceValidation.reset();
     this.editorClassification.set(null);
     this.reviewDocument.set(null);
     this.activeAlert.set(null);
@@ -775,6 +780,11 @@ export class AppComponent implements OnDestroy {
       ...suspended.draft, categories: record.categories, categoryDetails: record.categoryDetails,
       classification: record.classification,
     } : structuredClone(record));
+    const alert = this.activeAlert();
+    const validationAlert = alert?.status === "OPEN" && (alert.concerns ?? [alert]).some(
+      concern => isInvoiceValidationConcern(concern.code));
+    if (kind === "INVOICE" && (validationAlert || record.reviewIssues?.length))
+      this.invoiceValidation.start(this.editor());
     const timeline = this.loadRecordTimeline(kind, id);
     if (kind === "INVOICE" && this.routeKind() === "edit") {
       await Promise.all([timeline, this.loadInvoiceEditRepair(record, request)]);
@@ -869,7 +879,7 @@ export class AppComponent implements OnDestroy {
     if (stagedAlert) return this.saveRecordAlert(stagedAlert, validate);
     const request = this.editorRequest;
     const confirmation = validate ? this.categoryConfirmation() : undefined;
-    await this.run(async () => {
+    await this.runRecordSave(validate, async () => {
       const data = { ...this.editor(), validate };
       if (data.id) { delete data.categories; delete data.categoryDetails; delete data.classification; }
       const resource = `/${recordView(this.recordKind)}`;
@@ -890,7 +900,7 @@ export class AppComponent implements OnDestroy {
     const selectedAlert = this.recordRepairAlert();
     const revision = selectedAlert?.id === alert.id ? selectedAlert.version : alert.version;
     const confirmation = resolve ? this.categoryConfirmation() : undefined;
-    await this.run(async () => {
+    await this.runRecordSave(resolve, async () => {
       const record: ReviewableRecord = this.editor();
       await this.putRecordEdit(`/alerts/${alert.id}/draft`, {
         alertVersion: revision,
@@ -906,6 +916,38 @@ export class AppComponent implements OnDestroy {
       else this.showSaveSuccess(resolve ? "Validar e guardar" : "Guardar rascunho",
         this.recordSaveContext(resolve, record.issuedOn));
     });
+  }
+
+  private runRecordSave(validate: boolean, save: () => Promise<void>) {
+    const request = this.editorRequest;
+    const edits = this.reviewEdits();
+    return this.run(async () => {
+      try {
+        await save();
+      } catch (error) {
+        const issues = invoiceSaveIssues(error);
+        if (request !== this.editorRequest || this.recordKind !== "INVOICE" || !issues.length) throw error;
+        if (edits !== this.reviewEdits()) {
+          this.invoiceValidation.start(this.editor());
+          return;
+        }
+        this.invoiceValidation.report(issues);
+        if (validate) this.focusInvoiceError(request, edits);
+      }
+    });
+  }
+
+  private focusInvoiceError(request: number, edits: number) {
+    afterNextRender(() => {
+      if (request === this.editorRequest && edits === this.reviewEdits())
+        this.recordFields()?.focusFirstInvalid();
+    }, { injector: this.injector });
+  }
+
+  recordAlertMessages(alert: AlertView): string[] {
+    const concerns = alert.concerns?.length ? alert.concerns : [alert];
+    return concerns.filter(concern => alert.entityType !== "invoice" || alert.status !== "OPEN"
+      || !isInvoiceValidationConcern(concern.code)).map(concern => concern.message);
   }
 
   private async putRecordEdit(path: string, payload: object, categoryConfirmation: CategoryConfirmation | undefined) {
@@ -1139,7 +1181,11 @@ export class AppComponent implements OnDestroy {
     });
   }
   reviewEdits=signal(0);
-  draftEdited(){this.reviewEdits.update(n=>n+1);}
+  draftEdited(edit?: RecordFieldEdit | void) {
+    this.reviewEdits.update(n => n + 1);
+    const draft = this.editor();
+    if (this.recordKind === "INVOICE" && draft) this.invoiceValidation.edited(draft, edit?.removedLine);
+  }
   async repairUpdated(alert: AlertView) {
     const previous = this.activeAlert()?.repair;
     this.activeAlert.set(alert);
@@ -1475,6 +1521,7 @@ export class AppComponent implements OnDestroy {
     ++this.routeRequest;
     ++this.documentRequest;
     ++this.editorRequest;
+    this.invoiceValidation.reset();
     this.events?.close();
     clearTimeout(this.refreshTimer);
   }

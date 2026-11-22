@@ -1102,14 +1102,15 @@
           </section>
         }
         @if(activeAlert();as alert){
+          @let messages = recordAlertMessages(alert);
+          @if(messages.length){
           <section class="notice" aria-label="Questões do alerta">
             <strong>Questões do alerta</strong>
-            @if(alert.concerns?.length){
-              <ul>@for(concern of alert.concerns;track $index){<li>{{concern.message}}</li>}</ul>
-            }@else{<p>{{alert.message}}</p>}
+            <ul>@for(message of messages;track $index){<li>{{message}}</li>}</ul>
           </section>
+          }
         }@else if(data.reviewStatus==='OPEN'){<div class="notice" role="status"><strong>Este registo fica fora dos cálculos até ser validado.</strong>
-          @if(data.reviewIssues?.length){<ul>@for(issue of data.reviewIssues;track $index){<li>{{issue}}</li>}</ul>}@else{<p>Confirma os dados e escolhe Validar e guardar.</p>}
+          @if(recordKind!=='INVOICE' && data.reviewIssues?.length){<ul>@for(issue of data.reviewIssues;track $index){<li>{{issue}}</li>}</ul>}@else{<p>Confirma os dados e escolhe Validar e guardar.</p>}
           @if(data.documentId){<small>{{sourceName(data.documentId)}} · A validação aplica-se apenas a este item.</small>}
         </div>}
         @if(recordRepairAlert();as alert){
@@ -1120,11 +1121,12 @@
           }
         }
         @if(invoiceEditRepairError();as message){<p class="hint" role="status">{{message}}</p>}
-        <record-fields
+        <record-fields #recordFields
           [kind]="recordKind"
           [data]="data"
           [accounts]="state().accounts"
-          (changed)="draftEdited()"
+          [issues]="invoiceValidation.issues()"
+          (changed)="draftEdited($event)"
         />
         @if(showsRecordCategories()){
           <section class="record-categories" aria-labelledby="record-categories-title">

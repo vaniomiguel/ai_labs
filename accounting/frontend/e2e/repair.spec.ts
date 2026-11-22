@@ -37,6 +37,13 @@ async function setup(
       });
     });
     await page.route("**/api/v1/audit/invoices/" + recordId, route => reply(route, []));
+    await page.route("**/api/v1/invoices/" + recordId + "/validation", route => {
+      const { issuedOn, supplier } = route.request().postDataJSON();
+      return reply(route, { issues: [
+        ...(!issuedOn ? [{ code: "MISSING_DATE", message: "Falta a data da fatura", fields: ["issuedOn"] }] : []),
+        ...(!supplier ? [{ code: "MISSING_SUPPLIER", message: "Falta o fornecedor", fields: ["supplier"] }] : []),
+      ] });
+    });
     await page.route("**/api/v1/alerts/" + alertId + "/draft", async route => {
       const write = route.request().postDataJSON();
       state.saves.push(write);
@@ -194,7 +201,9 @@ test("record alert stages AI values locally and saves only the selected invoice"
   const sibling = {...valid(), id: siblingId, supplier: "Fornecedor de outro comprovativo"};
   const {state, open, dialog} = await setup(page, {invoices: [first, sibling]}, "record-alert");
   const supplier = dialog.getByLabel("Fornecedor", {exact: true});
-  await expect(dialog.getByRole("region", {name: "Questões do alerta"}).getByRole("listitem")).toHaveCount(2);
+  const concerns = dialog.getByRole("region", {name: "Questões do alerta"}).getByRole("listitem");
+  await expect(concerns).toHaveText(["Confirma o fornecedor no original"]);
+  await expect(dialog.getByLabel("Data de emissão", {exact: true})).toHaveAccessibleDescription("Falta a data da fatura");
   await expect(dialog.getByText(sibling.supplier, {exact: true})).toHaveCount(0);
   state.submitted = () => state.result({invoices: [{...first, supplier: "Fornecedor proposto"}, sibling]});
   await dialog.getByRole("button", {name: "✧ Pedir tentativa de correção à IA", exact: true}).click();
