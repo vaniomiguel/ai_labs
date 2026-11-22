@@ -1101,7 +1101,7 @@
           [accounts]="state().accounts"
           (changed)="draftEdited()"
         />
-        @if(data.id && (recordKind==='INVOICE' || activeAlert()?.status!=='OPEN')){
+        @if(showsRecordCategories()){
           <section class="record-categories" aria-labelledby="record-categories-title">
             @let categories = editorClassification()?.categories ?? data.categoryDetails ?? [];
             <ng-template #categoryHeader let-classifyButton>
@@ -1126,6 +1126,9 @@
             }@else{
               <ng-container [ngTemplateOutlet]="categoryHeader" />
               <category-tags [categories]="categories" [classification]="editorClassification()" />
+            }
+            @if(categoryConfirmation()){
+              <p class="hint">A validação confirma as categorias sugeridas pela IA.</p>
             }
           </section>
         }

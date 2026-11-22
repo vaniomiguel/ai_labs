@@ -8,6 +8,7 @@ import { MatButtonModule } from "@angular/material/button";
 import { MatSnackBar, MatSnackBarModule } from "@angular/material/snack-bar";
 import { A11yModule } from "@angular/cdk/a11y";
 import { AiExecutionItem, AlertView, Api, Classification, contextUsagePercent, contextWarningLabels, DocumentAttempt, euros, errorMessage, labels, JobCounts, JobItem, JobPage, ReconciliationEntry, ReconciliationPage, RepairApplyRequest, RepairPreview, ReviewableRecord } from "./api";
+import type { CategoryConfirmation } from "./api";
 import { AppliedFilters } from "./applied-filters";
 import { FinancialFilterBar } from "./financial-filters";
 import { DEFAULT_CATALOG_FILTERS, defaultFinancialFilters, financialQuery, initialFinancialFilters, isFinancialFilterView } from "./workspace-filters";
@@ -145,6 +146,16 @@ export class AppComponent implements OnDestroy {
   readonly categoryTarget = signal<{type:"invoice"|"movement";record:any}|null>(null);
   readonly reviewDocument = signal<any>(null);
   readonly activeAlert = signal<AlertView | null>(null);
+  readonly showsRecordCategories = computed(() => Boolean(this.editor()?.id)
+    && (this.recordKind === "INVOICE" || this.activeAlert()?.status !== "OPEN"));
+  readonly categoryConfirmation = computed<CategoryConfirmation | undefined>(() => {
+    const classification = this.editorClassification();
+    if (!this.showsRecordCategories() || !classification) return;
+    const categoryIds = classification.categories
+      .filter(category => category.origins.length === 1 && category.origins[0] === "AI")
+      .map(category => category.id);
+    if (categoryIds.length) return { version: classification.version, categoryIds };
+  });
   readonly alertSource = signal<RecordAlertSource | null>(null);
   private stagedRepairs: RepairApplyRequest[] = [];
   readonly recordAlertDocument = computed(() => {
@@ -433,7 +444,7 @@ export class AppComponent implements OnDestroy {
   /** Reloads server-derived amounts; the browser never calculates financial balances. */
   async refresh(refreshGroup = true) {
     if (refreshGroup && this.routeKind() === "group") void this.refreshGroup();
-    void this.refreshInvoiceClassification();
+    void this.refreshRecordClassification();
     const view = this.view();
     if (view === "processing") return this.loadProcessing();
     if (view === "assistant") return this.loadAssistant();
@@ -676,12 +687,12 @@ export class AppComponent implements OnDestroy {
     if (request === this.routeRequest) this.timeline.set(history);
   }
 
-  private async refreshInvoiceClassification() {
+  private async refreshRecordClassification() {
     const id = this.editor()?.id;
-    if (this.recordKind !== "INVOICE" || !id) return;
+    if (!id || !this.showsRecordCategories()) return;
     const editorRequest = this.editorRequest;
     const request = ++this.editorClassificationRequest;
-    const record = await this.fetchRecord("INVOICE", id).catch(() => null);
+    const record = await this.fetchRecord(this.recordKind, id).catch(() => null);
     if (!record || editorRequest !== this.editorRequest || request !== this.editorClassificationRequest) return;
     this.editorClassification.set(record.classification ?? null);
   }
@@ -719,15 +730,15 @@ export class AppComponent implements OnDestroy {
     if (this.working() || !this.editor()) return;
     const alert = this.activeAlert();
     if (alert?.status === "OPEN") return this.saveRecordAlert(alert, validate);
-    const request=this.editorRequest;
+    const request = this.editorRequest;
+    const confirmation = validate ? this.categoryConfirmation() : undefined;
     await this.run(async () => {
       const data = { ...this.editor(), validate };
       if (data.id) { delete data.categories; delete data.categoryDetails; delete data.classification; }
-      const resource =
-        this.recordKind === "INVOICE" ? "/invoices" : "/movements";
-      if (data.id) await this.api.put(resource + "/" + data.id, data);
+      const resource = `/${recordView(this.recordKind)}`;
+      if (data.id) await this.putRecordEdit(`${resource}/${data.id}`, data, confirmation);
       else await this.api.post(resource, data);
-      if(request!==this.editorRequest){await this.refresh();return;}
+      if (request !== this.editorRequest) { await this.refresh(); return; }
       this.closeRoute();
       this.showSaveSuccess(
         validate ? "Validar e guardar" : "Guardar rascunho",
@@ -738,20 +749,34 @@ export class AppComponent implements OnDestroy {
 
   private async saveRecordAlert(alert: AlertView, resolve: boolean) {
     const request = this.editorRequest;
+    const confirmation = resolve ? this.categoryConfirmation() : undefined;
     await this.run(async () => {
       const record: ReviewableRecord = this.editor();
-      await this.api.put("/alerts/" + alert.id + "/draft", {
+      await this.putRecordEdit(`/alerts/${alert.id}/draft`, {
         alertVersion: alert.version,
         recordVersion: record.version,
         documentVersion: record.documentVersion,
         draft: record,
         resolve,
         repairs: this.stagedRepairs,
-      });
+      }, confirmation);
       if (request !== this.editorRequest) { await this.refresh(); return; }
       this.closeRoute();
       this.showSaveSuccess(resolve ? "Validar e resolver" : "Guardar sem resolver");
     });
+  }
+
+  private async putRecordEdit(path: string, payload: object, categoryConfirmation: CategoryConfirmation | undefined) {
+    const request = this.editorRequest;
+    try {
+      await this.api.put(path, { ...payload, categoryConfirmation });
+    } catch (error) {
+      if (categoryConfirmation && error instanceof HttpErrorResponse && error.status === 409
+          && request === this.editorRequest) {
+        await this.refreshRecordClassification();
+      }
+      throw error;
+    }
   }
   private recordSaveContext(validate: boolean, date: string | null): string {
     if (!validate) return "Rascunho guardado; fica fora dos saldos.";

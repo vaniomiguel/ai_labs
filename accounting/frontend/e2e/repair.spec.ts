@@ -161,7 +161,10 @@ test("AI category classification in an invoice alert preserves staged correction
   expect(state.saves).toHaveLength(0);
   await dialog.getByRole("button", { name: "Validar e resolver", exact: true }).click();
   await expect(dialog).not.toBeVisible();
-  expect(state.saves).toMatchObject([{ resolve: true, draft: { supplier: "Fornecedor proposto" }, repairs: [{ selectedItems: [recordId] }] }]);
+  expect(state.saves).toMatchObject([{
+    resolve: true, draft: { supplier: "Fornecedor proposto" }, repairs: [{ selectedItems: [recordId] }],
+    categoryConfirmation: { version: 2, categoryIds: ["insurance"] },
+  }]);
 });
 
   test('editing the invoice date reaches repair previews and validation requests', async ({page}) => {

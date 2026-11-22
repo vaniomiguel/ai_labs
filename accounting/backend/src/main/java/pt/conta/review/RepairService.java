@@ -332,7 +332,8 @@ public class RepairService {
     }
     if (!(body.get("draft") instanceof Map<?, ?> raw) || !(body.get("resolve") instanceof Boolean resolve))
       throw DomainException.invalid("O rascunho e a decisão de validação são obrigatórios.");
-    var input = map("version", target.record().version, "validate", resolve);
+    var input = map("version", target.record().version, "validate", resolve,
+        "categoryConfirmation", body.get("categoryConfirmation"));
     for (String field : protection.fields(invoice ? "INVOICE" : "STATEMENT"))
       input.put(field, raw.containsKey(field) ? raw.get(field) : target.values().get(field));
     var decisions = stagedDecisions(alert, body, input);

@@ -61,6 +61,11 @@ export interface Classification {
   categories: CategoryDetail[]; rejectedCategoryIds: string[]; catalogRevision: number;
 }
 
+export interface CategoryConfirmation {
+  version: number;
+  categoryIds: string[];
+}
+
 export interface ReviewableRecord {
   id: string; version: number; documentId: string | null;
   documentVersion: number | null; fieldProvenance: Record<string, FieldDecision>; reviewStatus: string; reviewIssues: string[];

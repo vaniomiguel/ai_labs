@@ -218,6 +218,13 @@ test("invoice editor retries AI category review and refreshes labels without rep
   }));
   await mockRecord(page, "invoice", invoiceId, draft);
   await page.route(`**/api/v1/invoices/${invoiceId}`, route => {
+    if (route.request().method() === "PUT") {
+      expect(route.request().postDataJSON()).toMatchObject({
+        version: 0, validate: true, supplier: "Fornecedor editado localmente",
+        categoryConfirmation: { version: classification.version, categoryIds: [revised.id] },
+      });
+      return route.fulfill({ json: { id: invoiceId } });
+    }
     expect(route.request().method()).toBe("GET");
     return route.fulfill({ json: { ...draft, id: invoiceId, version: 0, classification, categoryDetails: classification.categories } });
   });
@@ -255,6 +262,8 @@ test("invoice editor retries AI category review and refreshes labels without rep
   await expect(supplier).toHaveValue("Fornecedor editado localmente");
   await expect(page).toHaveURL(invoicePath);
   expect(posts).toBe(2);
+  await editor.getByRole("button", { name: "Validar e guardar", exact: true }).click();
+  await expect(editor).not.toBeVisible();
 });
 
 test("alert review restores the original and its alert context through browser history", async ({ page }) => {

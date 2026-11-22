@@ -203,6 +203,8 @@ O catálogo usa a referência local `backend/src/main/resources/category-referen
 
 As listagens mostram duas etiquetas e permitem expandir as restantes. **Editar categorias** permite selecionar várias, criar uma categoria e consultar a origem e a justificação. Retirar uma etiqueta guarda uma rejeição: a IA e a herança não a repõem até **Permitir IA nas removidas**. Estas decisões têm uma versão independente das edições financeiras.
 
+Ao validar uma fatura ou um movimento, as etiquetas sugeridas pela IA que estão visíveis no editor passam a ser escolhas do utilizador. Podem ser alteradas em **Editar categorias**. As etiquetas herdadas continuam a acompanhar as faturas associadas.
+
 Em **Categorias e contas**, é possível renomear, mudar de família, editar sinónimos, fundir, arquivar e proteger categorias. As alterações manuais ficam protegidas por omissão; podem ser desbloqueadas individualmente ou através de **Permitir evolução automática**. As famílias de referência permanecem protegidas perante a IA. Arquivar impede novas atribuições e conserva as etiquetas históricas; só categorias sem utilizações nem filhas podem ser eliminadas definitivamente.
 
 A evolução automática generaliza variantes e funde duplicados através de identidades preservadas e encaminhamentos: por exemplo, «Cabos USB-C» passa a mostrar «Cabos USB» no histórico quando surge USB-A. O histórico explica as alterações e permite desfazê-las. O desfazer preserva utilizações da categoria geral e decisões manuais posteriores, protegendo os conceitos restaurados contra repetição automática. Alterações estruturais posteriores incompatíveis devolvem conflito de versão.

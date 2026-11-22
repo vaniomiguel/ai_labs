@@ -95,6 +95,7 @@ public class BookkeepingService {
     Invoice invoice = id == null ? store.add(new Invoice()) : store.get(Invoice.class, id);
     requireValidatedRevision(human, invoice.manuallyConfirmed, input);
     Object before = id == null ? null : invoiceView(invoice);
+    if (id != null && human) input = checkRecordEdit("invoice", invoice, input);
     var ownership=Json.object(invoice.fieldProvenance);
     var previousFields=before==null?new LinkedHashMap<String,Object>():Json.object(Json.write(before));
     if(!human && id!=null) {
@@ -107,7 +108,6 @@ public class BookkeepingService {
         :protection.automaticOrigins("INVOICE",input,ownership);
     for(var entry:decisions.entrySet())if(entry.getValue() instanceof Map<?,?> decision&&Boolean.TRUE.equals(decision.get("protected")))ownership.put(entry.getKey(),entry.getValue());
     invoice.fieldProvenance=Json.write(ownership);
-    if (id != null && human) store.checkVersion(invoice, version(input));
     var sourceEdit = human && !batching.get() ? sourceSync.prepare(invoice, input) : null;
     var previous = invoice.reviewStatus;
     invoice.issuedOn = date(input, "issuedOn");
@@ -200,6 +200,7 @@ public class BookkeepingService {
     var movement = id == null ? store.add(new BankMovement()) : store.get(BankMovement.class, id);
     requireValidatedRevision(human, movement.manuallyConfirmed, input);
     Object before = id == null ? null : movementView(movement);
+    if (id != null && human) input = checkRecordEdit("movement", movement, input);
     var ownership=Json.object(movement.fieldProvenance);
     var previousFields=before==null?new LinkedHashMap<String,Object>():Json.object(Json.write(before));
     if(!human && id!=null) {
@@ -212,7 +213,6 @@ public class BookkeepingService {
         :protection.automaticOrigins("STATEMENT",input,ownership);
     for(var entry:decisions.entrySet())if(entry.getValue() instanceof Map<?,?> decision&&Boolean.TRUE.equals(decision.get("protected")))ownership.put(entry.getKey(),entry.getValue());
     movement.fieldProvenance=Json.write(ownership);
-    if (id != null && human) store.checkVersion(movement, version(input));
     var sourceEdit = human && !batching.get() ? sourceSync.prepare(movement, input) : null;
     var previous = movement.reviewStatus;
     movement.accountId = uuid(input, "accountId");
@@ -269,6 +269,16 @@ public class BookkeepingService {
     audit.record(
         id == null ? "CREATE" : "UPDATE", "movement", movement.id, before, movementView(movement));
     return movementView(movement);
+  }
+
+  private Map<String, Object> checkRecordEdit(String type, BaseEntity record, Map<String, Object> input) {
+    store.checkVersion(record, version(input));
+    Object confirmation = input.get("categoryConfirmation");
+    if (!flag(input, "validate") || confirmation == null) return input;
+    categories.confirmVisibleAi(type, record.id, confirmation);
+    var recordInput = new LinkedHashMap<>(input);
+    recordInput.remove("categories");
+    return recordInput;
   }
 
   private void requireValidatedRevision(boolean human, boolean confirmed, Map<String, Object> input) {

@@ -125,6 +125,49 @@ for (const kind of ["INVOICE", "MOVEMENT"] as const) {
   }
 }
 
+test("movement category conflict refreshes labels and keeps the unsaved edit", async ({ page }) => {
+  const { row, resource, dialog } = await setupRecord(page, "MOVEMENT");
+  const saves: unknown[] = [];
+  let version = 1;
+  const initial = { id: "insurance", name: "Seguros", origins: ["AI"], archived: false, evidence: [] };
+  const revised = { ...initial, id: "office", name: "Material de escritório" };
+  await page.route(`**/api/v1/${resource}/${row.id}`, route => {
+    if (route.request().method() === "GET") {
+      const label = version === 1 ? initial : revised;
+      return reply(route, { ...row, classification: { version, state: "PROVISIONAL", categories: [label] } });
+    }
+    saves.push(route.request().postDataJSON());
+    if (saves.length === 1) return reply(route, row);
+    if (saves.length === 2) {
+      version = 2;
+      return reply(route, { detail: "As categorias foram alteradas. Revê as etiquetas e valida novamente." }, 409);
+    }
+    return reply(route, { ...row, manuallyConfirmed: true });
+  });
+
+  await page.reload();
+  await expect(dialog.getByRole("button", { name: initial.name, exact: true })).toBeVisible();
+  await dialog.getByRole("button", { name: "Guardar rascunho", exact: true }).click();
+  await expect(dialog).not.toBeVisible();
+  expect(saves[0]).toMatchObject({ validate: false });
+  expect(saves[0]).not.toHaveProperty("categoryConfirmation");
+
+  await page.goto(`/movement/${row.id}/edit`);
+  const description = dialog.getByLabel("Descrição original", { exact: true });
+  const validate = dialog.getByRole("button", { name: "Validar e guardar", exact: true });
+  await description.fill("Descrição editada");
+  await validate.click();
+  await expect(dialog.locator(".dialog-footer .error")).toContainText("As categorias foram alteradas");
+  await expect(dialog.getByRole("button", { name: revised.name, exact: true })).toBeVisible();
+  await expect(description).toHaveValue("Descrição editada");
+  await validate.click();
+  await expect(dialog).not.toBeVisible();
+  expect(saves.slice(1)).toMatchObject([
+    { validate: true, description: "Descrição editada", categoryConfirmation: { version: 1, categoryIds: [initial.id] } },
+    { validate: true, description: "Descrição editada", categoryConfirmation: { version: 2, categoryIds: [revised.id] } },
+  ]);
+});
+
 for (const status of [422, 409, 500]) {
   for (const target of ["document", "record"] as const) {
     test(`${target} save failure ${status} retains edits without success feedback`, async ({ page }) => {

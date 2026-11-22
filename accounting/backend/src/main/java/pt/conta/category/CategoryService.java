@@ -333,6 +333,58 @@ public class CategoryService {
     }
   }
 
+  /** Confirms the editor's visible suggestions under the same lock as the financial save. */
+  public void confirmVisibleAi(String type, UUID id, Object input) {
+    if (input == null) return;
+    var confirmation = CategoryConfirmation.parse(input);
+    store.lockFinancialWrites();
+    var state = state(type, id, false);
+    var before = view(type, id);
+    var suggestions = visibleAiAssignments(type, id, state);
+    if (state == null || state.version != confirmation.version()
+        || !suggestions.keySet().equals(confirmation.categoryIds())) {
+      throw new DomainException(409, "As categorias foram alteradas. Revê as etiquetas e valida novamente.");
+    }
+    for (var entry : suggestions.entrySet()) {
+      var suggestion = entry.getValue();
+      assign(state, entry.getKey(), "MANUAL", false, suggestion.evidence, suggestion.executionId);
+    }
+    state.generation++;
+    state.status = "CLASSIFIED";
+    state.reason = "Categorias confirmadas pelo utilizador";
+    store.flush();
+    audit.record("CONFIRM_AI_CATEGORIES", type, id, before, view(type, id));
+  }
+
+  private Map<UUID, CategoryAssignment> visibleAiAssignments(String type, UUID id, Classification state) {
+    var visibleIds = details(type, id).stream().filter(tag -> List.of("AI").equals(tag.get("origins")))
+        .map(tag -> (UUID) tag.get("id")).collect(Collectors.toSet());
+    var result = new LinkedHashMap<UUID, CategoryAssignment>();
+    for (var assignment : assignments(state)) {
+      if (assignment.rejected || !assignment.origin.equals("AI")) continue;
+      UUID categoryId = canonical(assignment.categoryId).id;
+      if (visibleIds.contains(categoryId)) result.putIfAbsent(categoryId, assignment);
+    }
+    return result;
+  }
+
+  private record CategoryConfirmation(long version, Set<UUID> categoryIds) {
+    private static CategoryConfirmation parse(Object input) {
+      if (!(input instanceof Map<?, ?> body) || !(body.get("version") instanceof Number version)
+          || !(version instanceof Integer || version instanceof Long) || version.longValue() < 0
+          || !(body.get("categoryIds") instanceof List<?> ids) || ids.isEmpty()) {
+        throw DomainException.invalid("A versão e as categorias a confirmar são obrigatórias.");
+      }
+      var categoryIds = new LinkedHashSet<UUID>();
+      for (Object id : ids) {
+        if (!(id instanceof String value) || !categoryIds.add(UUID.fromString(value))) {
+          throw DomainException.invalid("A seleção de categorias é inválida.");
+        }
+      }
+      return new CategoryConfirmation(version.longValue(), categoryIds);
+    }
+  }
+
   public Map<String, Object> manual(String type, UUID id, long expected, List<UUID> desired, boolean allowAi) {
     store.lockFinancialWrites();
     source(type, id); // Verify the record exists before creating classification state.
@@ -679,11 +731,15 @@ public class CategoryService {
     var state = state(snapshot.type(), snapshot.target(), true);
     var existing = assignments(state);
     var rejected = existing.stream().filter(a -> a.rejected).map(a -> a.categoryId).toList();
+    var manual = existing.stream().filter(a -> !a.rejected && a.origin.equals("MANUAL"))
+        .map(a -> canonical(a.categoryId).id).toList();
     existing.stream().filter(a -> a.origin.equals("AI")).forEach(store::remove);
     store.flush();
     for (var assignment : desired.entrySet()) {
-      if (rejected.stream().noneMatch(category -> descendant(assignment.getKey(), category)))
-        assign(state, assignment.getKey(), "AI", false, assignment.getValue(), execution);
+      UUID category = assignment.getKey();
+      if (rejected.stream().anyMatch(id -> descendant(category, id))) continue;
+      if (manual.stream().anyMatch(id -> !category.equals(id) && descendant(category, id))) continue;
+      assign(state, category, "AI", false, assignment.getValue(), execution);
     }
     state.status = details(snapshot.type(), snapshot.target()).isEmpty() ? "REVIEW" : "CLASSIFIED";
     state.reason = classificationReason(state.status, desired, result);

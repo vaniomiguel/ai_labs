@@ -20,6 +20,8 @@ import pt.conta.invoice.*;
 import pt.conta.jobs.*;
 import pt.conta.ledger.*;
 import pt.conta.reconciliation.ExclusionRequest;
+import pt.conta.review.RepairService;
+import pt.conta.review.ReviewService;
 import pt.conta.shared.*;
 
 /** Exercises the actual schema, independent revisions, taxonomy inverses and provider contract. */
@@ -55,6 +57,8 @@ class CategoryIntegrationTest {
   @Autowired FakeProvider provider;
   @Autowired pt.conta.api.FinanceController finance;
   @Autowired JobQueue jobs;
+  @Autowired RepairService repairs;
+  @Autowired ReviewService review;
   UUID account;
 
   @BeforeEach void setup() {
@@ -140,6 +144,11 @@ class CategoryIntegrationTest {
     var bb=book.allocate(map("invoiceId",b.toString(),"movementId",m.toString(),"amount","50.00"));
     assertThat(names("movement",m)).containsExactlyInAnyOrder("Seguros","Material de escritório");
     assertThat(categories.view("movement",m).get("state")).isEqualTo("INHERITED");
+    var validation = finance.movement(m);
+    validation.remove("categories");
+    validation.put("validate", true);
+    assertThat(rows(finance.editMovement(m, validation), "categoryDetails")).allSatisfy(tag ->
+        assertThat(tag).containsEntry("origins", List.of("INHERITED")));
     UUID project=(UUID)categories.save(map("name","Projeto interno","aliases",List.of())).get("id");
     categories.manual("movement",m,version("movement",m),List.of(project),false);
     assertThat(names("movement",m)).containsExactly("Projeto interno");
@@ -195,6 +204,109 @@ class CategoryIntegrationTest {
     var parent=store.get(Category.class,reference("623"));
     assertThatThrownBy(()->categories.save(map("id",parent.id.toString(),"version",parent.version,"parentId",reference("6233").toString())))
         .isInstanceOf(DomainException.class).hasMessageContaining("ciclo");
+  }
+
+  @Test void validatingAnInvoiceKeepsConfirmedLabelsAndEvidenceThroughReclassification() {
+    UUID id = invoice("Papel A4 e Seguro anual");
+    UUID insurance = reference("6263");
+    UUID manual = reference("6221");
+    UUID materials = reference("623");
+    classify("invoice", id, insurance, "Seguro anual");
+    categories.manual("invoice", id, version("invoice", id), List.of(manual), false);
+    classify("invoice", id, materials, "Papel A4");
+    requestInvoiceCategoryReview(id);
+    var stale = categories.snapshot("invoice", id);
+    var input = finance.invoice(id);
+    input.put("validate", true);
+    input.put("description", "Papel A4 e Seguro anual corrigido");
+    input.put("categoryConfirmation", confirmation("invoice", id, materials));
+
+    var saved = finance.editInvoice(id, input);
+    assertThat(saved).containsEntry("description", "Papel A4 e Seguro anual corrigido");
+    assertThat(rows(saved, "categoryDetails")).filteredOn(tag -> materials.equals(tag.get("id")))
+        .singleElement().satisfies(tag -> assertThat(tag.get("origins")).isEqualTo(List.of("AI", "MANUAL")));
+    assertThat(categories.apply(stale, result(List.of(), List.of()), UUID.randomUUID())).isFalse();
+
+    provider.program = request -> Json.write(result(List.of(label(reference("6233").toString(), "Papel A4"),
+        label(insurance.toString(), "Seguro anual")), List.of()));
+    worker.process(classificationJob("CLASSIFY_INVOICE", id));
+    var labels = rows(finance.invoice(id), "categoryDetails");
+    assertThat(labels).extracting(tag -> tag.get("id")).containsExactlyInAnyOrder(materials, manual);
+    assertThat(labels).filteredOn(tag -> materials.equals(tag.get("id"))).singleElement().satisfies(tag -> {
+      assertThat(tag).containsEntry("origins", List.of("MANUAL"));
+      assertThat(rows(tag, "evidence")).singleElement().satisfies(evidence -> assertThat(evidence)
+          .containsEntry("reason", "Papel A4").containsEntry("origin", "MANUAL")
+          .hasEntrySatisfying("executionId", execution -> assertThat(execution).isNotNull()));
+    });
+    assertThat(categories.view("invoice", id)).containsEntry("rejectedCategoryIds", List.of(insurance));
+  }
+
+  @Test void aMovementDraftLeavesAiLabelsAutomaticUntilValidation() {
+    UUID id = (UUID) finance.createMovement(map("accountId", account, "bookedOn", "2026-01-02",
+        "description", "Seguro anual", "amount", "100.00", "direction", "DEBIT")).get("id");
+    UUID insurance = reference("6263");
+    classify("movement", id, insurance, "Seguro anual");
+    var input = finance.movement(id);
+    input.put("categoryConfirmation", confirmation("movement", id, insurance));
+    var draft = finance.editMovement(id, input);
+    assertThat(draft).containsEntry("manuallyConfirmed", false);
+    assertThat(categories.view("movement", id)).containsEntry("state", "PROVISIONAL");
+
+    draft.put("validate", true);
+    draft.put("categoryConfirmation", confirmation("movement", id, insurance));
+    assertThat(finance.editMovement(id, draft)).containsEntry("manuallyConfirmed", true);
+    var snapshot = categories.snapshot("movement", id);
+    assertThat(categories.apply(snapshot, result(List.of(), List.of()), UUID.randomUUID())).isTrue();
+    assertThat(rows(finance.movement(id), "categoryDetails")).singleElement().satisfies(tag ->
+        assertThat(tag).containsEntry("id", insurance).containsEntry("origins", List.of("MANUAL")));
+  }
+
+  @Test void aStaleCategoryConfirmationLeavesCurrentRecordAndLabelsIntact() {
+    UUID id = invoice("Papel A4 e Seguro anual");
+    UUID insurance = reference("6263");
+    UUID office = reference("6233");
+    classify("invoice", id, insurance, "Seguro anual");
+    var before = finance.invoice(id);
+    var edit = new LinkedHashMap<>(before);
+    edit.put("validate", true);
+    edit.put("description", "Editado no editor");
+    edit.put("categoryConfirmation", confirmation("invoice", id, insurance));
+    requestInvoiceCategoryReview(id);
+    classify("invoice", id, office, "Papel A4");
+
+    assertThatThrownBy(() -> finance.editInvoice(id, edit)).isInstanceOfSatisfying(DomainException.class,
+        error -> assertThat(error.status).isEqualTo(409));
+    assertThat(finance.invoice(id)).containsEntry("description", before.get("description"))
+        .containsEntry("version", before.get("version"));
+    assertThat(categories.details("invoice", id)).singleElement().satisfies(tag ->
+        assertThat(tag).containsEntry("id", office).containsEntry("origins", List.of("AI")));
+  }
+
+  @Test void resolvingAnInvoiceAlertConfirmsItsVisibleAiLabel() {
+    var draft = finance.createInvoice(map("supplier", "Fornecedor de teste", "description", "Seguro anual",
+        "total", "100.00"));
+    UUID id = (UUID) draft.get("id");
+    var alert = review.openFor("invoice", id).orElseThrow();
+    UUID insurance = reference("6263");
+    classify("invoice", id, insurance, "Seguro anual");
+    draft.put("issuedOn", "2026-01-01");
+
+    var saved = repairs.saveRecordDraft(alert.id, map("alertVersion", alert.version,
+        "recordVersion", draft.get("version"), "resolve", true, "draft", draft,
+        "categoryConfirmation", confirmation("invoice", id, insurance)));
+    assertThat(alert.status).isEqualTo("RESOLVED");
+    assertThat(saved).containsEntry("manuallyConfirmed", true);
+    assertThat(rows(saved, "categoryDetails")).singleElement().satisfies(tag ->
+        assertThat(tag).containsEntry("id", insurance).containsEntry("origins", List.of("AI", "MANUAL")));
+  }
+
+  private Map<String, Object> confirmation(String type, UUID id, UUID categoryId) {
+    return map("version", version(type, id), "categoryIds", List.of(categoryId.toString()));
+  }
+
+  private void requestInvoiceCategoryReview(UUID id) {
+    jdbc.update("update job set state='DONE' where id=?", classificationJob("CLASSIFY_INVOICE", id).id());
+    categories.requestInvoiceClassification(id, version("invoice", id));
   }
 
   @Test void archivePreservesHistoryAndPreventsNewAssignments() {
