@@ -1103,14 +1103,29 @@
         />
         @if(data.id && (recordKind==='INVOICE' || activeAlert()?.status!=='OPEN')){
           <section class="record-categories" aria-labelledby="record-categories-title">
-            <h3 id="record-categories-title">Categorias</h3>
-            <category-tags [categories]="editorClassification()?.categories ?? data.categoryDetails ?? []"
-              [classification]="editorClassification()" [editable]="activeAlert()?.status!=='OPEN'"
-              [invoiceId]="recordKind==='INVOICE' ? data.id : null" [reviewInvoice]="recordKind==='INVOICE'"
-              [classificationDisabled]="working()" (classificationRequested)="refresh()"
-              (manage)="openCategories(recordKind==='INVOICE'?'invoice':'movement',data.id)" />
+            @let categories = editorClassification()?.categories ?? data.categoryDetails ?? [];
+            <ng-template #categoryHeader let-classifyButton>
+              <header class="record-categories-header">
+                <h3 id="record-categories-title">Categorias</h3>
+                <div class="record-categories-actions">
+                  @if(activeAlert()?.status!=='OPEN'){
+                    <button type="button" mat-stroked-button (click)="openCategories(recordKind==='INVOICE'?'invoice':'movement',data.id)">
+                      Editar categorias
+                    </button>
+                  }
+                  <ng-container [ngTemplateOutlet]="classifyButton" />
+                </div>
+              </header>
+            </ng-template>
             @if(recordKind==='INVOICE'){
+              <invoice-category-action [invoiceId]="data.id" [classification]="editorClassification()" [review]="true"
+                [disabled]="working()" [headerTemplate]="categoryHeader" (queued)="refresh()">
+                @if(categories.length){<category-tags [categories]="categories" [showStatus]="false" />}
+              </invoice-category-action>
               <p class="hint">A IA usa os dados guardados da fatura. Guarda as alterações para as incluir na classificação.</p>
+            }@else{
+              <ng-container [ngTemplateOutlet]="categoryHeader" />
+              <category-tags [categories]="categories" [classification]="editorClassification()" />
             }
           </section>
         }

@@ -1,17 +1,28 @@
-import { Component, computed, DestroyRef, inject, input, linkedSignal, output, signal } from "@angular/core";
+import { NgTemplateOutlet } from "@angular/common";
+import { Component, computed, DestroyRef, inject, input, linkedSignal, output, signal, TemplateRef } from "@angular/core";
 import { Api, Classification, errorMessage } from "./api";
 
 @Component({
   selector: "invoice-category-action",
   standalone: true,
+  imports: [NgTemplateOutlet],
   template: `
+    <ng-template #classifyButton>
+      @if (!active()) {
+        <button type="button" class="text-button" [disabled]="submitting() || disabled()" (click)="classify()">
+          {{ review() && current()?.categories?.length ? "Rever categorias com IA" : "Classificar com IA" }}
+        </button>
+      }
+    </ng-template>
+    @if (headerTemplate(); as header) {
+      <ng-container [ngTemplateOutlet]="header" [ngTemplateOutletContext]="{ $implicit: classifyButton }" />
+    }
+    <ng-content />
     <small aria-live="polite">
       {{ status() }}@if (current()?.reason; as reason) { · {{ reason }} }
     </small>
-    @if (!active()) {
-      <button type="button" class="text-button" [disabled]="submitting() || disabled()" (click)="classify()">
-        {{ review() && current()?.categories?.length ? "Rever categorias com IA" : "Classificar com IA" }}
-      </button>
+    @if (!headerTemplate()) {
+      <ng-container [ngTemplateOutlet]="classifyButton" />
     }
     @if (error()) { <small class="error" role="alert">{{ error() }}</small> }
   `,
@@ -23,6 +34,7 @@ export class InvoiceCategoryAction {
   readonly classification = input<Classification | null>(null);
   readonly review = input(false);
   readonly disabled = input(false);
+  readonly headerTemplate = input<TemplateRef<{ $implicit: TemplateRef<unknown> }> | null>(null);
   readonly queued = output<void>();
   protected readonly current = linkedSignal(() => this.classification());
   protected readonly submitting = signal(false);

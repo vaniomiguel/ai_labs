@@ -169,6 +169,42 @@ test("sign-in returns to an invoice bookmark and its editor survives reload", as
   await expect(page).toHaveURL("/invoice");
 });
 
+test("invoice category actions share a header and remain usable on a small screen", async ({ page }) => {
+  await signIn(page);
+  const reason = "Sem categoria escolhida pelo utilizador";
+  await mockRecord(page, "invoice", invoiceId, {
+    ...draft, classification: { state: "REVIEW", reason, categories: [] },
+  });
+  await page.goto(invoicePath);
+
+  const editor = page.getByRole("dialog", { name: "Editar registo" });
+  const categories = editor.getByRole("region", { name: "Categorias" });
+  const header = categories.locator("header");
+  const edit = header.getByRole("button", { name: "Editar categorias", exact: true });
+  const classify = header.getByRole("button", { name: "Classificar com IA", exact: true });
+  await expect(edit).toBeVisible();
+  await expect(classify).toBeVisible();
+  const [editBox, classifyBox] = await Promise.all([edit.boundingBox(), classify.boundingBox()]);
+  if (!editBox || !classifyBox) throw new Error("Category actions must have visible bounds");
+  expect(classifyBox.x).toBeGreaterThan(editBox.x + editBox.width);
+  expect(Math.abs(classifyBox.y + classifyBox.height / 2 - editBox.y - editBox.height / 2)).toBeLessThanOrEqual(1);
+
+  await page.setViewportSize({ width: 320, height: 720 });
+  const supplier = editor.getByLabel("Fornecedor", { exact: true });
+  await supplier.fill("Fornecedor editado localmente");
+  await expect(categories).toContainText(reason);
+  expect(await categories.evaluate(card => card.scrollWidth <= card.clientWidth)).toBe(true);
+  await edit.focus();
+  await edit.press("Tab");
+  await expect(classify).toBeFocused();
+  await edit.press("Enter");
+  const categoryDialog = page.getByRole("dialog", { name: "Categorias do documento" });
+  await expect(categoryDialog).toBeVisible();
+  await categoryDialog.getByRole("button", { name: "Fechar categorias" }).click();
+  await expect(supplier).toHaveValue("Fornecedor editado localmente");
+  await expect(page).toHaveURL(invoicePath);
+});
+
 test("invoice editor retries AI category review and refreshes labels without replacing the draft", async ({ page }) => {
   await signIn(page);
   const original: CategoryDetail = { id: "initial", name: "Seguros", path: "Seguros", archived: false, origins: ["AI"], evidence: [] };

@@ -17,6 +17,7 @@ import { PdfViewer } from "./pdf-viewer";
 import { ReconciliationTable } from "./reconciliation";
 import { CategoryTags } from "./category-tags";
 import { CategoryEditor } from "./category-editor";
+import { InvoiceCategoryAction } from "./invoice-category-action";
 import { CategoryManager } from "./category-manager";
 import { RepairPanel } from "./repair-panel";
 import { DEFAULT_WORKSPACE_URL, RecordKind, recordView, WORKSPACE_PATHS, WorkspaceRoute, WorkspaceRouteKind, WorkspaceView } from "./workspace-routes";
@@ -48,7 +49,7 @@ const EMPTY_RECONCILIATION_PAGE: ReconciliationPage = { items: [], total: 0, pag
     A11yModule,
     FieldsEditor,
     PdfViewer,
-    ReconciliationTable, CategoryTags, CategoryEditor, CategoryManager, RepairPanel, AppliedFilters, FinancialFilterBar,
+    ReconciliationTable, CategoryTags, CategoryEditor, InvoiceCategoryAction, CategoryManager, RepairPanel, AppliedFilters, FinancialFilterBar,
   ],
   templateUrl: "./app.html",
 })

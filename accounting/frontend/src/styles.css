@@ -1587,7 +1587,37 @@ reconciliation-table { display: block; min-width: 0; }
 .category-catalog-row > div:first-of-type { flex: 1; min-width: 0; overflow-wrap: anywhere; }
 .category-catalog-row .row-actions { flex-wrap: wrap; }
 .category-form, .category-change, .record-categories { border: 1px solid var(--line); padding: 16px; margin-top: 18px; border-radius: 8px; }
-.category-form h3, .record-categories h3 { margin-top: 0; }
+.category-form h3 { margin-top: 0; }
+.record-categories,
+.record-categories > invoice-category-action {
+  display: grid;
+  gap: 8px;
+  min-inline-size: 0;
+  overflow-wrap: anywhere;
+}
+.record-categories-header,
+.record-categories-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 12px;
+}
+.record-categories-header { justify-content: space-between; }
+.record-categories h3,
+.record-categories .hint,
+.record-categories .category-tags { margin: 0; }
+.record-categories-actions .text-button {
+  min-block-size: 44px;
+  padding-inline: 8px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--green);
+}
+.record-categories-actions button:focus-visible {
+  outline: 2px solid var(--green);
+  outline-offset: 3px;
+}
+.record-categories .tag { white-space: normal; }
 category-manager { display: block; min-width: 0; }
 @media (max-width: 760px) { .category-catalog-row { flex-wrap: wrap; } .category-manager .section-heading { flex-wrap: wrap; gap: 12px; } }
 .reconciliation-panel :is(button, summary, a):focus-visible { outline: 2px solid #315a48; outline-offset: 3px; }

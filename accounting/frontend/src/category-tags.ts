@@ -1,4 +1,4 @@
-import { Component, computed, input, output } from "@angular/core";
+import { Component, input, output } from "@angular/core";
 import { CategoryDetail, Classification } from "./api";
 import { InvoiceCategoryAction } from "./invoice-category-action";
 
@@ -15,10 +15,10 @@ import { InvoiceCategoryAction } from "./invoice-category-action";
           @for(c of categories().slice(2);track c.id){<button type="button" class="tag" [title]="explain(c)" (click)="filter.emit(c.id)">{{c.name}}{{c.archived?' · arquivada':''}}</button>}
         </div></details>
       }
-      @if (classificationInvoiceId(); as id) {
+      @if (!categories().length && invoiceId(); as id) {
         <invoice-category-action [invoiceId]="id" [classification]="classification()"
-          [review]="reviewInvoice()" [disabled]="classificationDisabled()" (queued)="classificationRequested.emit()" />
-      } @else if (!categories().length || ['PENDING','WAITING','REVIEW','PROVISIONAL'].includes(classification()?.state || '')) {
+          (queued)="classificationRequested.emit()" />
+      } @else if (showStatus() && (!categories().length || ['PENDING','WAITING','REVIEW','PROVISIONAL'].includes(classification()?.state || ''))) {
         <small [title]="classification()?.reason || ''">{{status()}}</small>
       }
       @if(editable()){<button type="button" class="text-button category-edit" (click)="manage.emit()">Editar categorias</button>}
@@ -30,11 +30,7 @@ export class CategoryTags {
   readonly classification = input<Classification | null>(null);
   readonly editable = input(false);
   readonly invoiceId = input<string | null>(null);
-  readonly reviewInvoice = input(false);
-  readonly classificationDisabled = input(false);
-  protected readonly classificationInvoiceId = computed(() =>
-    this.reviewInvoice() || !this.categories().length ? this.invoiceId() : null,
-  );
+  readonly showStatus = input(true);
   readonly classificationRequested = output<void>();
   readonly manage = output<void>();
   readonly filter = output<string>();
